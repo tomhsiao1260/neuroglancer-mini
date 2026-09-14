@@ -79,40 +79,6 @@ export function parseRGBColorSpecification(x: any) {
   return <vec3>result.subarray(0, 3);
 }
 
-/**
- * Returns an integer formed by concatenating the channels of the input color vector.
- * Each channel is clamped to the range [0.0, 1.0] before being converted to 8 bits.
- * An RGB color is packed into 24 bits, and a RGBA into 32 bits.
- */
-export function packColor(x: vec3 | vec4): number {
-  const size = x[3] === undefined ? 3 : 4;
-  let result = 0;
-  for (let i = 0; i < size; i++) {
-    // The ">>> 0" ensures an unsigned value.
-    result =
-      ((result << 8) >>> 0) +
-      Math.min(255, Math.max(0, Math.round(x[size - 1 - i] * 255)));
-  }
-  return result;
-}
-
-export function unpackRGB(value: number) {
-  return vec3.fromValues(
-    ((value >>> 0) & 0xff) / 255,
-    ((value >>> 8) & 0xff) / 255,
-    ((value >>> 16) & 0xff) / 255,
-  );
-}
-
-export function unpackRGBA(value: number) {
-  return vec4.fromValues(
-    ((value >>> 0) & 0xff) / 255,
-    ((value >>> 8) & 0xff) / 255,
-    ((value >>> 16) & 0xff) / 255,
-    ((value >>> 24) & 0xff) / 255,
-  );
-}
-
 export function serializeColor(x: vec3 | vec4) {
   if (x[3] === undefined || x[3] === 1) {
     let result = "#";
@@ -153,17 +119,6 @@ export function getRelativeLuminance(color: vec3 | vec4) {
   );
 }
 
-// Determines whether a white background would provide higher contrast than a black background for
-// the given foreground color.
-//
-// This is determined according to the Web Content Accessibility Guidelines (WCAG) 2.0:
-// https://www.w3.org/TR/WCAG20/#contrast-ratiodef
-//
-// https://stackoverflow.com/a/3943023
-export function useWhiteBackground(foregroundColor: vec3 | vec4) {
-  return getRelativeLuminance(foregroundColor) <= 0.179;
-}
-
 export class TrackableRGB extends WatchableValue<vec3> {
   constructor(public defaultValue: vec3) {
     super(vec3.clone(defaultValue));
@@ -193,27 +148,3 @@ export class TrackableRGB extends WatchableValue<vec3> {
   }
 }
 
-export class TrackableOptionalRGB extends WatchableValue<vec3 | undefined> {
-  constructor() {
-    super(undefined);
-  }
-  toJSON() {
-    const { value } = this;
-    if (value === undefined) return undefined;
-    return serializeColor(value);
-  }
-  reset() {
-    this.value = undefined;
-  }
-  restoreState(x: any) {
-    if (x === undefined) {
-      this.reset();
-      return;
-    }
-    const { value } = this;
-    const newValue = parseRGBColorSpecification(x);
-    if (value === undefined || !vec3.equals(value, newValue)) {
-      this.value = newValue;
-    }
-  }
-}

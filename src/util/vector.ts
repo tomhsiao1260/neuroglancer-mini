@@ -16,14 +16,6 @@
 
 import type { TypedArray } from "#src/util/array.js";
 
-export function equal<T extends TypedArray, U extends TypedArray>(a: T, b: U) {
-  const n = a.length;
-  for (let i = 0; i < n; ++i) {
-    if (a[i] !== b[i]) return false;
-  }
-  return true;
-}
-
 export function add<
   Out extends TypedArray,
   A extends TypedArray,
@@ -35,17 +27,6 @@ export function add<
   }
   return out;
 }
-export function subtract<
-  Out extends TypedArray,
-  A extends TypedArray,
-  B extends TypedArray,
->(out: Out, a: A, b: B) {
-  const rank = out.length;
-  for (let i = 0; i < rank; ++i) {
-    out[i] = a[i] - b[i];
-  }
-  return out;
-}
 export function multiply<
   Out extends TypedArray,
   A extends TypedArray,
@@ -54,39 +35,6 @@ export function multiply<
   const rank = out.length;
   for (let i = 0; i < rank; ++i) {
     out[i] = a[i] * b[i];
-  }
-  return out;
-}
-export function divide<
-  Out extends TypedArray,
-  A extends TypedArray,
-  B extends TypedArray,
->(out: Out, a: A, b: B) {
-  const rank = out.length;
-  for (let i = 0; i < rank; ++i) {
-    out[i] = a[i] / b[i];
-  }
-  return out;
-}
-export function scaleAndAdd<
-  Out extends TypedArray,
-  A extends TypedArray,
-  B extends TypedArray,
->(out: Out, a: A, b: B, scale: number) {
-  const rank = out.length;
-  for (let i = 0; i < rank; ++i) {
-    out[i] = a[i] + b[i] * scale;
-  }
-  return out;
-}
-export function scale<Out extends TypedArray, A extends TypedArray>(
-  out: Out,
-  a: A,
-  scale: number,
-) {
-  const rank = out.length;
-  for (let i = 0; i < rank; ++i) {
-    out[i] = a[i] * scale;
   }
   return out;
 }
@@ -111,18 +59,5 @@ export function min<
   return out;
 }
 
-export function max<
-  Out extends TypedArray,
-  A extends TypedArray,
-  B extends TypedArray,
->(out: Out, a: A, b: B) {
-  const rank = out.length;
-  for (let i = 0; i < rank; ++i) {
-    out[i] = Math.max(a[i], b[i]);
-  }
-  return out;
-}
-
 export const kEmptyFloat32Vec = new Float32Array(0);
 export const kEmptyFloat64Vec = new Float64Array(0);
-export const kFloat64Vec3Of1 = Float64Array.of(1, 1, 1);

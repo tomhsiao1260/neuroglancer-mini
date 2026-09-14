@@ -67,23 +67,8 @@ export class HttpError extends Error {
   }
 }
 
-const maxAttempts = 32;
 const minDelayMilliseconds = 500;
 const maxDelayMilliseconds = 10000;
-
-export function pickDelay(attemptNumber: number): number {
-  // If `attemptNumber == 0`, delay is a random number of milliseconds between
-  // `[minDelayMilliseconds, minDelayMilliseconds*2]`.  The lower and upper bounds of the interval
-  // double with each successive attempt, up to the limit of
-  // `[maxDelayMilliseconds/2,maxDelayMilliseconds]`.
-  return (
-    Math.min(
-      2 ** attemptNumber * minDelayMilliseconds,
-      maxDelayMilliseconds / 2,
-    ) *
-    (1 + Math.random())
-  );
-}
 
 /**
  * Issues a `fetch` request.
@@ -123,10 +108,6 @@ async function fetchOk(input: RequestInfo): Promise<Response> {
     throw new HttpError(url, 404, "File not found");
   }
   return response;
-}
-
-export function responseArrayBuffer(response: Response): Promise<ArrayBuffer> {
-  return response.arrayBuffer();
 }
 
 export async function responseJson(response: Response): Promise<any> {

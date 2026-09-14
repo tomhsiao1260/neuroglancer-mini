@@ -79,51 +79,6 @@ export function swapEndian64(array: ArrayBufferView) {
   }
 }
 
-/**
- * Converts the endianness of an array assumed to contain 16-bit values from source to target.
- *
- * This does nothing if source === target.
- */
-export function convertEndian16(
-  array: ArrayBufferView,
-  source: Endianness,
-  target: Endianness = ENDIANNESS,
-) {
-  if (source !== target) {
-    swapEndian16(array);
-  }
-}
-
-/**
- * Converts the endianness of an array assumed to contain 32-bit values from source to target.
- *
- * This does nothing if source === target.
- */
-export function convertEndian32(
-  array: ArrayBufferView,
-  source: Endianness,
-  target: Endianness = ENDIANNESS,
-) {
-  if (source !== target) {
-    swapEndian32(array);
-  }
-}
-
-/**
- * Converts the endianness of an array assumed to contain 64-bit values from source to target.
- *
- * This does nothing if source === target.
- */
-export function convertEndian64(
-  array: ArrayBufferView,
-  source: Endianness,
-  target: Endianness = ENDIANNESS,
-) {
-  if (source !== target) {
-    swapEndian64(array);
-  }
-}
-
 export function convertEndian(
   array: ArrayBufferView,
   source: Endianness,

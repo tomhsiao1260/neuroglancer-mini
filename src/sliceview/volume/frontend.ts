@@ -36,8 +36,6 @@ import type { GL } from "#src/webgl/context.js";
 import type { ShaderBuilder, ShaderProgram } from "#src/webgl/shader.js";
 import { getShaderType, glsl_mixLinear } from "#src/webgl/shader_lib.js";
 
-export type VolumeChunkKey = string;
-
 export interface ChunkFormat {
   shaderKey: string;
 

@@ -35,10 +35,6 @@ import * as vector from "#src/util/vector.js";
 
 export { DATA_TYPE_BYTES, DataType };
 
-export interface RenderLayer {
-  sources: VolumeChunkSource[][] | null;
-}
-
 /**
  * Specifies the interpretation of volumetric data.
  */
@@ -47,11 +43,6 @@ export enum VolumeType {
   IMAGE = 1,
   SEGMENTATION = 2,
 }
-
-/**
- * By default, choose a chunk size with at most 2^18 = 262144 voxels.
- */
-export const DEFAULT_MAX_VOXELS_PER_CHUNK_LOG2 = 18;
 
 export interface VolumeSourceOptions extends SliceViewSourceOptions {
   discreteValues?: boolean;
@@ -305,4 +296,3 @@ export interface VolumeChunkSource extends SliceViewChunkSource {
   spec: VolumeChunkSpecification;
 }
 
-export const VOLUME_RPC_ID = "volume";

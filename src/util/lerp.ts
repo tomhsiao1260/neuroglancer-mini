@@ -34,89 +34,6 @@ export const defaultDataTypeRange: Record<DataType, DataTypeInterval> = {
   [DataType.FLOAT32]: [0, 1],
 };
 
-/**
- * Compute inverse linear interpolation on the interval [0, 1].
- * @param range Values at start and end of interval.
- * @param value Value to interpolate at.
- * @returns Coordinate of interpolated point.
- */
-export function computeInvlerp(
-  range: DataTypeInterval,
-  value: number | Uint64,
-): number {
-  if (typeof value === "number") {
-    const minValue = range[0] as number;
-    const maxValue = range[1] as number;
-    return (value - minValue) / (maxValue - minValue);
-  }
-  const minValue = range[0] as Uint64;
-  const maxValue = range[1] as Uint64;
-  let numerator: number;
-  if (Uint64.compare(value, minValue) < 0) {
-    numerator = -Uint64.subtract(tempUint64, minValue, value).toNumber();
-  } else {
-    numerator = Uint64.subtract(tempUint64, value, minValue).toNumber();
-  }
-  let denominator = Uint64.absDifference(
-    tempUint64,
-    maxValue,
-    minValue,
-  ).toNumber();
-  if (Uint64.compare(minValue, maxValue) > 0) denominator *= -1;
-  return numerator / denominator;
-}
-
-/**
- * Compute linear interpolation on the interval [0, 1].
- * @param range Values at start and end of interval.
- * @param dataType
- * @param value Coordinate to interpolate at.
- * @returns Interpolated value.
- */
-export function computeLerp(
-  range: DataTypeInterval,
-  dataType: DataType,
-  value: number,
-): number | Uint64 {
-  if (typeof range[0] === "number") {
-    const minValue = range[0] as number;
-    const maxValue = range[1] as number;
-    let result = minValue * (1 - value) + maxValue * value;
-    if (dataType !== DataType.FLOAT32) {
-      const dataTypeRange = defaultDataTypeRange[dataType];
-      result = Math.round(result);
-      result = Math.max(dataTypeRange[0] as number, result);
-      result = Math.min(dataTypeRange[1] as number, result);
-    }
-    return result;
-  }
-  let minValue = range[0] as Uint64;
-  let maxValue = range[1] as Uint64;
-  if (Uint64.compare(minValue, maxValue) > 0) {
-    [minValue, maxValue] = [maxValue, minValue];
-    value = 1 - value;
-  }
-  const scalar = Uint64.subtract(tempUint64, maxValue, minValue).toNumber();
-  const result = new Uint64();
-  if (value <= 0) {
-    tempUint64.setFromNumber(scalar * -value);
-    Uint64.subtract(result, minValue, Uint64.min(tempUint64, minValue));
-  } else if (value >= 1) {
-    tempUint64.setFromNumber(scalar * (value - 1));
-    Uint64.add(result, maxValue, tempUint64);
-    if (Uint64.less(result, maxValue)) {
-      result.low = result.high = 0xffffffff;
-    }
-  } else {
-    tempUint64.setFromNumber(scalar * value);
-    Uint64.add(result, minValue, tempUint64);
-    if (Uint64.less(result, minValue)) {
-      result.low = result.high = 0xffffffff;
-    }
-  }
-  return result;
-}
-
 export function clampToInterval(
   range: DataTypeInterval,
   value: number | Uint64,
@@ -125,16 +42,6 @@ export function clampToInterval(
     return Math.min(Math.max(range[0] as number, value), range[1] as number);
   }
   return Uint64.min(Uint64.max(range[0] as Uint64, value), range[1] as Uint64);
-}
-
-export function getClampedInterval(
-  bounds: DataTypeInterval,
-  range: DataTypeInterval,
-): DataTypeInterval {
-  return [
-    clampToInterval(bounds, range[0]),
-    clampToInterval(bounds, range[1]),
-  ] as DataTypeInterval;
 }
 
 // Validates that the lower bound is <= the upper bound.
@@ -162,24 +69,6 @@ export function dataTypeCompare(a: number | Uint64, b: number | Uint64) {
 
 const tempUint64 = new Uint64();
 const temp2Uint64 = new Uint64();
-
-export function getClosestEndpoint(
-  range: DataTypeInterval,
-  value: number | Uint64,
-): number {
-  if (typeof value === "number") {
-    return Math.abs(value - (range[0] as number)) <
-      Math.abs(value - (range[1] as number))
-      ? 0
-      : 1;
-  }
-  return Uint64.less(
-    Uint64.absDifference(tempUint64, range[0] as Uint64, value as Uint64),
-    Uint64.absDifference(temp2Uint64, range[1] as Uint64, value as Uint64),
-  )
-    ? 0
-    : 1;
-}
 
 export function parseDataTypeValue(
   dataType: DataType,
@@ -280,79 +169,6 @@ export function dataTypeIntervalToJson(
     return [range[0].toString(), range[1].toString()];
   }
   return range;
-}
-
-export function dataTypeValueNextAfter(
-  dataType: DataType,
-  value: number | Uint64,
-  sign: 1 | -1,
-): number | Uint64 {
-  switch (dataType) {
-    case DataType.FLOAT32:
-      return nextAfterFloat64(value as number, sign * Infinity);
-    case DataType.UINT64: {
-      const v = value as Uint64;
-      if (sign === -1) {
-        if (v.low === 0 && v.high === 0) return v;
-        return Uint64.decrement(new Uint64(), v);
-      }
-      if (v.low === 0xffffffff && v.high === 0xffffffff) return v;
-      return Uint64.increment(new Uint64(), v);
-    }
-    default: {
-      const range = defaultDataTypeRange[dataType] as [number, number];
-      return Math.max(range[0], Math.min(range[1], (value as number) + sign));
-    }
-  }
-}
-
-// Returns the offset such that within the floating point range `[-offset, 1+offset]`, there is an
-// equal-sized interval corresponding to each number in `interval`.
-//
-// For dataType=FLOAT32, always returns 0.  For integer data types, returns:
-//
-//   0.5 / (1 + abs(interval[1] - interval[0]))
-export function getIntervalBoundsEffectiveOffset(
-  dataType: DataType,
-  interval: DataTypeInterval,
-) {
-  switch (dataType) {
-    case DataType.FLOAT32:
-      return 0;
-    case DataType.UINT64:
-      return (
-        0.5 /
-        Uint64.absDifference(
-          tempUint64,
-          interval[0] as Uint64,
-          interval[1] as Uint64,
-        ).toNumber()
-      );
-    default:
-      return 0.5 / Math.abs((interval[0] as number) - (interval[1] as number));
-  }
-}
-
-export function getIntervalBoundsEffectiveFraction(
-  dataType: DataType,
-  interval: DataTypeInterval,
-) {
-  switch (dataType) {
-    case DataType.FLOAT32:
-      return 1;
-    case DataType.UINT64: {
-      const diff = Uint64.absDifference(
-        tempUint64,
-        interval[0] as Uint64,
-        interval[1] as Uint64,
-      ).toNumber();
-      return diff / (diff + 1);
-    }
-    default: {
-      const diff = Math.abs((interval[0] as number) - (interval[1] as number));
-      return diff / (diff + 1);
-    }
-  }
 }
 
 export function convertDataTypeInterval(

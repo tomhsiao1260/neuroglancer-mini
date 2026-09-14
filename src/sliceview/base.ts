@@ -517,27 +517,6 @@ export interface SliceViewSourceOptions {
   modelChannelDimensionIndices: readonly number[];
 }
 
-export function getCombinedTransform(
-  rank: number,
-  bToC: Float32Array,
-  aToB: Float32Array | undefined,
-) {
-  if (aToB === undefined) {
-    return bToC;
-  }
-  return matrix.multiply(
-    new Float32Array((rank + 1) * (rank + 1)),
-    rank + 1,
-    bToC,
-    rank + 1,
-    aToB,
-    rank + 1,
-    rank + 1,
-    rank + 1,
-    rank + 1,
-  );
-}
-
 /**
  * Specifies parameters for getChunkDataSizes.
  */
@@ -802,41 +781,6 @@ function forEachVolumetricChunkWithinFrustrum<
     lower[splitDim] = prevLower;
   }
   recurse();
-}
-
-export function forEachVisibleVolumetricChunk<
-  RLayer extends MultiscaleVolumetricDataRenderLayer,
->(
-  projectionParameters: ProjectionParameters,
-  localPosition: Float32Array,
-  transformedSource: TransformedSource<RLayer>,
-  callback: (positionInChunks: vec3, clippingPlanes: Float32Array) => void,
-) {
-  const { size: chunkSize } = transformedSource.chunkLayout;
-  const modelViewProjection = mat4.multiply(
-    tempVisibleVolumetricModelViewProjection,
-    projectionParameters.viewProjectionMat,
-    transformedSource.chunkLayout.transform,
-  );
-  for (let i = 0; i < 3; ++i) {
-    const s = chunkSize[i];
-    for (let j = 0; j < 4; ++j) {
-      modelViewProjection[4 * i + j] *= s;
-    }
-  }
-
-  const clippingPlanes = tempVisibleVolumetricClippingPlanes;
-  getFrustrumPlanes(clippingPlanes, modelViewProjection);
-  const lower = tempVisibleVolumetricChunkLower;
-  const upper = tempVisibleVolumetricChunkUpper;
-  lower.fill(Number.NEGATIVE_INFINITY);
-  upper.fill(Number.POSITIVE_INFINITY);
-  forEachVolumetricChunkWithinFrustrum(
-    clippingPlanes,
-    transformedSource,
-    callback,
-    isAABBVisible,
-  );
 }
 
 export function forEachPlaneIntersectingVolumetricChunk<

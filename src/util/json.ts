@@ -38,16 +38,6 @@ export function verifyFiniteFloat(obj: any): number {
   throw new Error(`Expected finite floating-point number, but received: ${x}.`);
 }
 
-export function verifyFiniteNonNegativeFloat(obj: any): number {
-  const x = verifyFloat(obj);
-  if (Number.isFinite(x) && x >= 0) {
-    return x;
-  }
-  throw new Error(
-    `Expected finite non-negative floating-point number, but received: ${x}.`,
-  );
-}
-
 export function verifyFinitePositiveFloat(obj: any): number {
   const x = verifyFiniteFloat(obj);
   if (x > 0) {
@@ -56,89 +46,6 @@ export function verifyFinitePositiveFloat(obj: any): number {
   throw new Error(
     `Expected positive finite floating-point number, but received: ${x}.`,
   );
-}
-
-export function makeVerifyNumberInInterval(minValue: number, maxValue: number) {
-  return (obj: any) => {
-    const x = verifyFloat(obj);
-    if (x >= minValue && x <= maxValue) {
-      return x;
-    }
-    throw new Error(
-      `Expected floating-point number in range [${minValue}, ${maxValue}], but received: ${x}.`,
-    );
-  };
-}
-
-export function parseXYZ<A extends WritableArrayLike<number>>(
-  out: A,
-  obj: any,
-  validator: (x: any) => number = verifyFloat,
-): A {
-  verifyObject(obj);
-  out[0] = out[1] = out[2] = 0;
-  for (const key of Object.keys(obj)) {
-    switch (key) {
-      case "x":
-        out[0] = validator(obj[key]);
-        break;
-      case "y":
-        out[1] = validator(obj[key]);
-        break;
-      case "z":
-        out[2] = validator(obj[key]);
-        break;
-      default:
-        throw new Error(
-          `Expected object to have keys ['x', 'y', 'z'], but received: ${JSON.stringify(
-            obj,
-          )}.`,
-        );
-    }
-  }
-  return out;
-}
-
-export function parseFiniteVec<U extends WritableArrayLike<number>>(
-  out: U,
-  obj: any[],
-) {
-  const length = out.length;
-  if (!Array.isArray(obj) || obj.length !== length) {
-    throw new Error("Incompatible sizes");
-  }
-
-  for (let i = 0; i < length; ++i) {
-    if (!Number.isFinite(parseFloat(obj[i]))) {
-      throw new Error("Non-finite value.");
-    }
-  }
-  for (let i = 0; i < length; ++i) {
-    out[i] = parseFloat(obj[i]);
-  }
-  return out;
-}
-
-export function parseIntVec<U extends WritableArrayLike<number>>(
-  out: U,
-  obj: any,
-) {
-  const length = out.length;
-  if (!Array.isArray(obj) || obj.length !== length) {
-    throw new Error("Incompatible sizes.");
-  }
-
-  for (let i = 0; i < length; ++i) {
-    const val = parseInt(obj[i], undefined);
-    if (!Number.isInteger(val)) {
-      throw new Error("Non-integer value.");
-    }
-  }
-
-  for (let i = 0; i < length; ++i) {
-    out[i] = parseInt(obj[i], undefined);
-  }
-  return out;
 }
 
 /**
@@ -361,10 +268,6 @@ export function urlSafeToJSON(x: string) {
   return convertJsonHelper(x, ",", '"');
 }
 
-export function jsonToUrlSafe(x: string) {
-  return convertJsonHelper(x, "_", "'");
-}
-
 export function urlSafeParse(x: string) {
   return JSON.parse(urlSafeToJSON(x));
 }
@@ -400,23 +303,6 @@ export function pythonLiteralToJSON(x: string) {
     s += replacement;
   }
   return s;
-}
-
-// Converts a string containing a Python literal into an equivalent JavaScript value.
-export function pythonLiteralParse(x: string) {
-  return JSON.parse(pythonLiteralToJSON(x));
-}
-
-export function expectArray(x: unknown, length?: number): any[] {
-  if (!Array.isArray(x)) {
-    throw new Error(`Expected array, but received: ${JSON.stringify(x)}.`);
-  }
-  if (length !== undefined && x.length !== length) {
-    throw new Error(
-      `Expected array of length ${length}, but received: ${JSON.stringify(x)}.`,
-    );
-  }
-  return x;
 }
 
 // Checks that `x' is an array, maps each element by parseElement.
@@ -472,66 +358,11 @@ export function verifyPositiveInt(obj: any) {
   return result;
 }
 
-export function verifyNonnegativeInt(obj: any) {
-  const result = verifyInt(obj);
-  if (result < 0) {
-    throw new Error(`Expected non-negative integer, but received: ${result}.`);
-  }
-  return result;
-}
-
-export function verifyMapKey<U>(obj: any, map: Map<string, U>) {
-  const result = map.get(obj);
-  if (result === undefined) {
-    throw new Error(
-      `Expected one of ${JSON.stringify(Array.from(map.keys()))}, ` +
-        `but received: ${JSON.stringify(obj)}.`,
-    );
-  }
-  return result;
-}
-
 export function verifyString(obj: any) {
   if (typeof obj !== "string") {
     throw new Error(`Expected string, but received: ${JSON.stringify(obj)}.`);
   }
   return obj;
-}
-
-export function verifyOptionalString(obj: any): string | undefined {
-  if (obj === undefined) {
-    return undefined;
-  }
-  return verifyString(obj);
-}
-
-export function verifyOptionalInt(obj: any): number | undefined {
-  if (obj === undefined) {
-    return undefined;
-  }
-  return verifyInt(obj);
-}
-
-export function verifyOptionalBoolean(obj: any): boolean | undefined {
-  if (obj === undefined) {
-    return undefined;
-  }
-  if (typeof obj === "boolean") {
-    return obj;
-  }
-  if (obj === "true") {
-    return true;
-  }
-  if (obj === "false") {
-    return false;
-  }
-  throw new Error(
-    `Expected string or boolean but received: ${JSON.stringify(obj)}`,
-  );
-}
-
-export function valueOr<T>(value: T | undefined, defaultValue: T) {
-  return value === undefined ? defaultValue : value;
 }
 
 export function verifyObjectProperty<T>(
@@ -577,37 +408,6 @@ export function verifyOptionalObjectProperty<T>(
   );
 }
 
-export function verifyObjectAsMap<T>(
-  obj: any,
-  validator: (value: any) => T,
-): Map<string, T> {
-  verifyObject(obj);
-  const map = new Map<string, T>();
-  for (const key of Object.keys(obj)) {
-    try {
-      map.set(key, validator(obj[key]));
-    } catch (parseError) {
-      throw new Error(
-        `Error parsing value associated with key ${JSON.stringify(key)}: ${
-          parseError.message
-        }`,
-      );
-    }
-  }
-  return map;
-}
-
-export function verifyFloat01(obj: any): number {
-  if (typeof obj !== "number" || !Number.isFinite(obj) || obj < 0 || obj > 1) {
-    throw new Error(
-      `Expected floating point number in [0,1], but received: ${JSON.stringify(
-        obj,
-      )}.`,
-    );
-  }
-  return obj;
-}
-
 /**
  * The query string parameters may either be specified in the usual
  * 'name=value&otherName=otherValue' form or as (optionally urlSafe) JSON: '{"name":"value"}`.
@@ -631,21 +431,6 @@ export function parseQueryStringParameters(queryString: string) {
   return result;
 }
 
-export function unparseQueryStringParameters(parameters: any) {
-  if (parameters === undefined) return "";
-  const keys = Object.keys(parameters);
-  if (keys.length === 0) return "";
-  if (keys.some((key) => typeof parameters[key] !== "string")) {
-    return JSON.stringify(parameters);
-  }
-  return keys
-    .map(
-      (key) =>
-        `${encodeURIComponent(key)}=${encodeURIComponent(parameters[key])}`,
-    )
-    .join("&");
-}
-
 /**
  * Verifies that `obj' is a string that, when converted to uppercase, matches a string property of
  * `enumType`.
@@ -664,57 +449,6 @@ export function verifyEnumString<T extends number>(
     }
   }
   throw new Error(`Invalid enum value: ${JSON.stringify(obj)}.`);
-}
-
-export function verify3dVec(obj: any) {
-  return parseFixedLengthArray(vec3.create(), obj, verifyFiniteFloat);
-}
-
-export function verify3dScale(obj: any) {
-  return parseFixedLengthArray(vec3.create(), obj, verifyFinitePositiveFloat);
-}
-
-export function verify3dDimensions(obj: any) {
-  return parseFixedLengthArray(vec3.create(), obj, verifyPositiveInt);
-}
-
-export function verifyStringArray(a: any) {
-  if (!Array.isArray(a)) {
-    throw new Error(`Expected array, received: ${JSON.stringify(a)}.`);
-  }
-  for (const x of a) {
-    if (typeof x !== "string") {
-      throw new Error(`Expected string, received: ${JSON.stringify(x)}.`);
-    }
-  }
-  return <string[]>a;
-}
-
-export function verifyIntegerArray(a: unknown) {
-  if (!Array.isArray(a)) {
-    throw new Error(`Expected array, received: ${JSON.stringify(a)}.`);
-  }
-  for (const x of a) {
-    if (!Number.isInteger(x)) {
-      throw new Error(`Expected integer, received: ${JSON.stringify(x)}.`);
-    }
-  }
-  return <number[]>a;
-}
-
-export function verifyBoolean(x: any) {
-  if (typeof x !== "boolean") {
-    throw new Error(`Expected boolean, received: ${JSON.stringify(x)}`);
-  }
-  return x;
-}
-
-// If `x` is an empty object/array/string, returns undefined.  Otherwise returns `x`.
-export function emptyToUndefined(x: any) {
-  for (const _ in x) {
-    return x;
-  }
-  return undefined;
 }
 
 export function verifyConstant<T>(actual: unknown, expected: T) {

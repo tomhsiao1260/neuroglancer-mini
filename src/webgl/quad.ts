@@ -19,7 +19,6 @@
  */
 
 export const VERTICES_PER_QUAD = 6;
-export const TRIANGLES_PER_QUAD = 2;
 
 // Use a lookup table rather than a switch to avoid miscompilation on Apple M1.
 export const glsl_getQuadVertexPosition = `

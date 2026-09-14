@@ -45,8 +45,6 @@ export function makeWatchableShaderError() {
   >(undefined);
 }
 
-export type TrackableFragmentMain = TrackableValue<string>;
-
 export function makeTrackableFragmentMain(value: string) {
   return new TrackableValue<string>(value, verifyString);
 }
@@ -241,33 +239,6 @@ export type ParameterizedEmitterDependentShaderGetter<
   Parameters,
   ExtraParameters
 >;
-
-export function parameterizedEmitterDependentShaderGetter<
-  Parameters,
-  ExtraParameters = undefined,
->(
-  refCounted: RefCounted,
-  gl: GL,
-  options: ParameterizedEmitterDependentShaderOptions<
-    Parameters,
-    ExtraParameters
-  >,
-): ParameterizedEmitterDependentShaderGetter<Parameters, ExtraParameters> {
-  return parameterizedContextDependentShaderGetter(refCounted, gl, {
-    ...options,
-    getContextKey: (emitter: ShaderModule) => emitter,
-    encodeContext: (emitter: ShaderModule) => getObjectId(emitter),
-    defineShader: (
-      builder,
-      emitter: ShaderModule,
-      parameters,
-      extraParameters,
-    ) => {
-      builder.require(emitter);
-      return options.defineShader(builder, parameters, extraParameters);
-    },
-  });
-}
 
 export function shaderCodeWithLineDirective(
   code: string,

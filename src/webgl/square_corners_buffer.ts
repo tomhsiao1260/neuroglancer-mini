@@ -43,49 +43,6 @@ export function getSquareCornersArray(
   );
 }
 
-export function getCubeCornersArray(
-  startX = -1,
-  startY = -1,
-  startZ = -1,
-  endX = 1,
-  endY = 1,
-  endZ = 1,
-  minorTiles = 1,
-  majorTiles = 1,
-) {
-  return tile2dArray(
-    new Float32Array([
-      startX,
-      startY,
-      startZ, //
-      endX,
-      startY,
-      startZ, //
-      startX,
-      endY,
-      startZ, //
-      endX,
-      endY,
-      startZ, //
-      startX,
-      startY,
-      endZ, //
-      endX,
-      startY,
-      endZ, //
-      startX,
-      endY,
-      endZ, //
-      endX,
-      endY,
-      endZ, //
-    ]),
-    /*majorDimension=*/ 3,
-    minorTiles,
-    majorTiles,
-  );
-}
-
 export function getSquareCornersBuffer(
   gl: GL,
   startX = -1,

@@ -48,18 +48,6 @@ export class RenderLayerBackendAttachment<
   }
 }
 
-export class RenderLayerBackend<
-  ViewBackend extends RenderedViewBackend = RenderedViewBackend,
-  AttachmentState = unknown,
-> extends ChunkRenderLayerBackend {
-  attachments = new Map<ViewBackend, RenderLayerBackendAttachment>();
-  attach(
-    attachment: RenderLayerBackendAttachment<ViewBackend, AttachmentState>,
-  ) {
-    attachment;
-  }
-}
-
 @registerSharedObject(PROJECTION_PARAMETERS_RPC_ID)
 export class SharedProjectionParametersBackend<
     T extends ProjectionParameters = ProjectionParameters,

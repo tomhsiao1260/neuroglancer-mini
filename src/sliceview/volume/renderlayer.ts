@@ -236,10 +236,6 @@ export interface RenderLayerOptions<ShaderParameters>
   encodeShaderParameters?: (parameters: ShaderParameters) => any;
 }
 
-function medianOf3(a: number, b: number, c: number) {
-  return a > b ? (c > a ? a : b > c ? b : c) : c > b ? b : a > c ? a : c;
-}
-
 interface ShaderContext {
   numChannelDimensions: number;
   dataHistogramChannelSpecifications: HistogramChannelSpecification[];

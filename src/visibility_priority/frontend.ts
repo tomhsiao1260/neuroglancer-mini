@@ -47,10 +47,6 @@ export class WatchableVisibilityPriority extends WatchableValue<VisibilityPriori
   }
 }
 
-export interface VisibilityPrioritySpecification {
-  visibility: WatchableVisibilityPriority;
-}
-
 /**
  * Maintains the maximum value of multiple WatchableVisibilityPriority values.
  */

@@ -22,26 +22,7 @@ export { mat2, mat3, mat4, quat, vec2, vec3, vec4 } from "gl-matrix";
 
 export const identityMat4 = mat4.create();
 
-export const AXES_NAMES = ["x", "y", "z"];
-
-export const kAxes = [
-  vec3.fromValues(1, 0, 0),
-  vec3.fromValues(0, 1, 0),
-  vec3.fromValues(0, 0, 1),
-];
-export const kZeroVec = vec3.fromValues(0, 0, 0);
-export const kZeroVec4 = vec4.fromValues(0, 0, 0, 0);
 export const kOneVec = vec3.fromValues(1, 1, 1);
-export const kInfinityVec = vec3.fromValues(Infinity, Infinity, Infinity);
-export const kIdentityQuat = quat.create();
-
-export function prod3(x: ArrayLike<number>) {
-  return x[0] * x[1] * x[2];
-}
-
-export function prod4(x: ArrayLike<number>) {
-  return x[0] * x[1] * x[2] * x[3];
-}
 
 /**
  * Implements a one-to-one conversion from Vec3 to string, suitable for use a Map key.
@@ -50,48 +31,6 @@ export function prod4(x: ArrayLike<number>) {
  */
 export function vec3Key(x: ArrayLike<number>) {
   return `${x[0]},${x[1]},${x[2]}`;
-}
-
-/**
- * Transforms `a` by a 180-degree rotation about X, stores result in `out`.
- */
-export function quatRotateX180(out: quat, a: quat) {
-  const x = a[0];
-  const y = a[1];
-  const z = a[2];
-  const w = a[3];
-  out[0] = w;
-  out[1] = z;
-  out[2] = -y;
-  out[3] = -x;
-}
-
-/**
- * Transforms `a` by a 180-degree rotation about Y, stores result in `out`.
- */
-export function quatRotateY180(out: quat, a: quat) {
-  const x = a[0];
-  const y = a[1];
-  const z = a[2];
-  const w = a[3];
-  out[0] = -z;
-  out[1] = w;
-  out[2] = x;
-  out[3] = -y;
-}
-
-/**
- * Transforms `a` by a 180-degree rotation about Z, stores result in `out`.
- */
-export function quatRotateZ180(out: quat, a: quat) {
-  const x = a[0];
-  const y = a[1];
-  const z = a[2];
-  const w = a[3];
-  out[0] = y;
-  out[1] = -x;
-  out[2] = w;
-  out[3] = -z;
 }
 
 /**
@@ -122,25 +61,6 @@ export function transformVectorByMat4Transpose(out: vec3, a: vec3, m: mat4) {
   return out;
 }
 
-export function translationRotationScaleZReflectionToMat4(
-  out: mat4,
-  translation: vec3,
-  rotation: quat,
-  scale: vec3,
-  zReflection: number,
-) {
-  const temp: Float32Array = out;
-  out[0] = scale[0];
-  out[1] = scale[1];
-  out[2] = scale[2] * zReflection;
-  return mat4.fromRotationTranslationScale(
-    out,
-    rotation,
-    translation,
-    <vec3>temp,
-  );
-}
-
 /**
  * Returns the value of `t` that minimizes `(p - (a + t * (b - a)))`.
  */
@@ -162,47 +82,6 @@ export function findClosestParameterizedLinePosition(
     numerator -= (aValue - p[i]) * (b[i] - aValue);
   }
   return numerator / Math.max(denominator, 1e-6);
-}
-
-/**
- * Sets `out` to the position on the line segment `[a, b]` closest to `p`.
- */
-export function projectPointToLineSegment(
-  out: Float32Array,
-  a: Float32Array,
-  b: Float32Array,
-  p: Float32Array,
-) {
-  const rank = out.length;
-  let t = findClosestParameterizedLinePosition(a, b, p);
-  t = Math.max(0.0, Math.min(1.0, t));
-  for (let i = 0; i < rank; ++i) {
-    const aValue = a[i];
-    out[i] = aValue + t * (b[i] - aValue);
-  }
-  return out;
-}
-
-export function mat3FromMat4(out: mat3, m: mat4) {
-  const m00 = m[0];
-  const m01 = m[1];
-  const m02 = m[2];
-  const m10 = m[4];
-  const m11 = m[5];
-  const m12 = m[6];
-  const m20 = m[8];
-  const m21 = m[9];
-  const m22 = m[10];
-  out[0] = m00;
-  out[1] = m01;
-  out[2] = m02;
-  out[3] = m10;
-  out[4] = m11;
-  out[5] = m12;
-  out[6] = m20;
-  out[7] = m21;
-  out[8] = m22;
-  return out;
 }
 
 /**
@@ -354,46 +233,6 @@ export function isAABBIntersectingPlane(
   return true;
 }
 
-export function scaleMat3Input(out: mat3, input: mat3, scales: TypedArray) {
-  for (let j = 0; j < 3; ++j) {
-    const s = scales[j];
-    for (let i = 0; i < 3; ++i) {
-      out[i + j * 3] = s * input[i + j * 3];
-    }
-  }
-  return out;
-}
-
-export function scaleMat3Output(out: mat3, input: mat3, scales: TypedArray) {
-  for (let i = 0; i < 3; ++i) {
-    const s = scales[i];
-    for (let j = 0; j < 3; ++j) {
-      out[i + j * 3] = s * input[i + j * 3];
-    }
-  }
-  return out;
-}
-
-export function getViewFrustrumVolume(projectionMat: mat4) {
-  if (projectionMat[15] === 1) {
-    // orthographic projection
-    const depth = 2 / Math.abs(projectionMat[10]);
-    const width = 2 / Math.abs(projectionMat[0]);
-    const height = 2 / Math.abs(projectionMat[5]);
-    return width * height * depth;
-  }
-  // perspective projection
-  // a = (far + near) / (near - far);
-  // b = 2 * far * near / (near - far);
-  const a = projectionMat[10];
-  const b = projectionMat[14];
-  const near = (2 * b) / (2 * a - 2);
-  const far = ((a - 1) * near) / (a + 1);
-
-  const baseArea = 4 / (projectionMat[0] * projectionMat[5]);
-  return (baseArea / 3) * (Math.abs(far) ** 3 - Math.abs(near) ** 3);
-}
-
 export function getViewFrustrumDepthRange(projectionMat: mat4) {
   if (projectionMat[15] === 1) {
     // orthographic projection
@@ -411,36 +250,5 @@ export function getViewFrustrumDepthRange(projectionMat: mat4) {
   return depth;
 }
 
-// Ensures the z output is 0.  Useful for disabling depth clipping.
-export function disableZProjection(mat: mat4) {
-  mat[2] = 0;
-  mat[6] = 0;
-  mat[10] = 0;
-  mat[14] = 0;
-  return mat;
-}
-
 const tempVec3 = vec3.create();
 
-// Determines the bounding box in world coordinates of the view frustrum for a given view-projection
-// matrix.
-//
-// https://gamedev.stackexchange.com/questions/29999/how-do-i-create-a-bounding-frustum-from-a-view-projection-matrix
-export function getViewFrustrumWorldBounds(
-  invViewProjectionMat: mat4,
-  bounds: Float32Array,
-) {
-  bounds[0] = bounds[1] = bounds[2] = Number.POSITIVE_INFINITY;
-  bounds[3] = bounds[4] = bounds[5] = Number.NEGATIVE_INFINITY;
-  for (let i = 0; i < 8; ++i) {
-    tempVec3[0] = 2 * (i & 1) - 1;
-    tempVec3[1] = 2 * ((i >>> 1) & 1) - 1;
-    tempVec3[2] = 2 * ((i >>> 2) & 1) - 1;
-    vec3.transformMat4(tempVec3, tempVec3, invViewProjectionMat);
-    for (let j = 0; j < 3; ++j) {
-      const x = tempVec3[j];
-      bounds[j] = Math.min(bounds[j], x);
-      bounds[j + 3] = Math.max(bounds[j + 3], x);
-    }
-  }
-}

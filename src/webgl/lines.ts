@@ -131,14 +131,6 @@ float getLineAlpha() {
 `);
 }
 
-export function drawLines(
-  gl: WebGL2RenderingContext,
-  linesPerInstance: number,
-  numInstances: number,
-) {
-  drawQuads(gl, linesPerInstance, numInstances);
-}
-
 export function initializeLineShader(
   shader: ShaderProgram,
   projectionParameters: { width: number; height: number },

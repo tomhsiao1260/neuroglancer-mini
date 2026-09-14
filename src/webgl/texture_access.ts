@@ -51,8 +51,6 @@ import {
   setRawTextureParameters,
 } from "#src/webgl/texture.js";
 
-export type TextureAccessCoefficients = vec3;
-
 export class TextureFormat {
   /**
    * Number of texels per multi-channel element.
@@ -289,56 +287,6 @@ export function computeTextureFormat(
   );
 }
 
-export function setOneDimensionalTextureData(
-  gl: GL,
-  format: TextureFormat,
-  data: TypedArray,
-) {
-  const {
-    arrayConstructor,
-    arrayElementsPerTexel,
-    textureInternalFormat,
-    textureFormat,
-    texelsPerElement,
-  } = format;
-  const { maxTextureSize } = gl;
-  const numElements = data.length / arrayElementsPerTexel;
-  if (numElements * texelsPerElement > maxTextureSize * maxTextureSize) {
-    throw new Error(
-      "Number of elements exceeds maximum texture size: " +
-        texelsPerElement +
-        " * " +
-        numElements,
-    );
-  }
-  const minX = Math.ceil(numElements / maxTextureSize);
-  const textureXBits = Math.ceil(Math.log2(minX));
-  const textureWidth = (1 << textureXBits) * texelsPerElement;
-  const textureHeight = Math.ceil(numElements / (1 << textureXBits));
-  const requiredSize = textureWidth * textureHeight * arrayElementsPerTexel;
-  if (data.constructor !== arrayConstructor) {
-    data = new arrayConstructor(
-      data.buffer,
-      data.byteOffset,
-      data.byteLength / arrayConstructor.BYTES_PER_ELEMENT,
-    );
-  }
-  const padded = maybePadArray(data, requiredSize);
-  gl.pixelStorei(WebGL2RenderingContext.UNPACK_ALIGNMENT, 1);
-  setRawTextureParameters(gl);
-  gl.texImage2D(
-    WebGL2RenderingContext.TEXTURE_2D,
-    /*level=*/ 0,
-    textureInternalFormat,
-    /*width=*/ textureWidth,
-    /*height=*/ textureHeight,
-    /*border=*/ 0,
-    textureFormat,
-    format.texelType,
-    padded,
-  );
-}
-
 export function setTwoDimensionalTextureData(
   gl: GL,
   format: TextureFormat,
@@ -492,60 +440,6 @@ ${shaderType} ${functionName}(${indexType} index) {
 `;
   parts.push(code);
   return parts;
-}
-
-export class OneDimensionalTextureAccessHelper {
-  readTextureValue = `readTextureValue_${this.key}`;
-  constructor(public key: string) {}
-  defineShader(builder: ShaderBuilder) {
-    builder;
-  }
-
-  getReadTextureValueCode(
-    texelsPerElement: number,
-    samplerPrefix: ShaderSamplerPrefix,
-  ) {
-    let code = `
-void ${this.readTextureValue}(highp ${samplerPrefix}sampler2D sampler, highp uint index`;
-    for (let i = 0; i < texelsPerElement; ++i) {
-      code += `, out ${samplerPrefix}vec4 output${i}`;
-    }
-    code += `) {
-  highp int width = textureSize(sampler, 0).x / ${texelsPerElement};
-  highp uint log2width = log2Exact(uint(width));
-  highp int y = int(index >> log2width);
-  highp int x = int((index - (uint(y) << log2width)) * ${texelsPerElement}u);
-`;
-    for (let i = 0; i < texelsPerElement; ++i) {
-      code += `
-  output${i} = texelFetch(sampler, ivec2(x + ${i}, y), 0);
-`;
-    }
-    code += `
-}
-`;
-    return [glsl_log2Exact, code];
-  }
-
-  getAccessor(
-    functionName: string,
-    samplerName: string,
-    dataType: DataType,
-    numComponents = 1,
-  ) {
-    const samplerPrefix = getSamplerPrefixForDataType(dataType);
-    return [
-      this.getReadTextureValueCode(1, samplerPrefix),
-      ...getAccessorFunction(
-        functionName,
-        this.readTextureValue,
-        samplerName,
-        "highp uint",
-        dataType,
-        numComponents,
-      ),
-    ];
-  }
 }
 
 export class TextureAccessHelper {

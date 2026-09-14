@@ -80,8 +80,6 @@ import { getSquareCornersBuffer } from "#src/webgl/square_corners_buffer.js";
 import type { RPC } from "#src/worker/worker_rpc.js";
 import { registerSharedObjectOwner } from "#src/worker/worker_rpc.js";
 
-export type GenericChunkKey = string;
-
 const Base = withSharedVisibility(SliceViewBase);
 
 export interface FrontendTransformedSource<

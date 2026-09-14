@@ -145,8 +145,6 @@ export function getShader(
 
 export type AttributeIndex = number;
 
-export type AttributeType = number;
-
 export interface VertexShaderInputBinder {
   enable(divisor: number): void;
   disable(): void;
@@ -257,90 +255,6 @@ export class ShaderProgram extends RefCounted {
     this.gl = <any>undefined;
     this.attributes = <any>undefined;
     this.uniforms = <any>undefined;
-  }
-}
-
-export function drawArraysInstanced(
-  gl: WebGL2RenderingContext,
-  mode: number,
-  first: number,
-  count: number,
-  instanceCount: number,
-) {
-  gl.drawArraysInstanced(mode, first, count, instanceCount);
-  if (!DEBUG_SHADER || !curShader?.vertexDebugOutputs) {
-    return;
-  }
-
-  const { vertexDebugOutputs } = curShader;
-  let bytesPerVertex = 0;
-  for (const debugOutput of vertexDebugOutputs) {
-    bytesPerVertex += DEBUG_OUTPUT_TYPE_TO_BYTES[debugOutput.typeName];
-  }
-  const buffer = gl.createBuffer();
-  const totalBytes = bytesPerVertex * count * instanceCount;
-  gl.bindBuffer(WebGL2RenderingContext.ARRAY_BUFFER, buffer);
-  gl.bufferData(
-    WebGL2RenderingContext.ARRAY_BUFFER,
-    totalBytes,
-    WebGL2RenderingContext.DYNAMIC_DRAW,
-  );
-  gl.bindBuffer(WebGL2RenderingContext.ARRAY_BUFFER, null);
-  gl.bindBufferBase(
-    WebGL2RenderingContext.TRANSFORM_FEEDBACK_BUFFER,
-    0,
-    buffer,
-  );
-  gl.beginTransformFeedback(WebGL2RenderingContext.POINTS);
-  gl.enable(WebGL2RenderingContext.RASTERIZER_DISCARD);
-  gl.drawArraysInstanced(
-    WebGL2RenderingContext.POINTS,
-    first,
-    count,
-    instanceCount,
-  );
-  gl.disable(WebGL2RenderingContext.RASTERIZER_DISCARD);
-  gl.endTransformFeedback();
-  gl.bindBufferBase(WebGL2RenderingContext.TRANSFORM_FEEDBACK_BUFFER, 0, null);
-  gl.bindBuffer(WebGL2RenderingContext.ARRAY_BUFFER, buffer);
-  const array = new Uint8Array(totalBytes);
-  gl.getBufferSubData(
-    WebGL2RenderingContext.ARRAY_BUFFER,
-    0,
-    array,
-    0,
-    totalBytes,
-  );
-  gl.bindBuffer(WebGL2RenderingContext.ARRAY_BUFFER, null);
-  gl.deleteBuffer(buffer);
-  let offset = 0;
-  const floatView = new Float32Array(array.buffer);
-  for (let instance = 0; instance < instanceCount; ++instance) {
-    for (let vertex = 0; vertex < count; ++vertex) {
-      let msg = `i=${instance} v=${vertex}:`;
-      for (const debugOutput of vertexDebugOutputs) {
-        msg += ` ${debugOutput.name}=`;
-        switch (debugOutput.typeName) {
-          case "float":
-            msg += `${floatView[offset++]}`;
-            break;
-          case "vec2":
-            msg += `${floatView[offset++]},${floatView[offset++]}`;
-            break;
-          case "vec3":
-            msg += `${floatView[offset++]},${floatView[offset++]},${
-              floatView[offset++]
-            }`;
-            break;
-          case "vec4":
-            msg += `${floatView[offset++]},${floatView[offset++]},${
-              floatView[offset++]
-            },${floatView[offset++]}`;
-            break;
-        }
-      }
-      console.log(msg);
-    }
   }
 }
 
@@ -620,18 +534,3 @@ ${this.fragmentMain}
   }
 }
 
-export function shaderContainsIdentifiers(
-  code: string,
-  identifiers: Iterable<string>,
-) {
-  const found = new Set<string>();
-  for (const identifier of identifiers) {
-    const pattern = new RegExp(
-      `(?:^|[^a-zA-Z0-9_])${identifier}[^a-zA-Z0-9_])`,
-    );
-    if (code.match(pattern) !== null) {
-      found.add(identifier);
-    }
-  }
-  return found;
-}

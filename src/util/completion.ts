@@ -34,17 +34,6 @@ export const emptyCompletionResult = {
   completions: [],
 };
 
-export function getPrefixMatches(prefix: string, options: Iterable<string>) {
-  const result: Completion[] = [];
-  for (const option of options) {
-    if (option.startsWith(prefix)) {
-      result.push({ value: option });
-    }
-  }
-  result.sort((a, b) => defaultStringCompare(a.value, b.value));
-  return result;
-}
-
 export function getPrefixMatchesWithDescriptions<T>(
   prefix: string,
   options: Iterable<T>,
@@ -72,28 +61,3 @@ export interface QueryStringCompletionTableEntry<
 export type QueryStringCompletionTable<C extends Completion = Completion> =
   readonly QueryStringCompletionTableEntry<C>[];
 
-export async function completeQueryStringParametersFromTable<
-  C extends Completion,
->(queryString: string, table: QueryStringCompletionTable<C>) {
-  return completeQueryStringParameters(
-    queryString,
-    async (key) => {
-      const results: C[] = [];
-      for (const entry of table) {
-        const keyEntry = entry.key;
-        if (keyEntry.value.startsWith(key)) results.push(keyEntry);
-      }
-      return { offset: 0, completions: results };
-    },
-    async (key, value) => {
-      for (const entry of table) {
-        if (entry.key.value !== key) continue;
-        return {
-          offset: 0,
-          completions: entry.values.filter((x) => x.value.startsWith(value)),
-        };
-      }
-      return emptyCompletionResult;
-    },
-  );
-}

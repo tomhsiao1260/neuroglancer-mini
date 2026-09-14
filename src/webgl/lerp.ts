@@ -317,23 +317,6 @@ float ${name}(${scalarType} inputValue) {
   ];
 }
 
-export function defineLerpShaderFunction(
-  builder: ShaderBuilder,
-  name: string,
-  dataType: DataType,
-): ShaderCodePart {
-  return [
-    dataTypeShaderDefinition[dataType],
-    defineLerpUniforms(builder, name, dataType),
-    glsl_dataTypeComputeLerp[dataType],
-    `
-${getShaderType(dataType)} ${name}(float inputValue) {
-  return computeLerp(inputValue, uLerpParams_${name});
-}
-`,
-  ];
-}
-
 const tempUint64 = new Uint64();
 
 export function enableLerpShaderFunction(

@@ -18,18 +18,3 @@ export function hexEncodeByte(x: number) {
   return ("0" + x.toString(16)).slice(-2);
 }
 
-export function hexEncode(arr: Uint8Array) {
-  return Array.prototype.map.call(arr, hexEncodeByte).join("");
-}
-
-export function hexDecode(x: string) {
-  if (!/^(?:[0-9a-fA-F]{2})*$/.test(x)) {
-    throw new Error("Invalid hex-encoded string");
-  }
-  const length = x.length / 2;
-  const result = new Uint8Array(length);
-  for (let i = 0; i < length; ++i) {
-    result[i] = parseInt(x.substr(i * 2, 2), 16);
-  }
-  return result;
-}

@@ -130,12 +130,6 @@ export interface CompleteUrlOptionsBase {
   chunkManager: ChunkManager;
 }
 
-export interface CompleteUrlOptions extends CompleteUrlOptionsBase {
-  registry: DataSourceProviderRegistry;
-  providerUrl: string;
-  cancellationToken: CancellationToken;
-}
-
 export interface DataSubsourceEntry {
   /**
    * Unique identifier (within the group) for this subsource.  Stored in the JSON state

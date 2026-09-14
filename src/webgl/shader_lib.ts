@@ -29,21 +29,6 @@ export const glsl_mixLinear = `
 float mixLinear(float x, float y, float a) { return mix(x, y, a); }
 `;
 
-// Hue, saturation, and value are in [0, 1] range.
-export const glsl_hsvToRgb = `
-vec3 hueToRgb(float hue) {
-  float hue6 = hue * 6.0;
-  float r = abs(hue6 - 3.0) - 1.0;
-  float g = 2.0 - abs(hue6 - 2.0);
-  float b = 2.0 - abs(hue6 - 4.0);
-  return clamp(vec3(r, g, b), 0.0, 1.0);
-}
-vec3 hsvToRgb(vec3 c) {
-  vec3 hueRgb = hueToRgb(c.x);
-  return c.z * ((hueRgb - 1.0) * c.y + 1.0);
-}
-`;
-
 export const glsl_uint64 = `
 struct uint64_t {
   highp uvec2 value;
@@ -359,12 +344,6 @@ int32_t int32FromFloat(highp float x) {
 `,
 ];
 
-export const glsl_getFortranOrderIndex = `
-highp int getFortranOrderIndex(ivec3 subscripts, ivec3 size) {
-  return subscripts.x + size.x * (subscripts.y + size.y * subscripts.z);
-}
-`;
-
 export const glsl_log2Exact = `
 highp uint log2Exact(highp uint i) {
   highp uint r;
@@ -528,109 +507,3 @@ export const webglTypeSizeInBytes: { [webglType: number]: number } = {
   [WebGL2RenderingContext.UNSIGNED_INT]: 4,
 };
 
-export function defineVectorArrayVertexShaderInput(
-  builder: ShaderBuilder,
-  typeName: "float" | "int" | "uint",
-  attributeType: number,
-  normalized: boolean,
-  name: string,
-  vectorRank: number,
-  arraySize = 1,
-) {
-  let numAttributes = 0;
-  let n = vectorRank * arraySize;
-  while (n > 0) {
-    const components = Math.min(4, n);
-    const t = getShaderVectorType(typeName, components);
-    n -= components;
-    builder.addAttribute("highp " + t, `a${name}${numAttributes}`);
-    ++numAttributes;
-  }
-  n = vectorRank * arraySize;
-  let code = "";
-  for (let arrayIndex = 0; arrayIndex < arraySize; ++arrayIndex) {
-    code += `highp ${typeName}[${vectorRank}] get${name}${arrayIndex}() {
-  highp ${typeName}[${vectorRank}] result;
-`;
-    for (let vectorIndex = 0; vectorIndex < vectorRank; ++vectorIndex) {
-      const i = arrayIndex * vectorRank + vectorIndex;
-      const attributeIndex = Math.floor(i / 4);
-      const componentIndex = i % 4;
-      code += `  result[${vectorIndex}] = a${name}${attributeIndex}`;
-      if (componentIndex !== 0 || i !== n - 1) {
-        code += `[${componentIndex}]`;
-      }
-      code += ";\n";
-    }
-    code += "  return result;\n";
-    code += "}\n";
-  }
-  builder.addVertexCode(code);
-  const elementSize = webglTypeSizeInBytes[attributeType];
-  builder.addInitializer((shader) => {
-    const locations: AttributeIndex[] = [];
-    for (
-      let attributeIndex = 0;
-      attributeIndex < numAttributes;
-      ++attributeIndex
-    ) {
-      locations[attributeIndex] = shader.attribute(`a${name}${attributeIndex}`);
-    }
-    shader.vertexShaderInputBinders[name] = {
-      enable(divisor: number) {
-        const { gl } = shader;
-        for (
-          let attributeIndex = 0;
-          attributeIndex < numAttributes;
-          ++attributeIndex
-        ) {
-          const location = locations[attributeIndex];
-          gl.enableVertexAttribArray(location);
-          gl.vertexAttribDivisor(location, divisor);
-        }
-      },
-      disable() {
-        const { gl } = shader;
-        for (
-          let attributeIndex = 0;
-          attributeIndex < numAttributes;
-          ++attributeIndex
-        ) {
-          const location = locations[attributeIndex];
-          gl.vertexAttribDivisor(location, 0);
-          gl.disableVertexAttribArray(location);
-        }
-      },
-      bind(stride: number, offset: number) {
-        const { gl } = shader;
-        for (
-          let attributeIndex = 0;
-          attributeIndex < numAttributes;
-          ++attributeIndex
-        ) {
-          const location = locations[attributeIndex];
-          const numComponents = Math.min(4, n - 4 * attributeIndex);
-          if (typeName === "float") {
-            gl.vertexAttribPointer(
-              location,
-              /*size=*/ numComponents,
-              attributeType,
-              normalized,
-              stride,
-              offset,
-            );
-          } else {
-            gl.vertexAttribIPointer(
-              location,
-              /*size=*/ Math.min(4, n - 4 * attributeIndex),
-              attributeType,
-              stride,
-              offset,
-            );
-          }
-          offset += elementSize * numComponents;
-        }
-      },
-    };
-  });
-}

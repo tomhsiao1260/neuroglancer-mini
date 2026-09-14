@@ -61,35 +61,3 @@ vec4 getValue${i}() {
   );
 }
 
-export function trivialTextureShader(gl: GL): ShaderProgram {
-  return elementWiseTextureShader(gl, defineCopyFragmentShader, 1);
-}
-
-export function trivialColorShader(gl: GL): ShaderProgram {
-  return gl.memoize.get("trivialColorShader", () => {
-    const builder = new ShaderBuilder(gl);
-    builder.addVarying("vec4", "vColor");
-    builder.addOutputBuffer("vec4", "v4f_fragColor", null);
-    builder.setFragmentMain("v4f_fragColor = vColor;");
-    builder.addAttribute("vec4", "aVertexPosition");
-    builder.addAttribute("vec4", "aColor");
-    builder.addUniform("mat4", "uProjectionMatrix");
-    builder.setVertexMain(
-      "vColor = aColor; gl_Position = uProjectionMatrix * aVertexPosition;",
-    );
-    return builder.build();
-  });
-}
-
-export function trivialUniformColorShader(gl: GL): ShaderProgram {
-  return gl.memoize.get("trivialUniformColorShader", () => {
-    const builder = new ShaderBuilder(gl);
-    builder.addUniform("mat4", "uProjectionMatrix");
-    builder.addAttribute("vec4", "aVertexPosition");
-    builder.addUniform("vec4", "uColor");
-    builder.addOutputBuffer("vec4", "v4f_fragColor", null);
-    builder.setFragmentMain("v4f_fragColor = uColor;");
-    builder.setVertexMain("gl_Position = uProjectionMatrix * aVertexPosition;");
-    return builder.build();
-  });
-}

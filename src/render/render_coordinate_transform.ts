@@ -84,8 +84,6 @@ export interface RenderLayerTransform {
 }
 
 export type RenderLayerTransformOrError = ValueOrError<RenderLayerTransform>;
-export type WatchableRenderLayerTransform =
-  WatchableValueInterface<RenderLayerTransformOrError>;
 
 export function getRenderLayerTransform(
   globalCoordinateSpace: CoordinateSpace,

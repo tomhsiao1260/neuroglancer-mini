@@ -129,12 +129,3 @@ export type Owned<T extends Disposable> = T;
  */
 export type Borrowed<T extends Disposable> = T;
 
-export function disposableOnce(value: Disposer | undefined) {
-  return () => {
-    if (value !== undefined) {
-      const x = value;
-      value = undefined;
-      invokeDisposer(x);
-    }
-  };
-}

@@ -135,55 +135,6 @@ export function formatScaleWithUnit(
   };
 }
 
-export function formatScaleWithUnitAsString(
-  scale: number,
-  unit: string,
-  options?: FormatScaleWithUnitOptions,
-): string {
-  const {
-    scale: formattedScale,
-    unit: formattedUnit,
-    prefix,
-  } = formatScaleWithUnit(scale, unit, options);
-  return `${formattedScale}${prefix}${formattedUnit}`;
-}
-
-export function parseScale(s: string) {
-  if (s === "") {
-    return { scale: 1, unit: "" };
-  }
-  const match = s.match(
-    /^((?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?)?([µa-zA-Z]+)?$/,
-  );
-  if (match === null) return undefined;
-  const scaleString = match[1];
-  let scale = scaleString === undefined ? 1 : Number(scaleString);
-  if (Number.isNaN(scale)) return undefined;
-  let unit = "";
-  if (match[2] !== undefined) {
-    const result = supportedUnits.get(match[2]);
-    if (result === undefined) {
-      return undefined;
-    }
-    unit = result.unit;
-    if (result.exponent > 0) {
-      scale *= 10 ** result.exponent;
-    } else {
-      scale /= 10 ** -result.exponent;
-    }
-  }
-  if (scale <= 0 || !Number.isFinite(scale)) return undefined;
-  return { scale, unit };
-}
-
-export function unitFromJson(x: unknown) {
-  const result = supportedUnits.get(x as string);
-  if (result === undefined) {
-    throw new Error(`Invalid unit: ${JSON.stringify(x)}`);
-  }
-  return result;
-}
-
 /**
  * Returns `scale * 10**exponent`, but uses division for negative exponents to reduce loss of
  * precision.

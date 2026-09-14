@@ -16,15 +16,3 @@
 
 export type ValueOrError<T> = (T & { error?: undefined }) | { error: string };
 
-export function makeValueOrError<T>(f: () => T): ValueOrError<T> {
-  try {
-    return f() as ValueOrError<T>;
-  } catch (e) {
-    return { error: (e as Error).message };
-  }
-}
-
-export function valueOrThrow<T>(x: ValueOrError<T>): T {
-  if (x.error !== undefined) throw new Error(x.error);
-  return x;
-}

@@ -528,4 +528,3 @@ export class ChunkRenderLayerFrontend extends SharedObject {
   }
 }
 
-export type ChunkStatistics = Map<ChunkSource, Float64Array>;
