@@ -149,7 +149,7 @@ The code is split between two threads. The **main thread** owns the WebGL canvas
 
 ### How a chunk gets to the screen
 
-1. **Start-up** (`src/main.ts`): the store to read from is chosen: a local folder picked with the button, or the HTTP URL given as `?zarr=`. It is described by a `ZarrStoreSpec`, which is also sent to the worker. `main.ts` also creates the canvas, the worker and its RPC channel, and the chunk manager, with these limits: 100 simultaneous downloads, 2 GB of system memory and 1 GB of GPU memory. It then creates the three panels.
+1. **Start-up** (`src/main.ts`): the store to read from is chosen: a local folder picked with the button, or the HTTP URL given as `?zarr=`. It is described by a `ZarrStoreSpec`, which is also sent to the worker. `src/viewer.ts` creates the canvas, the worker and its RPC channel, and the chunk manager, with these limits: 100 simultaneous downloads, 2 GB of system memory and 1 GB of GPU memory. `main.ts` then adds three views.
 2. **Loading the volume** (`src/main.ts`, `src/datasource/zarr/frontend.ts`): the viewer reads the metadata of every scale, creates one chunk source per scale, sets the coordinate spaces from the volume bounds and creates the render layer.
 3. **Choosing chunks** (`src/render/backend.ts`): for each panel, the worker picks the scales that match the current zoom. It then finds the chunks the cross-section plane cuts through and requests them as `VISIBLE`. The prefetching code, which would request chunks ahead of the current motion as `PREFETCH`, currently requests nothing: the transform it uses to turn motion into chunk coordinates (`combinedGlobalLocalToChunkTransform`) is never filled in.
 4. **Queueing** (`src/chunk_manager/backend.ts`): chunks are ordered by tier and priority. The highest-priority chunks are downloaded while capacity allows, and lower-priority chunks are evicted to make room.
@@ -162,7 +162,8 @@ The code is split between two threads. The **main thread** owns the WebGL canvas
 #### Entry
 
 - `index.html`, `src/style.css`: page and styles.
-- `src/main.ts`: folder picker, the worker and chunk manager, the viewer (loads the volume and creates the render layer) and the three panels.
+- `src/main.ts`: the app. Chooses the store (`?zarr=<url>` or the folder picker), creates the viewer and lays out three views side by side. Start here to change what the page shows.
+- `src/viewer.ts`: `Viewer`, the interface to the rest of the code. `new Viewer({ container, store })` creates the canvas, the worker and the chunk manager and loads the volume; `viewer.addView(element, "xy" | "xz" | "yz")` shows a cross-section in `element`, which can be placed anywhere inside the container with CSS. All views share one position and zoom.
 
 #### `src/render/`: cross-section views
 

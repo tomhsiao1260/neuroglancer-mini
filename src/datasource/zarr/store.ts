@@ -46,7 +46,16 @@ export class HttpStore implements ZarrStore {
 
   async get(key: string) {
     const url = `${this.url}/${key}`;
-    const response = await fetch(url);
+    let response: Response;
+    try {
+      response = await fetch(url);
+    } catch {
+      // The browser reports a response blocked by CORS the same way as a network error.
+      throw new Error(
+        `Could not fetch ${url}: network error, or the server does not allow ` +
+          `cross-origin requests (no Access-Control-Allow-Origin header)`,
+      );
+    }
     // S3 answers 403 rather than 404 for a missing file.
     if (response.status === 404 || response.status === 403) return undefined;
     if (!response.ok) {

@@ -18,7 +18,14 @@ body {
   flex: 1;
 }
 
-.neuroglancer-panel {
+#views {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: row;
+}
+
+.view {
   flex: 1;
   cursor: crosshair;
   position: relative;

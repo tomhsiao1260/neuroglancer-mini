@@ -36,9 +36,13 @@ export class DisplayContext extends RefCounted {
   canvas = document.createElement("canvas");
   gl: GL;
   panels = new Set<SliceViewPanel>();
-  // Incremented when panels are added; the canvas size and panel bounds are then recomputed.
+  // Incremented when a panel is added, or the container or a panel changes size; the canvas size
+  // and panel bounds are then recomputed.
   resizeGeneration = 0;
   boundsGeneration = -1;
+  // Where the canvas is on the page, as of the last bounds update.
+  canvasRect = new DOMRect();
+  private resizeObserver = new ResizeObserver(() => this.handleResize());
 
   constructor(public container: HTMLElement) {
     super();
@@ -52,10 +56,17 @@ export class DisplayContext extends RefCounted {
     canvas.style.zIndex = "0";
     container.appendChild(canvas);
     this.gl = initializeWebGL(canvas);
+    this.resizeObserver.observe(container);
+    this.registerDisposer(() => this.resizeObserver.disconnect());
   }
 
   addPanel(panel: SliceViewPanel) {
     this.panels.add(panel);
+    this.resizeObserver.observe(panel.element);
+    this.handleResize();
+  }
+
+  private handleResize() {
     ++this.resizeGeneration;
     this.scheduleRedraw();
   }
@@ -70,6 +81,7 @@ export class DisplayContext extends RefCounted {
     const { canvas } = this;
     canvas.width = canvas.offsetWidth;
     canvas.height = canvas.offsetHeight;
+    this.canvasRect = canvas.getBoundingClientRect();
     this.boundsGeneration = resizeGeneration;
   }
 
@@ -333,8 +345,8 @@ export class SliceViewPanel extends RefCounted {
     const clientRect = this.element.getBoundingClientRect();
     const { x, y, width, height } = clientRect;
 
-    this.canvasRelativeClippedTop = y;
-    this.canvasRelativeClippedLeft = x;
+    this.canvasRelativeClippedTop = y - display.canvasRect.top;
+    this.canvasRelativeClippedLeft = x - display.canvasRect.left;
 
     const viewport = this.renderViewport;
     viewport.width = width - 1;
