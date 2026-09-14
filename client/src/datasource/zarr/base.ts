@@ -25,3 +25,6 @@ export class VolumeChunkSourceParameters {
   metadata: ArrayMetadata;
   static RPC_ID = "zarr/VolumeChunkSource";
 }
+
+// Sent by the worker for each chunk whose file is not in the store.
+export const MISSING_CHUNK_RPC_ID = "zarr/missingChunk";

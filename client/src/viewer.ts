@@ -17,7 +17,7 @@
 /**
  * @file The viewer: one zarr volume shown in any number of cross-section views.
  *
- *   const viewer = new Viewer({ container, store });
+ *   const viewer = new Viewer({ container, store, onMissingChunk });
  *   const view = viewer.addView(element, "xy");
  *   await viewer.loaded;
  *   viewer.setPosition({ x: 100, y: 200, z: 300 });
@@ -64,6 +64,20 @@ export interface Point {
   z: number;
 }
 
+export interface MissingChunk {
+  // Path of the chunk's file within the store, e.g. `0/52/24/18`.
+  key: string;
+}
+
+/**
+ * Called for each chunk whose file is not in the store, at most once per chunk while the viewer is
+ * open.  Return (or resolve to) `true` once the file has been added to the store, to load the chunk
+ * again; otherwise the chunk is shown as empty.
+ */
+export type MissingChunkHandler = (
+  chunk: MissingChunk,
+) => boolean | void | Promise<boolean | void>;
+
 /**
  * The plane a view shows, named by the two volume axes on screen.
  */
@@ -89,6 +103,8 @@ export interface ViewerOptions {
   container: HTMLElement;
   // Where the volume is read from.
   store: ZarrStoreSpec;
+  // What to do about chunks missing from the store; by default they are shown as empty.
+  onMissingChunk?: MissingChunkHandler;
 }
 
 export class Viewer extends RefCounted {
@@ -120,7 +136,7 @@ export class Viewer extends RefCounted {
     | undefined;
   private pointerMoved = new Signal<(point: Point | undefined) => void>();
 
-  constructor({ container, store }: ViewerOptions) {
+  constructor({ container, store, onMissingChunk }: ViewerOptions) {
     super();
     this.display = this.registerDisposer(new DisplayContext(container));
 
@@ -157,7 +173,7 @@ export class Viewer extends RefCounted {
       }),
     );
 
-    this.loaded = this.loadVolume(store);
+    this.loaded = this.loadVolume(store, onMissingChunk);
   }
 
   // Center of the views, or `undefined` until the volume has loaded.
@@ -241,9 +257,30 @@ export class Viewer extends RefCounted {
 
   // Loads the zarr volume, sets the coordinate spaces from the volume bounds and creates the render
   // layer that draws the volume.
-  private async loadVolume(store: ZarrStoreSpec) {
+  private async loadVolume(
+    store: ZarrStoreSpec,
+    onMissingChunk: MissingChunkHandler | undefined,
+  ) {
     const volume = await loadZarrVolume(this.chunkManager, store);
     if (this.wasDisposed) return;
+
+    if (onMissingChunk !== undefined) {
+      // Keys already passed to `onMissingChunk`.  A chunk reloaded after the handler returned `true`
+      // but still missing is not passed again, so a handler cannot cause endless reloads.
+      const reportedKeys = new Set<string>();
+      volume.missingChunk.add((key, reload) => {
+        if (reportedKeys.has(key)) return;
+        reportedKeys.add(key);
+        Promise.resolve(onMissingChunk({ key })).then(
+          (added) => {
+            if (added === true) reload();
+          },
+          (error) => {
+            console.error(`Missing chunk handler failed for ${key}:`, error);
+          },
+        );
+      });
+    }
 
     const { modelSpace } = volume;
     this.coordinateSpace.value = makeCombinedCoordinateSpace(modelSpace);

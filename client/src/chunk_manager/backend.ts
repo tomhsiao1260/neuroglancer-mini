@@ -33,6 +33,7 @@ import type { ChunkSourceParametersConstructor } from "#src/chunk_manager/base.j
 import {
   CHUNK_MANAGER_RPC_ID,
   CHUNK_QUEUE_MANAGER_RPC_ID,
+  CHUNK_RELOAD_RPC_ID,
   ChunkPriorityTier,
   ChunkState,
 } from "#src/chunk_manager/base.js";
@@ -54,6 +55,7 @@ import { NullarySignal } from "#src/util/signal.js";
 import type { RPC } from "#src/worker/worker_rpc.js";
 import {
   initializeSharedObjectCounterpart,
+  registerRPC,
   registerSharedObject,
   registerSharedObjectOwner,
   SharedObject,
@@ -769,25 +771,32 @@ export class ChunkQueueManager extends SharedObjectCounterpart {
     rpc.invoke("Chunk.update", msg, transfers);
   }
 
+  /**
+   * Frees the chunk's data wherever it is (being downloaded, in the worker, on the main thread or on
+   * the GPU) and puts the chunk back in the download queue.  It is downloaded again if it is still
+   * requested, and deleted otherwise.
+   */
+  evictChunk(chunk: Chunk) {
+    switch (chunk.state) {
+      case ChunkState.DOWNLOADING:
+        cancelChunkDownload(chunk);
+        break;
+      case ChunkState.GPU_MEMORY:
+        this.freeChunkGPUMemory(chunk);
+      // fallthrough
+      case ChunkState.SYSTEM_MEMORY_WORKER:
+      case ChunkState.SYSTEM_MEMORY:
+        this.freeChunkSystemMemory(chunk);
+        break;
+    }
+    // Note: After calling this, chunk may no longer be valid.
+    this.updateChunkState(chunk, ChunkState.QUEUED);
+  }
+
   // Starts downloading the highest-priority queued chunks, evicting lower-priority chunks from the
   // download slots and from system memory as needed.
   private processQueuePromotions_() {
-    const evict = (chunk: Chunk) => {
-      switch (chunk.state) {
-        case ChunkState.DOWNLOADING:
-          cancelChunkDownload(chunk);
-          break;
-        case ChunkState.GPU_MEMORY:
-          this.freeChunkGPUMemory(chunk);
-        // fallthrough
-        case ChunkState.SYSTEM_MEMORY_WORKER:
-        case ChunkState.SYSTEM_MEMORY:
-          this.freeChunkSystemMemory(chunk);
-          break;
-      }
-      // Note: After calling this, chunk may no longer be valid.
-      this.updateChunkState(chunk, ChunkState.QUEUED);
-    };
+    const evict = (chunk: Chunk) => this.evictChunk(chunk);
 
     const promotionCandidates = this.queuedDownloadPromotionQueue.candidates();
     const evictionCandidates = this.downloadEvictionQueue.candidates();
@@ -1009,3 +1018,18 @@ export function withChunkManager<
     }
   };
 }
+
+// Discards a chunk's data and downloads it again if it is still requested (see
+// `ChunkSource.reloadChunk` in `chunk_manager/frontend.ts`).
+registerRPC(CHUNK_RELOAD_RPC_ID, function (x) {
+  const source = this.get(x.source) as ChunkSource | undefined;
+  const chunk = source?.chunks.get(x.key);
+  if (
+    chunk === undefined ||
+    chunk.state === ChunkState.NEW ||
+    chunk.state === ChunkState.QUEUED
+  ) {
+    return;
+  }
+  source!.chunkManager.queueManager.evictChunk(chunk);
+});

@@ -79,3 +79,25 @@ body {
 #position .pointer:not(:empty) {
   margin-right: 1em;
 }
+
+#missing-chunks {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  max-width: 260px;
+  padding: 5px 10px;
+  border-radius: 4px;
+  background-color: rgba(0, 0, 0, 0.7);
+  color: white;
+  font-family: monospace;
+  z-index: 1;
+}
+
+#missing-chunks ol {
+  max-height: 200px;
+  overflow-y: auto;
+  margin: 4px 0 0;
+  padding: 0;
+  list-style: none;
+  color: #bbb;
+}

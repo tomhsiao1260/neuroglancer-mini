@@ -9,7 +9,7 @@ const __dirname = dirname(__filename);
 export default defineConfig({
   build: {
     target: 'esnext',
-    outDir: 'dist',
+    outDir: '../build/client/page',
     rollupOptions: {
       input: {
         main: resolve(__dirname, 'index.html'),

@@ -21,7 +21,10 @@ import {
   makeCoordinateSpace,
   makeIdentityTransformedBoundingBox,
 } from "#src/state/coordinate_transform.js";
-import { VolumeChunkSourceParameters } from "#src/datasource/zarr/base.js";
+import {
+  MISSING_CHUNK_RPC_ID,
+  VolumeChunkSourceParameters,
+} from "#src/datasource/zarr/base.js";
 import type { ArrayMetadata } from "#src/datasource/zarr/metadata.js";
 import { parseV2Metadata } from "#src/datasource/zarr/metadata.js";
 import type { OmeMultiscaleMetadata } from "#src/datasource/zarr/ome.js";
@@ -39,11 +42,25 @@ import { DataType } from "#src/util/data_type.js";
 import type { Borrowed } from "#src/util/disposable.js";
 import { verifyObject } from "#src/util/json.js";
 import * as matrix from "#src/util/matrix.js";
+import { Signal } from "#src/util/signal.js";
+import { registerRPC } from "#src/worker/worker_rpc.js";
+
+// Called with the store key of a chunk whose file is missing, and a function that loads the chunk
+// again.
+type MissingChunkListener = (key: string, reload: () => void) => void;
 
 class ZarrVolumeChunkSource extends WithParameters(
   VolumeChunkSource,
   VolumeChunkSourceParameters,
-) {}
+) {
+  missingChunk = new Signal<MissingChunkListener>();
+}
+
+registerRPC(MISSING_CHUNK_RPC_ID, function (x) {
+  const source = this.get(x.source) as ZarrVolumeChunkSource | undefined;
+  if (source === undefined) return;
+  source.missingChunk.dispatch(x.key, () => source.reloadChunk(x.chunk));
+});
 
 interface ZarrScaleInfo {
   // Path of the scale's array within the store.
@@ -60,6 +77,9 @@ interface ZarrMultiscaleInfo {
 }
 
 export class MultiscaleVolumeChunkSource extends GenericMultiscaleVolumeChunkSource {
+  // Reports the missing chunks of every scale.
+  missingChunk = new Signal<MissingChunkListener>();
+
   get dataType() {
     return this.multiscale.dataType;
   }
@@ -115,22 +135,23 @@ export class MultiscaleVolumeChunkSource extends GenericMultiscaleVolumeChunkSou
           dataType: metadata.dataType,
           upperVoxelBound: permutedDataShape,
           chunkDataSizes: [permutedChunkShape],
-        }).map(
-          (spec): SliceViewSingleResolutionSource<VolumeChunkSource> => ({
-            chunkSource: this.chunkManager.getChunkSource(
-              ZarrVolumeChunkSource,
-              {
-                spec,
-                parameters: {
-                  store: this.multiscale.store,
-                  path: scale.path,
-                  metadata,
-                },
+        }).map((spec): SliceViewSingleResolutionSource<VolumeChunkSource> => {
+          // The same chunk source is returned for the same options on every call.
+          const chunkSource = this.chunkManager.getChunkSource(
+            ZarrVolumeChunkSource,
+            {
+              spec,
+              parameters: {
+                store: this.multiscale.store,
+                path: scale.path,
+                metadata,
               },
-            ),
-            chunkToMultiscaleTransform: transform,
-          }),
-        );
+            },
+          );
+          // Adding a listener that is already added has no effect.
+          chunkSource.missingChunk.add(this.missingChunk.dispatch);
+          return { chunkSource, chunkToMultiscaleTransform: transform };
+        });
       }),
     );
   }

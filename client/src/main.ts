@@ -17,11 +17,12 @@
 /**
  * @file The app: chooses where the volume is read from and lays out the views.
  *
- * Opening the page with `?zarr=<url>` reads the volume over HTTP; otherwise a button lets the user
- * pick a local `.zarr` folder.
+ * Opening the page with `?zarr=<url>` reads the volume over HTTP, e.g. from the server in `server/`;
+ * otherwise a button lets the user pick a local `.zarr` folder.
  */
 
 import "#src/style.css";
+import { listMissingChunks } from "#src/app/missing_chunks.js";
 import { showPosition } from "#src/app/position_display.js";
 import { syncPositionWithUrl } from "#src/app/url_position.js";
 import type { ZarrStoreSpec } from "#src/datasource/zarr/store.js";
@@ -60,7 +61,11 @@ function openViewer(store: ZarrStoreSpec) {
   loading.textContent = "Loading ...";
   app.append(container, loading);
 
-  const viewer = new Viewer({ container, store });
+  const viewer = new Viewer({
+    container,
+    store,
+    onMissingChunk: listMissingChunks(container),
+  });
   viewer.loaded.then(
     () => loading.remove(),
     (error) => {

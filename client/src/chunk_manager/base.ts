@@ -63,6 +63,8 @@ export enum ChunkPriorityTier {
 
 export const CHUNK_QUEUE_MANAGER_RPC_ID = "ChunkQueueManager";
 export const CHUNK_MANAGER_RPC_ID = "ChunkManager";
+// Asks the worker to discard a chunk and download it again.
+export const CHUNK_RELOAD_RPC_ID = "ChunkSource.reloadChunk";
 
 export interface ChunkSourceParametersConstructor<T> {
   new (): T;

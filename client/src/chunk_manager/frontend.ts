@@ -27,6 +27,7 @@ import type { ChunkSourceParametersConstructor } from "#src/chunk_manager/base.j
 import {
   CHUNK_MANAGER_RPC_ID,
   CHUNK_QUEUE_MANAGER_RPC_ID,
+  CHUNK_RELOAD_RPC_ID,
   ChunkState,
 } from "#src/chunk_manager/base.js";
 import { SharedWatchableValue } from "#src/worker/shared_watchable_value.js";
@@ -290,6 +291,12 @@ export class ChunkSource extends SharedObject {
 
   addChunk(key: string, chunk: Chunk) {
     this.chunks.set(key, chunk);
+  }
+
+  // Asks the worker to discard the chunk with key `key` and download it again, e.g. once its file
+  // has been added to the store.
+  reloadChunk(key: string) {
+    this.rpc!.invoke(CHUNK_RELOAD_RPC_ID, { source: this.rpcId, key });
   }
 
   /**
