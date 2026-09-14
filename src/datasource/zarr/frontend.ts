@@ -22,11 +22,8 @@ import {
   makeIdentityTransformedBoundingBox,
 } from "#src/state/coordinate_transform.js";
 import { VolumeChunkSourceParameters } from "#src/datasource/zarr/base.js";
-import "#src/datasource/zarr/codec/blosc/resolve.js";
-import "#src/datasource/zarr/codec/bytes/resolve.js";
-import "#src/datasource/zarr/codec/gzip/resolve.js";
-import type { ArrayMetadata } from "#src/datasource/zarr/metadata/index.js";
-import { parseV2Metadata } from "#src/datasource/zarr/metadata/parse.js";
+import type { ArrayMetadata } from "#src/datasource/zarr/metadata.js";
+import { parseV2Metadata } from "#src/datasource/zarr/metadata.js";
 import type { OmeMultiscaleMetadata } from "#src/datasource/zarr/ome.js";
 import { parseOmeMetadata } from "#src/datasource/zarr/ome.js";
 import type { SliceViewSingleResolutionSource } from "#src/sliceview/frontend.js";
@@ -91,18 +88,18 @@ export class MultiscaleVolumeChunkSource extends GenericMultiscaleVolumeChunkSou
     return transposeNestedArrays(
       this.multiscale.scales.map((scale) => {
         const { metadata } = scale;
-        const { rank, codecs, shape } = metadata;
-        const readChunkShape = codecs.layoutInfo[0].readChunkShape;
-        const { physicalToLogicalDimension } = metadata.codecs.layoutInfo[0];
+        const { rank, chunkShape, shape } = metadata;
+        // Zarr lists dimensions in (z, y, x) order; chunk space uses the reverse order, (x, y, z),
+        // which matches C-order voxel data where x varies fastest.
         const permutedChunkShape = new Uint32Array(rank);
         const permutedDataShape = new Float32Array(rank);
         const orderTransform = new Float32Array((rank + 1) ** 2);
         orderTransform[(rank + 1) ** 2 - 1] = 1;
         for (let i = 0; i < rank; ++i) {
-          const decodedDim = physicalToLogicalDimension[rank - 1 - i];
-          permutedChunkShape[i] = readChunkShape[decodedDim];
-          permutedDataShape[i] = shape[decodedDim];
-          orderTransform[i + decodedDim * (rank + 1)] = 1;
+          const zarrDim = rank - 1 - i;
+          permutedChunkShape[i] = chunkShape[zarrDim];
+          permutedDataShape[i] = shape[zarrDim];
+          orderTransform[i + zarrDim * (rank + 1)] = 1;
         }
         const transform = new Float32Array((rank + 1) ** 2);
         matrix.multiply<Float32Array | Float64Array>(
@@ -121,7 +118,6 @@ export class MultiscaleVolumeChunkSource extends GenericMultiscaleVolumeChunkSou
           dataType: metadata.dataType,
           upperVoxelBound: permutedDataShape,
           chunkDataSizes: [permutedChunkShape],
-          fillValue: metadata.fillValue,
         }).map(
           (spec): SliceViewSingleResolutionSource<VolumeChunkSource> => ({
             chunkSource: this.chunkManager.getChunkSource(

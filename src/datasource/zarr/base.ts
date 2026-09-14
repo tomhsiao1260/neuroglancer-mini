@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import type { ArrayMetadata } from "#src/datasource/zarr/metadata/index.js";
+import type { ArrayMetadata } from "#src/datasource/zarr/metadata.js";
 
 export class VolumeChunkSourceParameters {
   url: string;

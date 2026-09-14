@@ -14,20 +14,19 @@
  * limitations under the License.
  */
 
-import "#src/datasource/zarr/codec/register.js";
-import "#src/datasource/zarr/codec/bytes/decode.js";
-
 import { WithParameters } from "#src/chunk_manager/backend.js";
 import { VolumeChunkSourceParameters } from "#src/datasource/zarr/base.js";
-import { decodeArray } from "#src/datasource/zarr/codec/simple_decode.js";
-import { ChunkKeyEncoding } from "#src/datasource/zarr/metadata/index.js";
-import { getFileReader } from "#src/util/file_reader.js";
-import { postProcessRawData } from "#src/sliceview/backend_chunk_decoders/postprocess.js";
+import { decodeChunk } from "#src/datasource/zarr/decode.js";
 import type { VolumeChunk } from "#src/sliceview/volume/backend.js";
 import { VolumeChunkSource } from "#src/sliceview/volume/backend.js";
-import type { CancellationToken } from "#src/util/cancellation.js";
+import { getFileReader } from "#src/util/file_reader.js";
 import { registerSharedObject } from "#src/worker/worker_rpc.js";
 
+/**
+ * Worker side of one scale of a zarr volume.  The chunk manager calls `download` for each chunk it
+ * decides to load: the chunk file is read and decoded into `chunk.data`.  A chunk missing from the
+ * store keeps `data === null` and is drawn with the fill value.
+ */
 @registerSharedObject()
 export class ZarrVolumeChunkSource extends WithParameters(
   VolumeChunkSource,
@@ -35,51 +34,17 @@ export class ZarrVolumeChunkSource extends WithParameters(
 ) {
   private fileReader = getFileReader(this.parameters.url + "/");
 
-  async download(chunk: VolumeChunk, cancellationToken: CancellationToken) {
+  async download(chunk: VolumeChunk) {
     chunk.chunkDataSize = this.spec.chunkDataSize;
-    const { parameters } = this;
-    const { chunkGridPosition } = chunk;
-    const { metadata } = parameters;
-    let baseKey = "";
-    const rank = this.spec.rank;
-    const { physicalToLogicalDimension } = metadata.codecs.layoutInfo[0];
-    let sep: string;
-    if (metadata.chunkKeyEncoding === ChunkKeyEncoding.DEFAULT) {
-      baseKey += "c";
-      sep = metadata.dimensionSeparator;
-    } else {
-      sep = "";
-      if (rank === 0) {
-        baseKey += "0";
-      }
-    }
-    const keyCoords = new Array<number>(rank);
-    const { readChunkShape } = metadata.codecs.layoutInfo[0];
-    const { chunkShape } = metadata;
-    for (
-      let fOrderPhysicalDim = 0;
-      fOrderPhysicalDim < rank;
-      ++fOrderPhysicalDim
-    ) {
-      const decodedDim =
-        physicalToLogicalDimension[rank - 1 - fOrderPhysicalDim];
-      keyCoords[decodedDim] = Math.floor(
-        (chunkGridPosition[fOrderPhysicalDim] * readChunkShape[decodedDim]) /
-          chunkShape[decodedDim],
-      );
-    }
-    for (let i = 0; i < rank; ++i) {
-      baseKey += `${sep}${keyCoords[i]}`;
-      sep = metadata.dimensionSeparator;
-    }
-    const response = await this.fileReader.read(baseKey);
+    const { metadata } = this.parameters;
+    // The chunk grid position is in (x, y, z) order, while zarr chunk keys list the chunk indices in
+    // (z, y, x) order, e.g. `52/24/18`.
+    const key = Array.from(chunk.chunkGridPosition)
+      .reverse()
+      .join(metadata.dimensionSeparator);
+    const response = await this.fileReader.read(key);
     if (response !== undefined) {
-      const decoded = await decodeArray(
-        metadata.codecs,
-        response.data,
-        cancellationToken,
-      );
-      await postProcessRawData(chunk, cancellationToken, decoded);
+      chunk.data = await decodeChunk(metadata, response.data);
     }
   }
 }
