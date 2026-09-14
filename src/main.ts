@@ -26,11 +26,7 @@ import { TrackableCoordinateSpace } from "#src/state/coordinate_transform.js";
 import { getDefaultDataSourceProvider } from "#src/datasource/default_provider.js";
 import type { DataSourceProviderRegistry } from "#src/datasource/index.js";
 import { DisplayContext } from "#src/layer/display_context.js";
-import {
-  ImageUserLayer,
-  MouseSelectionState,
-} from "#src/layer/index.js";
-import { EventActionMap } from "#src/util/keyboard_bindings.js";
+import { ImageUserLayer } from "#src/layer/index.js";
 import { WatchableVisibilityPriority } from "#src/visibility_priority/frontend.js";
 import type { GL } from "#src/webgl/context.js";
 import { RPC, READY_ID } from "#src/worker/worker_rpc.js";
@@ -110,9 +106,7 @@ function loading(worker: Worker) {
  */
 export interface ViewerUIState {
   display: DisplayContext;
-  mouseState: MouseSelectionState;
   visibility: WatchableVisibilityPriority;
-  inputEventMap: EventActionMap;
   coordinateSpace: TrackableCoordinateSpace;
   chunkManager: ChunkManager;
   navigationState: NavigationState;
@@ -191,7 +185,6 @@ class DataManagementContext extends RefCounted {
  */
 class Viewer extends RefCounted {
   coordinateSpace = new TrackableCoordinateSpace();
-  mouseState = new MouseSelectionState();
   visibility: WatchableVisibilityPriority;
   chunkManager: ChunkManager;
   dataContext: DataManagementContext;
@@ -207,18 +200,6 @@ class Viewer extends RefCounted {
     this.dataContext = new DataManagementContext(display.gl);
     this.visibility = new WatchableVisibilityPriority(Infinity);
     const dataSourceProvider: DataSourceProviderRegistry = getDefaultDataSourceProvider();
-    
-    // Setup control events
-    const inputEventMap = new EventActionMap();
-
-    inputEventMap.addParent(
-      EventActionMap.fromObject({
-        "at:mousedown0": { action: "translate-via-mouse-drag", stopPropagation: true },
-        "control+wheel": { action: "zoom-via-wheel", preventDefault: true },
-        "at:wheel": { action: "z+1-via-wheel", preventDefault: true },
-      }),
-      Number.NEGATIVE_INFINITY,
-    );
 
     const layerManager = new ImageUserLayer({
       chunkManager: this.dataContext.chunkManager,
@@ -233,8 +214,6 @@ class Viewer extends RefCounted {
         coordinateSpace: this.coordinateSpace,
         chunkManager: this.dataContext.chunkManager,
         navigationState: this.navigationState,
-        inputEventMap,
-        mouseState: this.mouseState,
         visibility: this.visibility,
         display: this.display,
       }),
@@ -277,10 +256,8 @@ class PanelLayout extends RefCounted {
     const state =  {
       display: viewer.display,
       chunkManager: viewer.chunkManager,
-      mouseState: viewer.mouseState,
       layerManager: viewer.layerManager,
       visibility: viewer.visibility,
-      inputEventMap: viewer.inputEventMap,
     }
 
     // Create XY plane panel (top view)

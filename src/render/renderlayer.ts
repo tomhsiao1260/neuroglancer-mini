@@ -17,10 +17,7 @@
 import { debounce } from 'es-toolkit';
 import { LayerChunkProgressInfo } from "#src/chunk_manager/base.js";
 import { RenderViewport, renderViewportsEqual } from "#src/layer/display_context.js";
-import type {
-  MouseSelectionState,
-  UserLayer,
-} from "#src/layer/index.js";
+import type { UserLayer } from "#src/layer/index.js";
 import type {
   DisplayDimensionRenderInfo,
   NavigationState,
@@ -46,23 +43,6 @@ export class RenderLayer extends RefCounted {
   layerChanged = new NullarySignal();
   redrawNeeded = new NullarySignal();
   layerChunkProgressInfo = new LayerChunkProgressInfo();
-
-  handleAction(_action: string) {
-    // Do nothing by default.
-  }
-
-  getValueAt(_x: Float32Array): any {
-    return undefined;
-  }
-
-  /**
-   * Optionally updates the mouse state based on the retrived pick information.  This might snap the
-   * 3-d position to the center of the picked point.
-   */
-  updateMouseState(
-    _mouseState: MouseSelectionState,
-    _data: any,
-  ) {}
 }
 
 export class DerivedProjectionParameters<

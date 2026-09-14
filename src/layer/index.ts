@@ -19,7 +19,6 @@ import type {
 } from "#src/state/coordinate_transform.js";
 import {
   CoordinateSpaceCombiner,
-  emptyInvalidCoordinateSpace,
   isLocalOrChannelDimension,
   isChannelDimension,
   isLocalDimension,
@@ -41,7 +40,6 @@ import type { Owned } from "#src/util/disposable.js";
 import { RefCounted } from "#src/util/disposable.js";
 import { MessageList } from "#src/util/message_list.js";
 import { NullarySignal } from "#src/util/signal.js";
-import { kEmptyFloat32Vec } from "#src/util/vector.js";
 import { DataType } from "#src/sliceview/volume/base.js";
 import { MultiscaleVolumeChunkSource } from "#src/sliceview/volume/frontend.js";
 import { ImageRenderLayer } from "#src/sliceview/volume/image_renderlayer.js";
@@ -262,23 +260,6 @@ export class ImageUserLayer extends UserLayer {
 
   static type = "image";
   static typeAbbreviation = "img";
-}
-
-export class MouseSelectionState {
-  changed = new NullarySignal();
-  coordinateSpace: CoordinateSpace = emptyInvalidCoordinateSpace;
-  position: Float32Array = kEmptyFloat32Vec;
-  unsnappedPosition: Float32Array = kEmptyFloat32Vec;
-  active = false;
-  pageX: number;
-  pageY: number;
-
-  setActive(value: boolean) {
-    if (this.active !== value || value === true) {
-      this.active = value;
-      this.changed.dispatch();
-    }
-  }
 }
 
 const LOCAL_POSITION_JSON_KEY = "localPosition";

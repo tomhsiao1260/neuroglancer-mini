@@ -14,12 +14,15 @@
  * limitations under the License.
  */
 
-import type { RenderedDataViewerState } from "#src/render/rendered_data_panel.js";
-import { RenderedDataPanel } from "#src/render/rendered_data_panel.js";
-import { SliceViewRenderHelper } from "#src/sliceview/frontend.js";
-import { identityMat4, vec3, vec4 } from "#src/util/geom.js";
+import type { ChunkManager } from "#src/chunk_manager/frontend.js";
+import type { DisplayContext } from "#src/layer/display_context.js";
 import { RenderViewport } from "#src/layer/display_context.js";
-import { SliceView } from "#src/sliceview/frontend.js";
+import type { ImageUserLayer } from "#src/layer/index.js";
+import { SliceView, SliceViewRenderHelper } from "#src/sliceview/frontend.js";
+import { RefCounted } from "#src/util/disposable.js";
+import { identityMat4, vec3, vec4 } from "#src/util/geom.js";
+import type { WatchableVisibilityPriority } from "#src/visibility_priority/frontend.js";
+import type { GL } from "#src/webgl/context.js";
 import {
   FramebufferConfiguration,
   OffscreenCopyHelper,
@@ -27,7 +30,12 @@ import {
 } from "#src/webgl/offscreen.js";
 import type { ShaderBuilder } from "#src/webgl/shader.js";
 
-export interface SliceViewerState extends RenderedDataViewerState {}
+export interface SliceViewerState {
+  display: DisplayContext;
+  chunkManager: ChunkManager;
+  layerManager: ImageUserLayer;
+  visibility: WatchableVisibilityPriority;
+}
 
 export enum OffscreenTextures {
   COLOR = 0,
@@ -44,9 +52,45 @@ void emit(vec4 color, highp uint pickId) {
 `);
 }
 
+const tempVec3 = vec3.create();
 const tempVec4 = vec4.create();
 
-export class SliceViewPanel extends RenderedDataPanel {
+function hasNoModifiers(event: MouseEvent) {
+  return !event.ctrlKey && !event.altKey && !event.metaKey && !event.shiftKey;
+}
+
+function hasOnlyControl(event: MouseEvent) {
+  return event.ctrlKey && !event.altKey && !event.metaKey && !event.shiftKey;
+}
+
+// Zoom factor for one wheel event: e^(deltaY / 200) when the delta is in pixels.
+function getWheelZoomAmount(event: WheelEvent) {
+  let multiplier = 0;
+  switch (event.deltaMode) {
+    case WheelEvent.DOM_DELTA_PIXEL:
+      multiplier = 1 / 200.0;
+      break;
+    case WheelEvent.DOM_DELTA_LINE:
+      multiplier = 1 / 10.0;
+      break;
+    case WheelEvent.DOM_DELTA_PAGE:
+      multiplier = 2;
+      break;
+  }
+  return Math.exp(event.deltaY * multiplier);
+}
+
+/**
+ * One cross-section view.  Renders its `SliceView` into the part of the shared canvas covered by
+ * `element`, and turns mouse input on `element` into navigation:
+ *
+ *   - left drag: pan
+ *   - wheel: move one voxel along the viewing direction
+ *   - control+wheel: zoom around the mouse position
+ */
+export class SliceViewPanel extends RefCounted {
+  gl: GL = this.viewer.display.gl;
+
   // Generation used to check whether the following bounds-related fields are up to date.
   boundsGeneration = -1;
 
@@ -57,8 +101,6 @@ export class SliceViewPanel extends RenderedDataPanel {
   canvasRelativeClippedTop = 0;
 
   renderViewport = new RenderViewport();
-
-  viewer: SliceViewerState;
 
   private sliceViewRenderHelper = this.registerDisposer(
     SliceViewRenderHelper.get(this.gl, sliceViewPanelEmitColor),
@@ -91,31 +133,82 @@ export class SliceViewPanel extends RenderedDataPanel {
   sliceView: any;
 
   constructor(
-    element: HTMLElement,
+    public element: HTMLElement,
     public navigationState: any,
-    viewer: SliceViewerState,
+    public viewer: SliceViewerState,
   ) {
-    const { display: context, chunkManager, layerManager } = viewer;
-  
-    super(context, element, viewer);
+    super();
+    const { display, chunkManager, layerManager } = viewer;
+    display.addPanel(this);
 
-    this.sliceView = new SliceView(
-      chunkManager,
-      layerManager,
-      navigationState,
-    );
+    this.sliceView = new SliceView(chunkManager, layerManager, navigationState);
 
-    this.registerDisposer(this.sliceView.visibility.add(this.visibility));
+    this.registerDisposer(this.sliceView.visibility.add(viewer.visibility));
 
     this.registerDisposer(
-      this.sliceView.viewChanged.add(() => {
-        if (this.visible) context.scheduleRedraw();
-      }),
+      this.sliceView.viewChanged.add(() => display.scheduleRedraw()),
     );
+
+    const onMouseDown = (event: MouseEvent) => {
+      if (event.target !== element || event.button !== 0) return;
+      if (!hasNoModifiers(event)) return;
+      event.stopPropagation();
+      this.startDrag(event);
+      event.preventDefault();
+    };
+
+    const onWheel = (event: WheelEvent) => {
+      if (hasOnlyControl(event)) {
+        event.stopPropagation();
+        this.zoomByMouse(event, getWheelZoomAmount(event));
+        event.preventDefault();
+      } else if (event.target === element && hasNoModifiers(event)) {
+        event.stopPropagation();
+        const delta = event.deltaY !== 0 ? event.deltaY : event.deltaX;
+        tempVec3[0] = 0;
+        tempVec3[1] = 0;
+        tempVec3[2] = delta > 0 ? -1 : 1;
+        this.navigationState.translateVoxelsRelative(tempVec3);
+        event.preventDefault();
+      }
+    };
+
+    element.addEventListener("mousedown", onMouseDown);
+    element.addEventListener("wheel", onWheel);
+    this.registerDisposer(() => {
+      element.removeEventListener("mousedown", onMouseDown);
+      element.removeEventListener("wheel", onWheel);
+    });
+  }
+
+  // Pans with every pointer move until the button that started the drag is released.
+  private startDrag(initialEvent: MouseEvent) {
+    const { document } = initialEvent.view!;
+    const { button } = initialEvent;
+    let prevClientX = initialEvent.clientX;
+    let prevClientY = initialEvent.clientY;
+    const onMove = (e: PointerEvent) => {
+      const deltaX = e.clientX - prevClientX;
+      const deltaY = e.clientY - prevClientY;
+      prevClientX = e.clientX;
+      prevClientY = e.clientY;
+      this.translateByViewportPixels(deltaX, deltaY);
+    };
+    const onUp = (e: PointerEvent) => {
+      if (e.button === button) stop();
+    };
+    const stop = () => {
+      document.removeEventListener("pointermove", onMove, true);
+      document.removeEventListener("pointerup", onUp, false);
+      document.removeEventListener("pointercancel", stop, false);
+    };
+    document.addEventListener("pointermove", onMove, true);
+    document.addEventListener("pointerup", onUp, false);
+    document.addEventListener("pointercancel", stop, false);
   }
 
   translateByViewportPixels(deltaX: number, deltaY: number): void {
-    this.navigationState.updateDisplayPosition((pos) => {
+    this.navigationState.updateDisplayPosition((pos: vec3) => {
       vec3.set(pos, -deltaX, -deltaY, 0);
       vec3.transformMat4(
         pos,
@@ -170,7 +263,7 @@ export class SliceViewPanel extends RenderedDataPanel {
   }
 
   // Sets the viewport to the clipped viewport.  Any drawing must take
-  // `visible{Left,Top,Width,Height}Fraction` into account.  setGLClippedViewport() {
+  // `visible{Left,Top,Width,Height}Fraction` into account.
   setGLClippedViewport() {
     const {
       gl,
@@ -180,23 +273,22 @@ export class SliceViewPanel extends RenderedDataPanel {
     } = this;
     const bottom = canvasRelativeClippedTop + height;
     gl.enable(WebGL2RenderingContext.SCISSOR_TEST);
-    const glBottom = this.context.canvas.height - bottom;
+    const glBottom = this.viewer.display.canvas.height - bottom;
     gl.viewport(canvasRelativeClippedLeft, glBottom, width, height);
     gl.scissor(canvasRelativeClippedLeft, glBottom, width, height);
   }
 
   ensureBoundsUpdated() {
-    this.context.ensureBoundsUpdated();
-    if (this.context.boundsGeneration === this.boundsGeneration) return;
-    this.boundsGeneration = this.context.boundsGeneration;
+    const { display } = this.viewer;
+    display.ensureBoundsUpdated();
+    if (display.boundsGeneration === this.boundsGeneration) return;
+    this.boundsGeneration = display.boundsGeneration;
 
     const clientRect = this.element.getBoundingClientRect();
     const { x, y, width, height } = clientRect;
 
     this.canvasRelativeClippedTop = y;
     this.canvasRelativeClippedLeft = x;
-    this.canvasRelativeLogicalTop = y;
-    this.canvasRelativeLogicalLeft = x;
 
     const viewport = this.renderViewport;
     viewport.width = width - 1;
@@ -212,36 +304,38 @@ export class SliceViewPanel extends RenderedDataPanel {
   }
 
   /**
-   * Zooms by the specified factor, maintaining the data position that projects to the current mouse
-   * position.
+   * Zooms by the specified factor, maintaining the data position that projects to the mouse
+   * position of `event`.
    */
-  zoomByMouse(factor: number) {
+  zoomByMouse(event: MouseEvent, factor: number) {
     const { navigationState } = this;
     if (!navigationState.valid) {
       return;
     }
-    const { sliceView } = this;
+    const { element, sliceView } = this;
     const {
       width,
       height,
       invViewMatrix,
       displayDimensionRenderInfo: { displayDimensionIndices, displayRank },
     } = sliceView.projectionParameters.value;
-    let { mouseX, mouseY } = this;
-    mouseX -= width / 2;
-    mouseY -= height / 2;
+    const bounds = element.getBoundingClientRect();
+    const mouseX =
+      event.clientX - (bounds.left + element.clientLeft) - width / 2;
+    const mouseY =
+      event.clientY - (bounds.top + element.clientTop) - height / 2;
     // Desired invariance:
     //
     // invViewMatrixLinear * [mouseX, mouseY, 0]^T + [oldX, oldY, oldZ]^T =
     // invViewMatrixLinear * factor * [mouseX, mouseY, 0]^T + [newX, newY, newZ]^T
 
-    const position = this.navigationState.position.value;
+    const position = navigationState.position.value;
     for (let i = 0; i < displayRank; ++i) {
       const dim = displayDimensionIndices[i];
       const f = invViewMatrix[i] * mouseX + invViewMatrix[4 + i] * mouseY;
       position[dim] += f * (1 - factor);
     }
-    this.navigationState.position.changed.dispatch();
+    navigationState.position.changed.dispatch();
     navigationState.zoomBy(factor);
   }
 }
