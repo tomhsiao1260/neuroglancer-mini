@@ -17,7 +17,6 @@
 import { debounce } from 'es-toolkit';
 import { LayerChunkProgressInfo } from "#src/chunk_manager/base.js";
 import { RenderViewport, renderViewportsEqual } from "#src/layer/display_context.js";
-import type { UserLayer } from "#src/layer/index.js";
 import type {
   DisplayDimensionRenderInfo,
   NavigationState,
@@ -38,7 +37,6 @@ export const PROJECTION_PARAMETERS_RPC_ID = "SharedProjectionParameters";
 export const PROJECTION_PARAMETERS_CHANGED_RPC_METHOD_ID = "SharedProjectionParameters.changed";
 
 export class RenderLayer extends RefCounted {
-  userLayer: UserLayer | undefined;
   messages = new MessageList();
   layerChanged = new NullarySignal();
   redrawNeeded = new NullarySignal();

@@ -14,10 +14,8 @@
  * limitations under the License.
  */
 
-import type { WatchableValueInterface } from "#src/state/trackable_value.js";
 import { WatchableValue } from "#src/state/trackable_value.js";
 import * as matrix from "#src/util/matrix.js";
-import { NullarySignal } from "#src/util/signal.js";
 import * as vector from "#src/util/vector.js";
 
 export type DimensionId = number;
@@ -345,196 +343,32 @@ export function makeIdentityTransformedBoundingBox(box: BoundingBox) {
   };
 }
 
-export interface CoordinateSpaceTransform {
-  /**
-   * Equal to `outputSpace.rank`.
-   */
-  readonly rank: number;
-
-  /**
-   * The source rank, which is <= rank.  Input dimensions >= sourceRank are synthetic and serve only
-   * to embed the source data in a larger view space.
-   */
-  readonly sourceRank: number;
-
-  /**
-   * May have rank less than `outputSpace.rank`, in which case additional unnamed dimensions with
-   * range `[0, 1)` are implicitly added.
-   */
-  readonly inputSpace: CoordinateSpace;
-
-  readonly outputSpace: CoordinateSpace;
-
-  /**
-   * `(rank + 1) * (rank + 1)` homogeneous column-major transformation matrix, where columns
-   * correspond to input dimensions and rows correspond to output dimensions.
-   */
-  readonly transform: Float64Array;
-}
-
-export function makeIdentityTransform(
-  inputSpace: CoordinateSpace,
-): CoordinateSpaceTransform {
+/**
+ * Returns the 3-d (z, y, x) viewer coordinate space covering the bounding boxes of `space`.  With
+ * the half-voxel offset of OME-Zarr, a volume of shape `n` spans `[-0.5, n - 0.5]` and voxel
+ * centers are at integer coordinates.
+ */
+export function makeCombinedCoordinateSpace(
+  space: CoordinateSpace,
+): CoordinateSpace {
+  const bounds = computeCombinedBounds(space.boundingBoxes, 3);
   return {
-    rank: inputSpace.rank,
-    sourceRank: inputSpace.rank,
-    inputSpace,
-    outputSpace: inputSpace,
-    transform: matrix.createIdentity(Float64Array, inputSpace.rank + 1),
-  };
-}
-
-
-export function isLocalDimension(name: string) {
-  return name.endsWith("'");
-}
-
-export function isLocalOrChannelDimension(name: string) {
-  return name.endsWith("'") || name.endsWith("^");
-}
-
-export function isChannelDimension(name: string) {
-  return name.endsWith("^");
-}
-
-export class WatchableCoordinateSpaceTransform
-  implements WatchableValueInterface<CoordinateSpaceTransform>
-{
-  private value_: CoordinateSpaceTransform | undefined = undefined;
-  readonly outputSpace: WatchableValueInterface<CoordinateSpace>;
-  readonly inputSpace: WatchableValueInterface<CoordinateSpace>;
-  changed = new NullarySignal();
-  private inputSpaceChanged = new NullarySignal();
-  readonly defaultTransform: CoordinateSpaceTransform;
-
-  constructor(
-    defaultTransform: CoordinateSpaceTransform,
-    public readonly mutableSourceRank: boolean = false,
-  ) {
-    this.defaultTransform = defaultTransform;
-    const self = this;
-    this.outputSpace = {
-      changed: self.changed,
-      get value() {
-        return self.value.outputSpace;
+    boundingBoxes: [
+      {
+        box: bounds,
+        transform: new Float64Array([1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0]),
       },
-    };
-    this.inputSpace = {
-      changed: self.inputSpaceChanged,
-      get value() {
-        return self.value.inputSpace;
-      },
-    };
-  }
-
-  get value(): CoordinateSpaceTransform {
-    let { value_: value } = this;
-    if (value === undefined) {
-      value = this.value_ = this.defaultTransform;
-    }
-    return value;
-  }
-
-  reset() {
-    if (this.value_ === this.defaultTransform) return;
-    this.value_ = this.defaultTransform;
-    this.inputSpaceChanged.dispatch();
-    this.changed.dispatch();
-  }
-
-  get defaultInputSpace() {
-    return this.defaultTransform.inputSpace;
-  }
-}
-
-interface BoundCoordinateSpace {
-  space: WatchableValueInterface<CoordinateSpace>;
-  prevValue: CoordinateSpace | undefined;
-  mappedDimensionIds: (DimensionId | undefined)[];
-}
-
-export class CoordinateSpaceCombiner {
-  private bindings = new Set<BoundCoordinateSpace>();
-
-  private prevCombined: CoordinateSpace | undefined = this.combined.value;
-
-  dimensionRefCounts = new Map<string, number>();
-
-  private includeDimensionPredicate_: (name: string) => boolean;
-
-  get includeDimensionPredicate() {
-    return this.includeDimensionPredicate_;
-  }
-  set includeDimensionPredicate(value: (name: string) => boolean) {
-    this.includeDimensionPredicate_ = value;
-    this.update();
-  }
-
-  constructor(
-    public combined: WatchableValueInterface<CoordinateSpace>,
-    includeDimensionPredicate: (name: string) => boolean,
-  ) {
-    this.includeDimensionPredicate_ = includeDimensionPredicate;
-  }
-
-  private update() {
-    const boundingBoxes: TransformedBoundingBox[] = [];
-    for (const { space } of this.bindings) {
-      boundingBoxes.push(...space.value.boundingBoxes);
-    }
-    const bounds = computeCombinedBounds(boundingBoxes, 3);
-
-    const newCombined = {
-      boundingBoxes: [
-        {
-          box: bounds,
-          transform: new Float64Array([1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0]),
-        }
-      ],
-      bounds,
-      coordinateArrays: new Array(3),
-      ids: [1, 2, 3],
-      names: ['z', 'y', 'x'],
-      rank: 3,
-      scales: new Float64Array([1, 1, 1]),
-      timestamps: [-Infinity, -Infinity, -Infinity],
-      units: ['', '', ''],
-      valid: true,
-    }
-
-    this.prevCombined = newCombined;
-    this.combined.value = newCombined;
-  }
-
-  private handleCombinedChanged = () => {
-    if (this.combined.value === this.prevCombined) return;
-    this.update();
+    ],
+    bounds,
+    coordinateArrays: new Array(3),
+    ids: [1, 2, 3],
+    names: ["z", "y", "x"],
+    rank: 3,
+    scales: new Float64Array([1, 1, 1]),
+    timestamps: [-Infinity, -Infinity, -Infinity],
+    units: ["", "", ""],
+    valid: true,
   };
-
-  bind(space: WatchableValueInterface<CoordinateSpace>) {
-    const binding = { space, mappedDimensionIds: [], prevValue: undefined };
-    const { bindings } = this;
-    if (bindings.size === 0) {
-      this.combined.changed.add(this.handleCombinedChanged);
-    }
-    bindings.add(binding);
-
-    const changedDisposer = space.changed.add(() => {
-      if (space.value === binding.prevValue) return;
-      this.update();
-    });
-    const disposer = () => {
-      changedDisposer();
-      const { bindings } = this;
-      bindings.delete(binding);
-      if (bindings.size === 0) {
-        this.combined.changed.remove(this.handleCombinedChanged);
-      }
-      this.update();
-    };
-    this.update();
-    return disposer;
-  }
 }
 
 

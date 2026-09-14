@@ -14,254 +14,85 @@
  * limitations under the License.
  */
 
-import type {
-  CoordinateSpace,
-} from "#src/state/coordinate_transform.js";
+import type { ChunkManager } from "#src/chunk_manager/frontend.js";
+import { loadZarrVolume } from "#src/datasource/zarr/frontend.js";
+import { getRenderLayerTransform } from "#src/render/render_coordinate_transform.js";
+import type { RenderLayer } from "#src/render/renderlayer.js";
+import { ImageRenderLayer } from "#src/sliceview/volume/image_renderlayer.js";
 import {
-  CoordinateSpaceCombiner,
-  isLocalOrChannelDimension,
-  isChannelDimension,
-  isLocalDimension,
+  makeCombinedCoordinateSpace,
   TrackableCoordinateSpace,
 } from "#src/state/coordinate_transform.js";
-import type {
-  DataSourceSpecification,
-} from "#src/datasource/index.js";
-import type { LoadedDataSubsource } from "#src/layer/layer_data_source.js";
-import {
-  LayerDataSource,
-} from "#src/layer/layer_data_source.js";
-import {
-  Position,
-} from '#src/state/navigation_state.js';
-import type { RenderLayer } from "#src/render/renderlayer.js";
-import type { WatchableValueInterface } from "#src/state/trackable_value.js";
+import { Position } from "#src/state/navigation_state.js";
+import { WatchableValue } from "#src/state/trackable_value.js";
 import type { Owned } from "#src/util/disposable.js";
 import { RefCounted } from "#src/util/disposable.js";
-import { MessageList } from "#src/util/message_list.js";
+import * as matrix from "#src/util/matrix.js";
 import { NullarySignal } from "#src/util/signal.js";
-import { DataType } from "#src/sliceview/volume/base.js";
-import { MultiscaleVolumeChunkSource } from "#src/sliceview/volume/frontend.js";
-import { ImageRenderLayer } from "#src/sliceview/volume/image_renderlayer.js";
-import { WatchableValue } from "#src/state/trackable_value.js";
 
-export class UserLayer extends RefCounted {
+// Chunks and metadata are read from the folder the user picked.  Only the path after the first
+// component (here `scroll.zarr`) is used to look files up in `self.fileTree`; see
+// `util/http_request.ts`.
+const DATA_URL = "http://localhost:9000/scroll.zarr";
+
+/**
+ * The one image layer of the viewer.  It loads the zarr volume, sets the coordinate spaces from the
+ * volume bounds and adds the render layer that draws the volume.
+ */
+export class ImageUserLayer extends RefCounted {
   localCoordinateSpace = new TrackableCoordinateSpace();
-  localCoordinateSpaceCombiner = new CoordinateSpaceCombiner(
-    this.localCoordinateSpace,
-    () => true,
-  );
   localPosition = this.registerDisposer(
     new Position(this.localCoordinateSpace),
   );
-
-  static type: string;
-  static typeAbbreviation: string;
-
-  get type() {
-    return (this.constructor as typeof UserLayer).type;
-  }
-
-  static supportsPickOption = false;
-
-  messages = new MessageList();
+  channelCoordinateSpace = new TrackableCoordinateSpace();
+  sliceViewRenderScaleTarget = new WatchableValue(1);
 
   layersChanged = new NullarySignal();
-  readyStateChanged = new NullarySignal();
-  specificationChanged = new NullarySignal();
   renderLayers = new Array<RenderLayer>();
 
-  dataSourcesChanged = new NullarySignal();
-  dataSources: LayerDataSource[] = [];
-
-  constructor(public manager: any) {
-    super();
-    this.localCoordinateSpaceCombiner.includeDimensionPredicate =
-      isLocalOrChannelDimension;
-    this.localPosition.changed.add(this.specificationChanged.dispatch);
-    this.dataSourcesChanged.add(this.specificationChanged.dispatch);
-    this.dataSourcesChanged.add(() => this.updateDataSubsourceActivations());
-    this.messages.changed.add(this.layersChanged.dispatch);
-    this.manager.coordinateSpaceCombiner = new CoordinateSpaceCombiner(
-      this.manager.coordinateSpace,
-      () => true,
-    );
-  }
-
-  addDataSource(spec: DataSourceSpecification | undefined) {
-    const layerDataSource = new LayerDataSource(this, spec);
-    this.dataSources.push(layerDataSource);
-    this.dataSourcesChanged.dispatch();
-    return layerDataSource;
-  }
-
-  // Should be overridden by derived classes.
-  activateDataSubsources(subsources: Iterable<LoadedDataSubsource>): void {
-    subsources;
-  }
-
-  updateDataSubsourceActivations() {
-    function* getDataSubsources(
-      this: UserLayer,
-    ): Iterable<LoadedDataSubsource> {
-      for (const dataSource of this.dataSources) {
-        const { loadState } = dataSource;
-        if (loadState === undefined || loadState.error !== undefined) continue;
-        for (const subsource of loadState.subsources) {
-          if (subsource.enabled) {
-            yield subsource;
-          } else {
-            const { activated } = subsource;
-            subsource.messages.clearMessages();
-            if (activated !== undefined) {
-              activated.dispose();
-              subsource.activated = undefined;
-              loadState.activatedSubsourcesChanged.dispatch();
-            }
-          }
-        }
-      }
-    }
-    this.activateDataSubsources(getDataSubsources.call(this));
-  }
-
-  addCoordinateSpace(
-    coordinateSpace: WatchableValueInterface<CoordinateSpace>,
+  constructor(
+    public manager: {
+      chunkManager: ChunkManager;
+      coordinateSpace: TrackableCoordinateSpace;
+    },
   ) {
-    const globalBinding =
-      this.manager.coordinateSpaceCombiner.bind(coordinateSpace);
-    const localBinding =
-      this.localCoordinateSpaceCombiner.bind(coordinateSpace);
-    return () => {
-      globalBinding();
-      localBinding();
-    };
+    super();
+    this.load().catch((error) => {
+      console.error("Failed to load data source:", error);
+    });
   }
 
-  getDataSourceSpecifications(layerSpec: any): DataSourceSpecification[] {
-    const specs = []
-    specs.push({
-      enableDefaultSubsources: true,
-      subsources: new Map(),
-      transform: undefined,
-      url:  "zarr2://http://localhost:9000/scroll.zarr/"
-    })
-    return specs;
+  *readyRenderLayers() {
+    yield* this.renderLayers;
   }
 
-  restoreState(specification: any) {
-    this.localCoordinateSpace.restoreState(
-      specification[LOCAL_COORDINATE_SPACE_JSON_KEY],
+  private async load() {
+    const { chunkManager, coordinateSpace } = this.manager;
+    const volume = await loadZarrVolume(chunkManager, DATA_URL);
+    if (this.wasDisposed) return;
+
+    // The global (navigation), local and channel coordinate spaces all span the volume.
+    const { modelSpace } = volume;
+    coordinateSpace.value = makeCombinedCoordinateSpace(modelSpace);
+    this.localCoordinateSpace.value = makeCombinedCoordinateSpace(modelSpace);
+    this.channelCoordinateSpace.value = makeCombinedCoordinateSpace(modelSpace);
+
+    this.addRenderLayer(
+      new ImageRenderLayer(volume, {
+        transform: new WatchableValue(
+          getRenderLayerTransform(matrix.createIdentity(Float32Array, 4)),
+        ),
+        renderScaleTarget: this.sliceViewRenderScaleTarget,
+        localPosition: this.localPosition,
+        channelCoordinateSpace: this.channelCoordinateSpace,
+      }),
     );
-    this.localPosition.restoreState(specification[LOCAL_POSITION_JSON_KEY]);
-    for (const spec of this.getDataSourceSpecifications(specification)) {
-      this.addDataSource(spec);
-    }
   }
 
   addRenderLayer(layer: Owned<RenderLayer>) {
     this.renderLayers.push(layer);
     const { layersChanged } = this;
     layer.layerChanged.add(layersChanged.dispatch);
-    layer.userLayer = this;
     layersChanged.dispatch();
   }
 }
-
-export class ImageUserLayer extends UserLayer {
-  layerChanged = new NullarySignal();
-
-  *readyRenderLayers() {
-    yield* this.renderLayers;
-  }
-
-  sliceViewRenderScaleTarget = new WatchableValue(1);
-  channelCoordinateSpace = new TrackableCoordinateSpace();
-  channelCoordinateSpaceCombiner = new CoordinateSpaceCombiner(
-    this.channelCoordinateSpace,
-    isChannelDimension,
-  );
-
-  markLoading() {
-    const baseDisposer = super.markLoading?.();
-    const channelDisposer = this.channelCoordinateSpaceCombiner.retain();
-    return () => {
-      baseDisposer?.();
-      channelDisposer();
-    };
-  }
-
-  addCoordinateSpace(
-    coordinateSpace: WatchableValueInterface<CoordinateSpace>,
-  ) {
-    const baseBinding = super.addCoordinateSpace(coordinateSpace);
-    const channelBinding =
-      this.channelCoordinateSpaceCombiner.bind(coordinateSpace);
-    return () => {
-      baseBinding();
-      channelBinding();
-    };
-  }
-
-  constructor(manager: any) {
-    super(manager);
-    this.localCoordinateSpaceCombiner.includeDimensionPredicate =
-      isLocalDimension;
-    this.sliceViewRenderScaleTarget.changed.add(
-      this.specificationChanged.dispatch,
-    );
-    this.layersChanged.add(this.layerChanged.dispatch),
-    this.layerChanged.dispatch();
-    this.restoreState({ type: "new", source: "" });
-  }
-
-  activateDataSubsources(subsources: Iterable<LoadedDataSubsource>) {
-    let dataType: DataType | undefined;
-    for (const loadedSubsource of subsources) {
-      const { subsourceEntry } = loadedSubsource;
-      const { subsource } = subsourceEntry;
-      const { volume } = subsource;
-      if (!(volume instanceof MultiscaleVolumeChunkSource)) {
-        loadedSubsource.deactivate("Not compatible with image layer");
-        continue;
-      }
-      if (dataType && volume.dataType !== dataType) {
-        loadedSubsource.deactivate(
-          `Data type must be ${DataType[volume.dataType].toLowerCase()}`,
-        );
-        continue;
-      }
-      dataType = volume.dataType;
-      loadedSubsource.activate((context) => {
-        loadedSubsource.addRenderLayer(
-          new ImageRenderLayer(volume, {
-            transform: loadedSubsource.getRenderLayerTransform(
-              this.channelCoordinateSpace,
-            ),
-            renderScaleTarget: this.sliceViewRenderScaleTarget,
-            localPosition: this.localPosition,
-            channelCoordinateSpace: this.channelCoordinateSpace,
-          }),
-        );
-      });
-    }
-  }
-
-  restoreState(specification: any) {
-    super.restoreState(specification);
-    if (specification.sliceViewRenderScaleTarget !== undefined) {
-      this.sliceViewRenderScaleTarget.value = specification.sliceViewRenderScaleTarget;
-    }
-    this.sliceViewRenderScaleTarget.changed.dispatch();
-    this.channelCoordinateSpace.restoreState(
-      specification[CHANNEL_DIMENSIONS_JSON_KEY],
-    );
-  }
-
-  static type = "image";
-  static typeAbbreviation = "img";
-}
-
-const LOCAL_POSITION_JSON_KEY = "localPosition";
-const LOCAL_COORDINATE_SPACE_JSON_KEY = "localDimensions";
-const CHANNEL_DIMENSIONS_JSON_KEY = "channelDimensions";

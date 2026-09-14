@@ -14,22 +14,6 @@
  * limitations under the License.
  */
 
-import type {
-  CoordinateSpace,
-  CoordinateSpaceTransform,
-} from "#src/state/coordinate_transform.js";
-import {
-  emptyValidCoordinateSpace,
-} from "#src/state/coordinate_transform.js";
-import type {
-  CachedWatchableValue,
-  WatchableValueInterface,
-} from "#src/state/trackable_value.js";
-import {
-  constantWatchableValue,
-  makeCachedDerivedWatchableValue,
-} from "#src/state/trackable_value.js";
-import { arraysEqual } from "#src/util/array.js";
 import type { ValueOrError } from "#src/util/error.js";
 import { mat4 } from "#src/util/geom.js";
 import * as matrix from "#src/util/matrix.js";
@@ -85,102 +69,25 @@ export interface RenderLayerTransform {
 
 export type RenderLayerTransformOrError = ValueOrError<RenderLayerTransform>;
 
+/**
+ * The render layer space is the model space itself: its three dimensions (z, y, x) are the global
+ * dimensions, and there are no local or channel dimensions.
+ */
 export function getRenderLayerTransform(
-  globalCoordinateSpace: CoordinateSpace,
-  localCoordinateSpace: CoordinateSpace,
-  modelToLayerTransform: CoordinateSpaceTransform,
-  subsourceEntry:
-    | {
-        subsourceToModelSubspaceTransform: Float32Array;
-        modelSubspaceDimensionIndices: readonly number[];
-      }
-    | undefined,
-  channelCoordinateSpace: CoordinateSpace = emptyValidCoordinateSpace,
-): RenderLayerTransformOrError {
-  const {
-    inputSpace: modelSpace,
-    rank: fullRank,
-    sourceRank,
-    outputSpace: layerSpace,
-    transform: oldTransform,
-  } = modelToLayerTransform;
-
+  modelToRenderLayerTransform: Float32Array,
+): RenderLayerTransform {
   return {
     rank: 3,
     unpaddedRank: 3,
-    modelDimensionNames: ['z', 'y', 'x'],
-    layerDimensionNames: ['z', 'y', 'x'],
+    modelDimensionNames: ["z", "y", "x"],
+    layerDimensionNames: ["z", "y", "x"],
     localToRenderLayerDimensions: [],
     globalToRenderLayerDimensions: [0, 1, 2],
     channelToRenderLayerDimensions: [],
-    modelToRenderLayerTransform: oldTransform,
+    modelToRenderLayerTransform,
     channelToModelDimensions: [],
     channelSpaceShape: new Uint32Array(),
   };
-}
-
-export function renderLayerTransformsEqual(
-  a: RenderLayerTransformOrError,
-  b: RenderLayerTransformOrError,
-) {
-  if (a === b) return true;
-  if (a.error !== undefined || b.error !== undefined) return false;
-  return (
-    arraysEqual(a.modelDimensionNames, b.modelDimensionNames) &&
-    arraysEqual(a.layerDimensionNames, b.layerDimensionNames) &&
-    arraysEqual(
-      a.globalToRenderLayerDimensions,
-      b.globalToRenderLayerDimensions,
-    ) &&
-    arraysEqual(
-      a.localToRenderLayerDimensions,
-      b.localToRenderLayerDimensions,
-    ) &&
-    arraysEqual(
-      a.channelToRenderLayerDimensions,
-      b.channelToRenderLayerDimensions,
-    ) &&
-    arraysEqual(a.modelToRenderLayerTransform, b.modelToRenderLayerTransform) &&
-    arraysEqual(a.channelSpaceShape, b.channelSpaceShape)
-  );
-}
-
-export function getWatchableRenderLayerTransform(
-  globalCoordinateSpace: WatchableValueInterface<CoordinateSpace>,
-  localCoordinateSpace: WatchableValueInterface<CoordinateSpace>,
-  modelToLayerTransform: WatchableValueInterface<CoordinateSpaceTransform>,
-  subsourceEntry:
-    | {
-        subsourceToModelSubspaceTransform: Float32Array;
-        modelSubspaceDimensionIndices: readonly number[];
-      }
-    | undefined,
-  channelCoordinateSpace?: WatchableValueInterface<CoordinateSpace | undefined>,
-): CachedWatchableValue<RenderLayerTransformOrError> {
-  return makeCachedDerivedWatchableValue(
-    (
-      globalCoordinateSpace: CoordinateSpace,
-      localCoordinateSpace: CoordinateSpace,
-      modelToLayerTransform: CoordinateSpaceTransform,
-      channelCoordinateSpace: CoordinateSpace | undefined,
-    ) =>
-      getRenderLayerTransform(
-        globalCoordinateSpace,
-        localCoordinateSpace,
-        modelToLayerTransform,
-        subsourceEntry,
-        channelCoordinateSpace,
-      ),
-    [
-      globalCoordinateSpace,
-      localCoordinateSpace,
-      modelToLayerTransform,
-      channelCoordinateSpace === undefined
-        ? constantWatchableValue(undefined)
-        : channelCoordinateSpace,
-    ],
-    renderLayerTransformsEqual,
-  );
 }
 
 export interface LayerDisplayDimensionMapping {

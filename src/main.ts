@@ -23,8 +23,6 @@ import {
 } from "#src/chunk_manager/frontend.js";
 import "#src/sliceview/uncompressed_chunk_format.js";
 import { TrackableCoordinateSpace } from "#src/state/coordinate_transform.js";
-import { getDefaultDataSourceProvider } from "#src/datasource/default_provider.js";
-import type { DataSourceProviderRegistry } from "#src/datasource/index.js";
 import { DisplayContext } from "#src/layer/display_context.js";
 import { ImageUserLayer } from "#src/layer/index.js";
 import { WatchableVisibilityPriority } from "#src/visibility_priority/frontend.js";
@@ -199,12 +197,9 @@ class Viewer extends RefCounted {
 
     this.dataContext = new DataManagementContext(display.gl);
     this.visibility = new WatchableVisibilityPriority(Infinity);
-    const dataSourceProvider: DataSourceProviderRegistry = getDefaultDataSourceProvider();
-
     const layerManager = new ImageUserLayer({
       chunkManager: this.dataContext.chunkManager,
       coordinateSpace: this.coordinateSpace,
-      dataSourceProviderRegistry: dataSourceProvider,
     });
 
     // Create panel layout
