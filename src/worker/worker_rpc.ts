@@ -197,6 +197,14 @@ export class SharedObject extends RefCounted {
   }
 
   /**
+   * Called on a counterpart when its owner has been disposed: runs `disposed` and the registered
+   * disposers.
+   */
+  disposeCounterpart() {
+    super.refCountReachedZero();
+  }
+
+  /**
    * Should be set to a constant specifying the SharedObject type identifier on the prototype of
    * final derived owner classes.  It is not used on counterpart (non-owner) classes.
    */
@@ -234,7 +242,7 @@ registerRPC("SharedObject.dispose", function (x) {
       "Attempted to dispose object with non-zero reference count.",
     );
   }
-  obj.disposed();
+  obj.disposeCounterpart();
   this.delete(obj.rpcId!);
   obj.rpcId = null;
   obj.rpc = null;

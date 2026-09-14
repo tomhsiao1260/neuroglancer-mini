@@ -152,7 +152,6 @@ export class NavigationState extends RefCounted {
   ) {
     super();
     this.registerDisposer(position);
-    this.registerDisposer(orientation);
     this.registerDisposer(zoomFactor);
     this.registerDisposer(position.changed.add(this.changed.dispatch));
     this.registerDisposer(this.zoomFactor.changed.add(this.changed.dispatch));

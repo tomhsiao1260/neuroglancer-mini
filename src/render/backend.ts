@@ -148,6 +148,10 @@ export class SliceViewBackend extends SliceViewIntermediateBase {
     this.chunkManager.scheduleUpdateChunkPriorities();
   };
 
+  private handleRenderScaleTargetChanged = () => {
+    this.invalidateVisibleSources();
+  };
+
   updateVisibleChunks() {
     const projectionParameters = this.projectionParameters.value;
     const chunkManager = this.chunkManager;
@@ -245,7 +249,7 @@ export class SliceViewBackend extends SliceViewIntermediateBase {
     const layerInfo = visibleLayers.get(layer)!;
     visibleLayers.delete(layer);
     disposeTransformedSources(layerInfo.allSources);
-    layer.renderScaleTarget.changed.remove(this.invalidateVisibleSources);
+    layer.renderScaleTarget.changed.remove(this.handleRenderScaleTargetChanged);
     layer.localPosition.changed.remove(this.handleLayerChanged);
     this.invalidateVisibleSources();
   }
@@ -266,9 +270,7 @@ export class SliceViewBackend extends SliceViewIntermediateBase {
         displayDimensionRenderInfo: displayDimensionRenderInfo,
       };
       this.visibleLayers.set(layer, layerInfo);
-      layer.renderScaleTarget.changed.add(() =>
-        this.invalidateVisibleSources(),
-      );
+      layer.renderScaleTarget.changed.add(this.handleRenderScaleTargetChanged);
       layer.localPosition.changed.add(this.handleLayerChanged);
     } else {
       disposeTransformedSources(layerInfo.allSources);

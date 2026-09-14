@@ -163,7 +163,7 @@ The code is split between two threads. The **main thread** owns the WebGL canvas
 
 - `index.html`, `src/style.css`: page and styles.
 - `src/main.ts`: the app. Chooses the store (`?zarr=<url>` or the folder picker), creates the viewer and lays out three views side by side. Start here to change what the page shows.
-- `src/viewer.ts`: `Viewer`, the interface to the rest of the code. `new Viewer({ container, store })` creates the canvas, the worker and the chunk manager and loads the volume; `viewer.addView(element, "xy" | "xz" | "yz")` shows a cross-section in `element`, which can be placed anywhere inside the container with CSS. All views share one position and zoom.
+- `src/viewer.ts`: `Viewer`, the interface to the rest of the code. `new Viewer({ container, store })` creates the canvas, the worker and the chunk manager and loads the volume; `viewer.addView(element, "xy" | "xz" | "yz")` shows a cross-section in `element`, which can be placed anywhere inside the container with CSS, and returns the view; `view.dispose()` removes it. All views share one position and zoom.
 
 #### `src/render/`: cross-section views
 

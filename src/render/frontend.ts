@@ -57,7 +57,7 @@ import type { ImageRenderLayer } from "#src/render/renderlayer.js";
 import type { TypedArray } from "#src/util/array.js";
 import type { DataType } from "#src/util/data_type.js";
 import type { Borrowed, Disposer, Owned } from "#src/util/disposable.js";
-import { RefCounted } from "#src/util/disposable.js";
+import { invokeDisposers, RefCounted } from "#src/util/disposable.js";
 import { kOneVec, mat4, vec3 } from "#src/util/geom.js";
 import { NullarySignal, Signal } from "#src/util/signal.js";
 import type { GL } from "#src/webgl/context.js";
@@ -312,7 +312,20 @@ export class SliceView extends SliceViewBase {
         this.viewChanged.dispatch,
       ),
     );
+    this.registerDisposer(navigationState);
     this.updateVisibleLayers();
+  }
+
+  // Releases the render layer and the projection parameters, and stops listening to them.
+  disposed() {
+    for (const [renderLayer, layerInfo] of this.visibleLayers) {
+      invokeDisposers(layerInfo.disposers);
+      renderLayer.dispose();
+    }
+    this.visibleLayers.clear();
+    this.visibleLayerList.length = 0;
+    this.projectionParameters.dispose();
+    super.disposed();
   }
 
   forEachVisibleChunk(

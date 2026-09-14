@@ -131,7 +131,8 @@ export class Viewer extends RefCounted {
 
   /**
    * Shows the volume in `element`, on the plane named by `orientation`.  The view is drawn where the
-   * element is on the page, which must be inside the container.
+   * element is on the page, which must be inside the container.  Call `dispose()` on the returned
+   * view to remove it; the element itself is left in place.
    */
   addView(element: HTMLElement, orientation: ViewOrientation) {
     const navigationState = new NavigationState(

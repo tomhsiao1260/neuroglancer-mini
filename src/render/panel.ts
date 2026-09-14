@@ -66,6 +66,12 @@ export class DisplayContext extends RefCounted {
     this.handleResize();
   }
 
+  removePanel(panel: SliceViewPanel) {
+    this.panels.delete(panel);
+    this.resizeObserver.unobserve(panel.element);
+    this.handleResize();
+  }
+
   private handleResize() {
     ++this.resizeGeneration;
     this.scheduleRedraw();
@@ -233,8 +239,11 @@ export class SliceViewPanel extends RefCounted {
     super();
     const { display, chunkManager, renderLayer } = viewer;
     display.addPanel(this);
+    this.registerDisposer(() => display.removePanel(this));
 
-    this.sliceView = new SliceView(chunkManager, renderLayer, navigationState);
+    this.sliceView = this.registerDisposer(
+      new SliceView(chunkManager, renderLayer, navigationState),
+    );
 
     this.registerDisposer(
       this.sliceView.viewChanged.add(() => display.scheduleRedraw()),
