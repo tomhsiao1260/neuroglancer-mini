@@ -1,20 +1,3 @@
-/**
- * @license
- * Copyright 2019 Google Inc.
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
-
-import { binarySearchLowerBound } from "#src/util/array.js";
 
 export interface SiPrefix {
   readonly prefix: string;
@@ -68,27 +51,3 @@ for (const { prefix, exponent } of siPrefixesWithAlternatives) {
   }
 }
 
-export function pickSiPrefix(x: number): SiPrefix {
-  const exponent = Math.log10(x);
-  const numPrefixes = preferredSiPrefixes.length;
-  const i = binarySearchLowerBound(
-    0,
-    numPrefixes,
-    (i) => preferredSiPrefixes[i].exponent <= exponent,
-  );
-  return preferredSiPrefixes[Math.min(i, numPrefixes - 1)];
-}
-
-interface FormatScaleWithUnitOptions {
-  precision?: number;
-  elide1?: boolean;
-}
-
-/**
- * Returns `scale * 10**exponent`, but uses division for negative exponents to reduce loss of
- * precision.
- */
-export function scaleByExp10(scale: number, exponent: number) {
-  if (exponent >= 0) return scale * 10 ** exponent;
-  return scale / 10 ** -exponent;
-}

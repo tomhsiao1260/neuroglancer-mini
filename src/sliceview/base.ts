@@ -24,14 +24,11 @@ import type {
 import { DATA_TYPE_BYTES, DataType } from "#src/util/data_type.js";
 import type { Disposable } from "#src/util/disposable.js";
 import {
-  getFrustrumPlanes,
   getViewFrustrumDepthRange,
   isAABBIntersectingPlane,
-  isAABBVisible,
   mat4,
   vec3,
 } from "#src/util/geom.js";
-import * as matrix from "#src/util/matrix.js";
 import * as vector from "#src/util/vector.js";
 import { SharedObject } from "#src/worker/worker_rpc.js";
 

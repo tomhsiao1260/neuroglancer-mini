@@ -17,21 +17,14 @@
 import { parseCodecChainSpec } from "#src/datasource/zarr/codec/resolve.js";
 import type {
   DimensionSeparator,
-  Metadata,
-  NodeType,
 } from "#src/datasource/zarr/metadata/index.js";
-import { ChunkKeyEncoding } from "#src/datasource/zarr/metadata/index.js";
-import { parseNameAndConfiguration } from "#src/datasource/zarr/metadata/parse_util.js";
-import { DataType } from "#src/util/data_type.js";
 import { Endianness } from "#src/util/endian.js";
 import {
   parseArray,
   parseFixedLengthArray,
   verifyConstant,
-  verifyEnumString,
   verifyObject,
   verifyObjectProperty,
-  verifyOptionalFixedLengthArrayOfStringOrNull,
   verifyOptionalObjectProperty,
   verifyString,
 } from "#src/util/json.js";

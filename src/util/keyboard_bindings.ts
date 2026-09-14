@@ -21,13 +21,11 @@
 // This is based on goog/ui/keyboardshortcuthandler.js in the Google Closure library.
 
 import { WatchableValue } from "#src/state/trackable_value.js";
-import { RefCounted } from "#src/util/disposable.js";
 import type {
   ActionEvent,
   EventActionMapInterface,
 } from "#src/util/event_action_map.js";
 import {
-  dispatchEventWithModifiers,
   EventActionMap,
   registerActionListener,
   getEventModifierMask,

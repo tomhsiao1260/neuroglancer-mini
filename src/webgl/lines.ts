@@ -19,7 +19,6 @@
  */
 
 import {
-  drawQuads,
   glsl_getQuadVertexPosition,
   VERTICES_PER_QUAD,
 } from "#src/webgl/quad.js";

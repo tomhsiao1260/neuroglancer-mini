@@ -29,17 +29,8 @@ import type {
 import {
   dataTypeShaderDefinition,
   getShaderType,
-  glsl_addSaturateInt32,
-  glsl_addSaturateUint32,
-  glsl_addSaturateUint64,
   glsl_compareLessThanUint64,
-  glsl_equalUint64,
-  glsl_shiftLeftSaturateUint32,
-  glsl_shiftLeftUint64,
   glsl_shiftRightUint64,
-  glsl_subtractSaturateInt32,
-  glsl_subtractSaturateUint32,
-  glsl_subtractSaturateUint64,
   glsl_subtractUint64,
   glsl_uint64,
 } from "#src/webgl/shader_lib.js";
@@ -159,53 +150,6 @@ float computeInvlerp(uint64_t inputValue, Uint64LerpParameters p) {
 `,
   ],
 };
-
-function getFloatLerpImpl(dataType: DataType) {
-  const shaderDataType = getShaderType(dataType);
-  let code = `
-${shaderDataType} computeLerp(float inputValue, vec2 p) {
-  inputValue = inputValue / p[1] + p[0];
-`;
-  if (dataType === DataType.FLOAT32) {
-    code += "return inputValue;\n";
-  } else {
-    code += `return ${DataType[
-      dataType
-    ].toLowerCase()}FromFloat(round(inputValue));\n`;
-  }
-  code += `
-}
-`;
-  return [dataTypeShaderDefinition[dataType], code];
-}
-
-function getInt32LerpImpl(dataType: DataType) {
-  const shaderDataType = getShaderType(dataType);
-  const pType = dataTypeShaderLerpParametersType[dataType];
-  return [
-    dataTypeShaderDefinition[dataType],
-    glsl_dataTypeLerpParameters[dataType],
-    glsl_shiftLeftSaturateUint32,
-    dataType === DataType.UINT32
-      ? glsl_addSaturateUint32
-      : glsl_addSaturateInt32,
-    dataType === DataType.UINT32
-      ? glsl_subtractSaturateUint32
-      : glsl_subtractSaturateInt32,
-    `
-${shaderDataType} computeLerp(float inputValue, ${pType} p) {
-  inputValue = inputValue / p.multiplier;
-  uint x = uint(clamp(round(abs(inputValue)), 0.0, 4294967295.0));
-  uint xShifted = shiftLeftSaturate(x, p.shift);
-  if (inputValue >= 0.0) {
-    return ${shaderDataType}(addSaturate(p.offset, xShifted));
-  } else {
-    return ${shaderDataType}(subtractSaturate(p.offset, xShifted));
-  }
-}
-`,
-  ];
-}
 
 function defineLerpUniforms(
   builder: ShaderBuilder,

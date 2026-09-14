@@ -22,12 +22,10 @@ import {
 } from "#src/state/trackable_value.js";
 import type { RefCounted } from "#src/util/disposable.js";
 import { stableStringify, verifyString } from "#src/util/json.js";
-import { getObjectId } from "#src/util/object_id.js";
 import type { GL } from "#src/webgl/context.js";
 import type {
   ShaderCompilationError,
   ShaderLinkError,
-  ShaderModule,
   ShaderProgram,
 } from "#src/webgl/shader.js";
 import { ShaderBuilder } from "#src/webgl/shader.js";

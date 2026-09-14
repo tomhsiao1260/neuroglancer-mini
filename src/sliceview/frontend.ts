@@ -68,7 +68,6 @@ import { getObjectId } from "#src/util/object_id.js";
 import { NullarySignal } from "#src/util/signal.js";
 import { withSharedVisibility } from "#src/visibility_priority/frontend.js";
 import type { GL } from "#src/webgl/context.js";
-import type { TextureBuffer } from "#src/webgl/offscreen.js";
 import {
   DepthTextureBuffer,
   FramebufferConfiguration,

@@ -24,12 +24,9 @@
  */
 
 import type { TypedArray, TypedArrayConstructor } from "#src/util/array.js";
-import { maybePadArray } from "#src/util/array.js";
 import { DATA_TYPE_SIGNED, DataType } from "#src/util/data_type.js";
-import type { vec3 } from "#src/util/geom.js";
 import type { GL } from "#src/webgl/context.js";
 import type {
-  ShaderBuilder,
   ShaderCodePart,
   ShaderSamplerPrefix,
 } from "#src/webgl/shader.js";
@@ -39,7 +36,6 @@ import {
   glsl_int16,
   glsl_int32,
   glsl_int8,
-  glsl_log2Exact,
   glsl_uint16,
   glsl_uint32,
   glsl_uint64,

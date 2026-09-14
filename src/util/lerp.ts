@@ -15,7 +15,6 @@
  */
 
 import { DataType } from "#src/util/data_type.js";
-import { nextAfterFloat64 } from "#src/util/float.js";
 import { parseFixedLengthArray } from "#src/util/json.js";
 import { Uint64 } from "#src/util/uint64.js";
 

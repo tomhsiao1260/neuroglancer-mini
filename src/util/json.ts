@@ -15,7 +15,6 @@
  */
 
 import type { WritableArrayLike } from "#src/util/array.js";
-import { vec3 } from "#src/util/geom.js";
 
 export function verifyFloat(obj: any): number {
   const t = typeof obj;
@@ -205,14 +204,6 @@ function convertStringLiteral(
     return s;
   }
   return x;
-}
-
-/**
- * Converts a string literal delimited by either single or double quotes into a string literal
- * delimited by double quotes.
- */
-export function normalizeStringLiteral(x: string) {
-  return convertStringLiteral(x, "'", '"', DOUBLE_QUOTE_PATTERN);
 }
 
 // quoteChar: des

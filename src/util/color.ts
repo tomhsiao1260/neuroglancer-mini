@@ -100,11 +100,6 @@ export function serializeColor(x: vec3 | vec4) {
   return result;
 }
 
-// Converts an sRGB color component to the gamma-expanded ("linear") value.
-export function srgbGammaExpand(value: number) {
-  return value <= 0.03928 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
-}
-
 export class TrackableRGB extends WatchableValue<vec3> {
   constructor(public defaultValue: vec3) {
     super(vec3.clone(defaultValue));

@@ -33,7 +33,6 @@ import type { mat4 } from "#src/util/geom.js";
 import {
   transformVectorByMat4Transpose,
   vec3,
-  vec3Key,
 } from "#src/util/geom.js";
 import type { ShaderBuilder, ShaderProgram } from "#src/webgl/shader.js";
 

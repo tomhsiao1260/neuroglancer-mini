@@ -46,10 +46,3 @@ export function getPrefixMatchesWithDescriptions<T>(
   return result;
 }
 
-export interface QueryStringCompletionTableEntry<
-  C extends Completion = Completion,
-> {
-  readonly key: C;
-  readonly values: readonly C[];
-}
-

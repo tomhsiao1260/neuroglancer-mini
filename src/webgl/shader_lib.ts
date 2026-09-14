@@ -20,8 +20,6 @@ import {
   DataType,
 } from "#src/util/data_type.js";
 import type {
-  AttributeIndex,
-  ShaderBuilder,
   ShaderCodePart,
 } from "#src/webgl/shader.js";
 
