@@ -380,7 +380,6 @@ export class SliceView extends Base {
     const renderContext = {
       sliceView: this,
       projectionParameters,
-      wireFrame: false,
     };
     for (const renderLayer of this.visibleLayerList) {
       gl.enable(WebGL2RenderingContext.DEPTH_TEST);

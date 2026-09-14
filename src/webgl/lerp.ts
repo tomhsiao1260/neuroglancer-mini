@@ -19,7 +19,6 @@
  */
 
 import { DataType, DATA_TYPE_SIGNED } from "#src/util/data_type.js";
-import type { DataTypeInterval } from "#src/util/lerp.js";
 import { Uint64 } from "#src/util/uint64.js";
 import type {
   ShaderBuilder,
@@ -35,7 +34,20 @@ import {
   glsl_uint64,
 } from "#src/webgl/shader_lib.js";
 
-export const dataTypeShaderLerpParametersType: Record<DataType, string> = {
+export type DataTypeInterval = [number, number] | [Uint64, Uint64];
+
+export const defaultDataTypeRange: Record<DataType, DataTypeInterval> = {
+  [DataType.UINT8]: [0, 0xff],
+  [DataType.INT8]: [-0x80, 0x7f],
+  [DataType.UINT16]: [0, 0xffff],
+  [DataType.INT16]: [-0x8000, 0x7fff],
+  [DataType.UINT32]: [0, 0xffffffff],
+  [DataType.INT32]: [-0x80000000, 0x7fffffff],
+  [DataType.UINT64]: [Uint64.ZERO, new Uint64(0xffffffff, 0xffffffff)],
+  [DataType.FLOAT32]: [0, 1],
+};
+
+const dataTypeShaderLerpParametersType: Record<DataType, string> = {
   [DataType.UINT8]: "vec2",
   [DataType.INT8]: "vec2",
   [DataType.UINT16]: "vec2",

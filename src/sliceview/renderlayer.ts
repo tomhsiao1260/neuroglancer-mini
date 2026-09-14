@@ -41,7 +41,6 @@ import type {
 import type { WatchableValueInterface } from "#src/state/trackable_value.js";
 import { constantWatchableValue } from "#src/state/trackable_value.js";
 import type { Borrowed } from "#src/util/disposable.js";
-import { HistogramSpecifications } from "#src/webgl/empirical_cdf.js";
 import type { RpcId } from "#src/worker/worker_rpc.js";
 
 export interface SliceViewRenderLayerOptions {
@@ -69,7 +68,6 @@ export interface VisibleSourceInfo<Source extends SliceViewChunkSource> {
 export interface SliceViewRenderContext {
   sliceView: SliceView;
   projectionParameters: SliceViewProjectionParameters;
-  wireFrame: boolean;
 }
 
 export abstract class SliceViewRenderLayer<
@@ -164,19 +162,6 @@ export abstract class SliceViewRenderLayer<
     this.transform = options.transform;
     this.localPosition = options.localPosition;
     this.rpcTransfer = options.rpcTransfer || {};
-    this.dataHistogramSpecifications = this.registerDisposer(
-      options.dataHistogramSpecifications ??
-        new HistogramSpecifications(
-          constantWatchableValue([]),
-          constantWatchableValue([]),
-          constantWatchableValue([]),
-        ),
-    );
-    this.registerDisposer(
-      this.dataHistogramSpecifications.visibility.changed.add(
-        this.redrawNeeded.dispatch,
-      ),
-    );
   }
 
   RPC_TYPE_ID: string;

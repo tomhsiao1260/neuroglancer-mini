@@ -44,16 +44,8 @@ import { NullarySignal } from "#src/util/signal.js";
 import { kEmptyFloat32Vec } from "#src/util/vector.js";
 import { DataType } from "#src/sliceview/volume/base.js";
 import { MultiscaleVolumeChunkSource } from "#src/sliceview/volume/frontend.js";
-import {
-  getTrackableFragmentMain,
-  ImageRenderLayer,
-} from "#src/sliceview/volume/image_renderlayer.js";
-import {
-  makeCachedDerivedWatchableValue,
-  WatchableValue,
-} from "#src/state/trackable_value.js";
-import { makeWatchableShaderError } from "#src/webgl/dynamic_shader.js";
-import { ShaderControlState } from "#src/webgl/shader_ui_controls.js";
+import { ImageRenderLayer } from "#src/sliceview/volume/image_renderlayer.js";
+import { WatchableValue } from "#src/state/trackable_value.js";
 
 export class UserLayer extends RefCounted {
   localCoordinateSpace = new TrackableCoordinateSpace();
@@ -185,36 +177,11 @@ export class ImageUserLayer extends UserLayer {
     yield* this.renderLayers;
   }
 
-  fragmentMain = getTrackableFragmentMain();
-  shaderError = makeWatchableShaderError();
-  dataType = new WatchableValue<DataType | undefined>(undefined);
   sliceViewRenderScaleTarget = new WatchableValue(1);
   channelCoordinateSpace = new TrackableCoordinateSpace();
   channelCoordinateSpaceCombiner = new CoordinateSpaceCombiner(
     this.channelCoordinateSpace,
     isChannelDimension,
-  );
-
-  shaderControlState = this.registerDisposer(
-    new ShaderControlState(
-      this.fragmentMain,
-      this.registerDisposer(
-        makeCachedDerivedWatchableValue(
-          (
-            dataType: DataType | undefined,
-            channelCoordinateSpace: CoordinateSpace,
-          ) => {
-            if (dataType === undefined) return null;
-            return {
-              imageData: { dataType, channelRank: channelCoordinateSpace.rank },
-            };
-          },
-          [this.dataType, this.channelCoordinateSpace],
-          (a, b) => JSON.stringify(a) === JSON.stringify(b),
-        ),
-      ),
-      this.channelCoordinateSpaceCombiner,
-    ),
   );
 
   markLoading() {
@@ -242,7 +209,6 @@ export class ImageUserLayer extends UserLayer {
     super(manager);
     this.localCoordinateSpaceCombiner.includeDimensionPredicate =
       isLocalDimension;
-    this.fragmentMain.changed.add(this.specificationChanged.dispatch);
     this.sliceViewRenderScaleTarget.changed.add(
       this.specificationChanged.dispatch,
     );
@@ -271,8 +237,6 @@ export class ImageUserLayer extends UserLayer {
       loadedSubsource.activate((context) => {
         loadedSubsource.addRenderLayer(
           new ImageRenderLayer(volume, {
-            shaderControlState: this.shaderControlState,
-            shaderError: this.shaderError,
             transform: loadedSubsource.getRenderLayerTransform(
               this.channelCoordinateSpace,
             ),
@@ -281,17 +245,12 @@ export class ImageUserLayer extends UserLayer {
             channelCoordinateSpace: this.channelCoordinateSpace,
           }),
         );
-        this.shaderError.changed.dispatch();
       });
     }
-    this.dataType.value = dataType;
   }
 
   restoreState(specification: any) {
     super.restoreState(specification);
-    if (specification.shader !== undefined) {
-      this.fragmentMain.restoreState(specification.shader);
-    }
     if (specification.sliceViewRenderScaleTarget !== undefined) {
       this.sliceViewRenderScaleTarget.value = specification.sliceViewRenderScaleTarget;
     }

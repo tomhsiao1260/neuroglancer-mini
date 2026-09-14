@@ -15,132 +15,53 @@
  */
 
 import type { WatchableValueInterface } from "#src/state/trackable_value.js";
-import {
-  constantWatchableValue,
-  WatchableValue,
-  TrackableValue,
-} from "#src/state/trackable_value.js";
 import type { RefCounted } from "#src/util/disposable.js";
-import { stableStringify, verifyString } from "#src/util/json.js";
+import { stableStringify } from "#src/util/json.js";
 import type { GL } from "#src/webgl/context.js";
-import type {
-  ShaderCompilationError,
-  ShaderLinkError,
-  ShaderProgram,
-} from "#src/webgl/shader.js";
+import type { ShaderProgram } from "#src/webgl/shader.js";
 import { ShaderBuilder } from "#src/webgl/shader.js";
 
+export type ParameterizedContextDependentShaderGetter<Context> = (
+  context: Context,
+) => ShaderProgram | null;
+
 /**
- * undefined means shader has not been compiled.  null means shader was compiled successfully.
+ * Returns a function that gives the shader for a context, building it on first use and rebuilding
+ * it whenever `parameters` changes.  Built programs are shared through `gl.memoize`, keyed by
+ * `memoizeKey` and the parameter values.  A shader that fails to build is returned as `null`.
  */
-export type WatchableShaderError = WatchableValue<
-  ShaderCompilationError | ShaderLinkError | undefined | null
->;
-
-export function makeWatchableShaderError() {
-  return new WatchableValue<
-    ShaderCompilationError | ShaderLinkError | undefined | null
-  >(undefined);
-}
-
-export function makeTrackableFragmentMain(value: string) {
-  return new TrackableValue<string>(value, verifyString);
-}
-
-export interface ParameterizedShaderGetterResult<
-  Parameters = any,
-  ExtraParameters = any,
-> {
-  shader: ShaderProgram | null;
-  fallback: boolean;
-  parameters: Parameters;
-  extraParameters: ExtraParameters;
-}
-
-export interface ParameterizedContextDependentShaderGetter<
-  Context,
-  Parameters,
-  ExtraParameters = undefined,
-> {
-  (
-    context: Context,
-  ): ParameterizedShaderGetterResult<Parameters, ExtraParameters>;
-}
-
-export interface ParameterizedShaderOptions<
-  Parameters = any,
-  ExtraParameters = any,
-> {
-  memoizeKey: any;
-  parameters: WatchableValueInterface<Parameters>;
-  fallbackParameters?: WatchableValueInterface<Parameters> | undefined;
-  shaderError?: WatchableShaderError | undefined;
-  encodeParameters?: (p: Parameters) => any;
-  extraParameters?: WatchableValueInterface<ExtraParameters>;
-  encodeExtraParameters?: (p: ExtraParameters) => any;
-}
-
 export function parameterizedContextDependentShaderGetter<
   Context,
   ContextKey,
   Parameters,
-  ExtraParameters = undefined,
 >(
   refCounted: RefCounted,
   gl: GL,
-  options: ParameterizedShaderOptions<Parameters, ExtraParameters> & {
+  options: {
+    memoizeKey: any;
+    parameters: WatchableValueInterface<Parameters>;
     getContextKey: (context: Context) => ContextKey;
     defineShader: (
       builder: ShaderBuilder,
       context: Context,
       parameters: Parameters,
-      extraParameters: ExtraParameters,
     ) => void;
-    encodeContext?: (context: Context) => any;
   },
-): ParameterizedContextDependentShaderGetter<
-  Context,
-  Parameters,
-  ExtraParameters
-> {
+): ParameterizedContextDependentShaderGetter<Context> {
   const shaders = new Map<
     ContextKey,
-    ParameterizedShaderGetterResult<Parameters, ExtraParameters> & {
-      parametersGeneration: number;
-      extraParametersGeneration: number;
-    }
+    { shader: ShaderProgram | null; parametersGeneration: number }
   >();
-  const {
-    parameters,
-    fallbackParameters,
-    shaderError,
-    encodeParameters = (p: Parameters) => p,
-    extraParameters = constantWatchableValue(
-      undefined as any as ExtraParameters,
-    ),
-    encodeExtraParameters = (p: ExtraParameters) => p,
-    getContextKey,
-    defineShader,
-  } = options;
-  if (shaderError !== undefined) {
-    shaderError.value = undefined;
-  }
-  const { encodeContext = getContextKey } = options;
+  const { parameters, getContextKey, defineShader } = options;
   const stringMemoizeKey = stableStringify(options.memoizeKey);
-  function getNewShader(
-    context: Context,
-    parameters: Parameters,
-    extraParameters: ExtraParameters,
-  ) {
+  function getNewShader(context: Context, parametersValue: Parameters) {
     const key = JSON.stringify({
       id: stringMemoizeKey,
-      // context: encodeContext(context),
-      parameters: encodeParameters(parameters),
-      extraParameters: encodeExtraParameters(extraParameters),
+      parameters: parametersValue,
     });
     return gl.memoize.get(key, () => {
       const builder = new ShaderBuilder(gl);
-      defineShader(builder, context, parameters, extraParameters);
+      defineShader(builder, context, parametersValue);
       return builder.build();
     });
   }
@@ -148,80 +69,33 @@ export function parameterizedContextDependentShaderGetter<
     const contextKey = getContextKey(context);
     let entry = shaders.get(contextKey);
     if (entry === undefined) {
-      entry = {
-        parametersGeneration: -1,
-        extraParametersGeneration: -1,
-        shader: null,
-        fallback: false,
-        parameters: parameters.value,
-        extraParameters: extraParameters.value,
-      };
+      entry = { shader: null, parametersGeneration: -1 };
       shaders.set(contextKey, entry);
     }
     const parametersGeneration = parameters.changed.count;
-    const extraParametersGeneration = extraParameters.changed.count;
-    if (
-      parametersGeneration === entry.parametersGeneration &&
-      extraParametersGeneration === entry.extraParametersGeneration
-    ) {
-      return entry;
+    if (parametersGeneration === entry.parametersGeneration) {
+      return entry.shader;
     }
-    const parametersValue = (entry.parameters = parameters.value);
-    const extraParametersValue = (entry.extraParameters =
-      extraParameters.value);
-    const oldShader = entry.shader;
     entry.parametersGeneration = parametersGeneration;
-    entry.extraParametersGeneration = extraParametersGeneration;
+    const oldShader = entry.shader;
     let newShader: ShaderProgram | null = null;
     try {
-      newShader = getNewShader(context, parametersValue, extraParametersValue);
-      entry.fallback = false;
-      if (fallbackParameters !== undefined) {
-        fallbackParameters.value = parametersValue;
-      }
-      if (shaderError !== undefined) {
-        shaderError.value = null;
-      }
-    } catch (e) {
-      if (shaderError !== undefined) {
-        shaderError.value = e;
-      }
-      if (fallbackParameters !== undefined) {
-        try {
-          const fallbackParametersValue = fallbackParameters.value;
-          newShader = getNewShader(
-            context,
-            fallbackParametersValue,
-            extraParametersValue,
-          );
-          entry.parameters = fallbackParametersValue;
-          entry.fallback = true;
-        } catch {
-          // Ignore error creating fallback shader.
-        }
-      }
+      newShader = getNewShader(context, parameters.value);
+    } catch {
+      // Leave the shader unset; nothing is drawn with it.
     }
     if (oldShader !== null) {
       oldShader.dispose();
     }
     entry.shader = newShader;
-    return entry;
+    return newShader;
   }
   refCounted.registerDisposer(() => {
-    for (const entry of shaders.values()) {
-      const { shader } = entry;
+    for (const { shader } of shaders.values()) {
       if (shader !== null) {
         shader.dispose();
       }
     }
   });
   return getter;
-}
-
-export function shaderCodeWithLineDirective(
-  code: string,
-  sourceStringNumber = 1,
-  line = 0,
-) {
-  return `\n#line ${line} ${sourceStringNumber}\n` + code;
 }

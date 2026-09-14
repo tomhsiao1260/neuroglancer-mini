@@ -16,8 +16,6 @@
 
 import { ChunkState } from "#src/chunk_manager/base.js";
 import type { CoordinateSpace } from "#src/state/coordinate_transform.js";
-import { emptyInvalidCoordinateSpace } from "#src/state/coordinate_transform.js";
-import type { ProjectionParameters } from "#src/render/projection_parameters.js";
 import { getNormalizedChunkLayout } from "#src/sliceview/base.js";
 import {
   defineBoundingBoxCrossSectionShader,
@@ -41,32 +39,14 @@ import type {
 } from "#src/sliceview/volume/frontend.js";
 import { defineChunkDataShaderAccess } from "#src/sliceview/volume/frontend.js";
 import type { WatchableValueInterface } from "#src/state/trackable_value.js";
-import {
-  constantWatchableValue,
-  makeCachedDerivedWatchableValue,
-} from "#src/state/trackable_value.js";
+import { makeCachedDerivedWatchableValue } from "#src/state/trackable_value.js";
 import { mat4, vec3 } from "#src/util/geom.js";
 import { getObjectId } from "#src/util/object_id.js";
 import type { GL } from "#src/webgl/context.js";
-import type {
-  ParameterizedContextDependentShaderGetter,
-  ParameterizedShaderGetterResult,
-  WatchableShaderError,
-} from "#src/webgl/dynamic_shader.js";
-import {
-  makeWatchableShaderError,
-  parameterizedContextDependentShaderGetter,
-} from "#src/webgl/dynamic_shader.js";
-import type { HistogramChannelSpecification } from "#src/webgl/empirical_cdf.js";
-import {
-  defineLineShader,
-  initializeLineShader,
-  VERTICES_PER_LINE,
-} from "#src/webgl/lines.js";
+import type { ParameterizedContextDependentShaderGetter } from "#src/webgl/dynamic_shader.js";
+import { parameterizedContextDependentShaderGetter } from "#src/webgl/dynamic_shader.js";
 import type { ShaderBuilder, ShaderProgram } from "#src/webgl/shader.js";
 import { defineVertexId, VertexIdHelper } from "#src/webgl/vertex_id.js";
-
-const DEBUG_VERTICES = false;
 
 /**
  * Extra amount by which the chunk position computed in the vertex shader is shifted in the
@@ -83,7 +63,7 @@ const CHUNK_POSITION_EPSILON = 1e-3;
 
 const tempMat4 = mat4.create();
 
-function defineVolumeShader(builder: ShaderBuilder, wireFrame: boolean) {
+function defineVolumeShader(builder: ShaderBuilder) {
   defineVertexId(builder);
   defineBoundingBoxCrossSectionShader(builder);
 
@@ -99,30 +79,11 @@ function defineVolumeShader(builder: ShaderBuilder, wireFrame: boolean) {
   builder.addUniform("highp vec3", "uLowerClipBound");
   builder.addUniform("highp vec3", "uUpperClipBound");
 
-  if (wireFrame) {
-    defineLineShader(builder);
-    builder.setVertexMain(`
-int vertexIndex1 = gl_VertexID / ${VERTICES_PER_LINE};
-int vertexIndex2 = vertexIndex1 == 5 ? 0 : vertexIndex1 + 1;
-vec3 vertexPosition1 = getBoundingBoxPlaneIntersectionVertexPosition(uChunkDataSize, uTranslation, uLowerClipBound, uUpperClipBound, vertexIndex1);
-vec3 vertexPosition2 = getBoundingBoxPlaneIntersectionVertexPosition(uChunkDataSize, uTranslation, uLowerClipBound, uUpperClipBound, vertexIndex2);
-emitLine(uProjectionMatrix * vec4(vertexPosition1, 1.0),
-         uProjectionMatrix * vec4(vertexPosition2, 1.0),
-         2.0);
-`);
-    builder.setFragmentMain(`
-emit(vec4(1.0, 1.0, 1.0, getLineAlpha()));
-`);
-    return;
-  }
-
   // Position within chunk of vertex, in floating point range [0, chunkDataSize].
   builder.addVarying("highp vec3", "vChunkPosition");
 
   // Set gl_Position.z = 0 since we use the depth buffer as a stencil buffer to avoid overwriting
-  // higher-resolution data with lower-resolution data.  The depth buffer is used rather than the
-  // stencil buffer because for computing data distributions we need to read from it, and WebGL2
-  // does not support reading from the stencil component of a depth-stencil texture.
+  // higher-resolution data with lower-resolution data.
   builder.setVertexMain(`
 vec3 position = getBoundingBoxPlaneIntersectionVertexPosition(uChunkDataSize, uTranslation, uLowerClipBound, uUpperClipBound, gl_VertexID);
 gl_Position = uProjectionMatrix * vec4(position, 1.0);
@@ -130,20 +91,6 @@ gl_Position.z = 0.0;
 vChunkPosition = (position - uTranslation) +
     ${CHUNK_POSITION_EPSILON} * abs(uPlaneNormal);
 `);
-}
-
-function initializeShader(
-  shader: ShaderProgram,
-  projectionParameters: ProjectionParameters,
-  wireFrame: boolean,
-) {
-  if (wireFrame) {
-    initializeLineShader(
-      shader,
-      projectionParameters,
-      /*featherWidthInPixels=*/ 1,
-    );
-  }
 }
 
 function beginSource(
@@ -180,152 +127,70 @@ function beginSource(
     shader.uniform("uUpperClipBound"),
     tsource.upperClipDisplayBound,
   );
-  if (DEBUG_VERTICES) {
-    (<any>window).debug_sliceView_uLowerClipBound =
-      tsource.lowerClipDisplayBound;
-    (<any>window).debug_sliceView_uUpperClipBound =
-      tsource.upperClipDisplayBound;
-    (<any>window).debug_sliceView = sliceView;
-    (<any>window).debug_sliceView_dataToDevice = mat4.clone(tempMat4);
-    (<any>window).debug_sliceView_chunkLayout = chunkLayout;
-  }
-}
-
-function setupChunkDataSize(
-  gl: GL,
-  shader: ShaderProgram,
-  chunkDataSize: vec3,
-) {
-  gl.uniform3fv(shader.uniform("uChunkDataSize"), chunkDataSize);
-
-  if (DEBUG_VERTICES) {
-    (<any>window).debug_sliceView_chunkDataSize = chunkDataSize;
-  }
-}
-
-function drawChunk(
-  gl: GL,
-  shader: ShaderProgram,
-  chunkPosition: vec3,
-  wireFrame: boolean,
-) {
-  gl.uniform3fv(shader.uniform("uTranslation"), chunkPosition);
-  gl.drawArrays(gl.TRIANGLE_FAN, 0, 6);
-
-  if (DEBUG_VERTICES) {
-    const sliceView: SliceView = (<any>window).debug_sliceView;
-    const chunkDataSize: vec3 = (<any>window).debug_sliceView_chunkDataSize;
-    const dataToDeviceMatrix: mat4 = (<any>window).debug_sliceView_dataToDevice;
-    console.log(
-      `Drawing chunk: ${chunkPosition.join()} of data size ` +
-        `${chunkDataSize.join()}, projection`,
-      dataToDeviceMatrix,
-    );
-  }
 }
 
 export interface RenderLayerBaseOptions extends SliceViewRenderLayerOptions {
-  shaderError?: WatchableShaderError;
-  channelCoordinateSpace?: WatchableValueInterface<CoordinateSpace>;
+  channelCoordinateSpace: WatchableValueInterface<CoordinateSpace>;
 }
 
-export interface RenderLayerOptions<ShaderParameters>
-  extends RenderLayerBaseOptions {
-  fallbackShaderParameters?: WatchableValueInterface<ShaderParameters>;
-  shaderParameters: WatchableValueInterface<ShaderParameters>;
-  encodeShaderParameters?: (parameters: ShaderParameters) => any;
-}
-
-interface ShaderContext {
+interface ShaderParameters {
   numChannelDimensions: number;
-  dataHistogramChannelSpecifications: HistogramChannelSpecification[];
 }
 
-export abstract class SliceViewVolumeRenderLayer<
-  ShaderParameters = any,
-> extends SliceViewRenderLayer<VolumeChunkSource, VolumeSourceOptions> {
+export abstract class SliceViewVolumeRenderLayer extends SliceViewRenderLayer<
+  VolumeChunkSource,
+  VolumeSourceOptions
+> {
   multiscaleSource: MultiscaleVolumeChunkSource;
-  protected shaderGetter: ParameterizedContextDependentShaderGetter<
-    { chunkFormat: ChunkFormat },
-    ShaderParameters,
-    ShaderContext
-  >;
-  shaderParameters: WatchableValueInterface<ShaderParameters>;
+  protected shaderGetter: ParameterizedContextDependentShaderGetter<{
+    chunkFormat: ChunkFormat;
+  }>;
   private vertexIdHelper: VertexIdHelper;
 
   constructor(
     multiscaleSource: MultiscaleVolumeChunkSource,
-    options: RenderLayerOptions<ShaderParameters>,
+    options: RenderLayerBaseOptions,
   ) {
-    const { shaderError = makeWatchableShaderError(), shaderParameters } =
-      options;
     super(multiscaleSource.chunkManager, multiscaleSource, options);
     const { gl } = this;
     this.vertexIdHelper = this.registerDisposer(VertexIdHelper.get(gl));
-    this.shaderParameters = shaderParameters;
-    const { channelCoordinateSpace } = options;
-    this.channelCoordinateSpace =
-      channelCoordinateSpace === undefined
-        ? constantWatchableValue(emptyInvalidCoordinateSpace)
-        : channelCoordinateSpace;
+    this.channelCoordinateSpace = options.channelCoordinateSpace;
+    // The shader depends on the `ChunkFormat` (which is a property of the `VolumeChunkSource`) and
+    // on the number of channel dimensions.
+    const shaderParameters = this.registerDisposer(
+      makeCachedDerivedWatchableValue(
+        (space: CoordinateSpace) => ({ numChannelDimensions: space.rank }),
+        [this.channelCoordinateSpace],
+        (a, b) => a.numChannelDimensions === b.numChannelDimensions,
+      ),
+    );
     this.registerDisposer(
       shaderParameters.changed.add(this.redrawNeeded.dispatch),
     );
-    // The shader depends on the `ChunkFormat` (which is a property of the `VolumeChunkSource`), the
-    // `ShaderParameters` (which are determined by the derived RenderLayer class), the number of
-    // channel dimensions, and the data histogram channel specifications.
-    const extraParameters = this.registerDisposer(
-      makeCachedDerivedWatchableValue(
-        (
-          space: CoordinateSpace,
-          dataHistogramChannelSpecifications: HistogramChannelSpecification[],
-        ) => ({
-          numChannelDimensions: space.rank,
-          dataHistogramChannelSpecifications,
-        }),
-        [
-          this.channelCoordinateSpace,
-          this.dataHistogramSpecifications.channels,
-        ],
-      ),
-    );
     this.shaderGetter = parameterizedContextDependentShaderGetter(this, gl, {
       memoizeKey: `volume/RenderLayer:${getObjectId(this.constructor)}`,
-      fallbackParameters: options.fallbackShaderParameters,
       parameters: shaderParameters,
-      encodeParameters: options.encodeShaderParameters,
-      shaderError,
-      extraParameters,
       defineShader: (
         builder: ShaderBuilder,
-        context: {
-          chunkFormat: ChunkFormat | null;
-        },
+        context: { chunkFormat: ChunkFormat },
         parameters: ShaderParameters,
-        extraParameters: ShaderContext,
       ) => {
-        const { chunkFormat } = context;
-        const { numChannelDimensions } =
-          extraParameters;
-        defineVolumeShader(builder, chunkFormat === null);
+        defineVolumeShader(builder);
         builder.addOutputBuffer("vec4", "v4f_fragData0", 0);
         builder.addFragmentCode(`
 void emit(vec4 color) {
   v4f_fragData0 = color;
 }
 `);
-        if (chunkFormat === null) {
-          return;
-        }
         defineChunkDataShaderAccess(
           builder,
-          chunkFormat,
-          numChannelDimensions,
+          context.chunkFormat,
+          parameters.numChannelDimensions,
           "vChunkPosition",
         );
-        this.defineShader(builder, parameters);
+        this.defineShader(builder, parameters.numChannelDimensions);
       },
-      getContextKey: (context) => `${context.chunkFormat?.shaderKey}`,
+      getContextKey: (context) => `${context.chunkFormat.shaderKey}`,
     });
     this.initializeCounterpart();
   }
@@ -334,57 +199,32 @@ void emit(vec4 color) {
     return this.multiscaleSource.dataType;
   }
 
-  beginChunkFormat(
-    sliceView: SliceView,
-    chunkFormat: ChunkFormat | null,
-    projectionParameters: ProjectionParameters,
-  ): ParameterizedShaderGetterResult<ShaderParameters, ShaderContext> {
-    const { gl } = this;
-    const shaderResult = this.shaderGetter({ chunkFormat });
-    const { shader, parameters, fallback } = shaderResult;
-    if (shader !== null) {
-      shader.bind();
-      initializeShader(shader, projectionParameters, chunkFormat === null);
-      if (chunkFormat !== null) {
-        this.initializeShader(sliceView, shader, parameters, fallback);
-        // FIXME: may need to fix wire frame rendering
-        chunkFormat.beginDrawing(gl, shader);
-      }
-    }
-    return shaderResult;
-  }
-
-  abstract initializeShader(
-    sliceView: SliceView,
-    shader: ShaderProgram,
-    parameters: ShaderParameters,
-    fallback: boolean,
-  ): void;
-
+  // Adds the fragment shader code that turns the data value at `vChunkPosition` into a color.
   abstract defineShader(
     builder: ShaderBuilder,
-    parameters: ShaderParameters,
+    numChannelDimensions: number,
   ): void;
 
-  endSlice(
-    sliceView: SliceView,
-    shader: ShaderProgram,
-    parameters: ShaderParameters,
-  ) {
-    sliceView;
-    shader;
-    parameters;
+  // Sets the uniforms used by the code added in `defineShader`.
+  abstract initializeShader(shader: ShaderProgram): void;
+
+  private beginChunkFormat(chunkFormat: ChunkFormat) {
+    const shader = this.shaderGetter({ chunkFormat });
+    if (shader !== null) {
+      shader.bind();
+      this.initializeShader(shader);
+      chunkFormat.beginDrawing(this.gl, shader);
+    }
+    return shader;
   }
 
   draw(renderContext: SliceViewRenderContext) {
-    const { sliceView } = renderContext;
+    const { sliceView, projectionParameters } = renderContext;
     const layerInfo = sliceView.visibleLayers.get(this)!;
     const { visibleSources } = layerInfo;
     if (visibleSources.length === 0) {
       return;
     }
-
-    const { projectionParameters, wireFrame } = renderContext;
 
     const { gl } = this;
 
@@ -392,21 +232,14 @@ void emit(vec4 color) {
 
     const chunkPosition = vec3.create();
 
-    let shaderResult: ParameterizedShaderGetterResult<
-      ShaderParameters,
-      ShaderContext
-    >;
     let shader: ShaderProgram | null = null;
-    let prevChunkFormat: ChunkFormat | undefined | null;
+    let prevChunkFormat: ChunkFormat | undefined;
     // Size of chunk (in voxels) in the "display" subspace of the chunk coordinate space.
     const chunkDataDisplaySize = vec3.create();
 
     const endShader = () => {
       if (shader === null) return;
-      if (prevChunkFormat !== null) {
-        prevChunkFormat!.endDrawing(gl, shader);
-      }
-      this.endSlice(sliceView, shader, shaderResult.parameters);
+      prevChunkFormat!.endDrawing(gl, shader);
     };
     let newSource = true;
     for (const transformedSource of visibleSources) {
@@ -423,16 +256,11 @@ void emit(vec4 color) {
       for (const chunkDim of chunkDisplayDimensionIndices) {
         fixedPositionWithinChunk[chunkDim] = 0;
       }
-      const chunkFormat = wireFrame ? null : source.chunkFormat;
+      const { chunkFormat } = source;
       if (chunkFormat !== prevChunkFormat) {
-        prevChunkFormat = chunkFormat;
         endShader();
-        shaderResult = this.beginChunkFormat(
-          sliceView,
-          chunkFormat,
-          projectionParameters,
-        );
-        shader = shaderResult.shader;
+        prevChunkFormat = chunkFormat;
+        shader = this.beginChunkFormat(chunkFormat);
       }
       if (shader === null) continue;
       const chunks = source.chunks;
@@ -452,12 +280,8 @@ void emit(vec4 color) {
         transformedSource,
         chunkLayout,
       );
-      if (chunkFormat !== null) {
-        chunkFormat.beginSource(gl, shader);
-      }
+      chunkFormat.beginSource(gl, shader);
       newSource = true;
-      let presentCount = 0;
-      let notPresentCount = 0;
       sliceView.forEachVisibleChunk(transformedSource, chunkLayout, (key) => {
         const chunk = chunks.get(key);
         if (chunk && chunk.state === ChunkState.GPU_MEMORY) {
@@ -471,7 +295,7 @@ void emit(vec4 color) {
                   ? 1
                   : chunkDataSize[chunkDim];
             }
-            setupChunkDataSize(gl, shader!, chunkDataDisplaySize);
+            gl.uniform3fv(shader!.uniform("uChunkDataSize"), chunkDataDisplaySize);
           }
           const { chunkGridPosition } = chunk;
           for (let i = 0; i < 3; ++i) {
@@ -481,24 +305,18 @@ void emit(vec4 color) {
                 ? 0
                 : originalChunkSize[i] * chunkGridPosition[chunkDim];
           }
-          if (chunkFormat !== null) {
-            chunkFormat.bindChunk(
-              gl,
-              shader!,
-              chunk,
-              fixedPositionWithinChunk,
-              chunkDisplayDimensionIndices,
-              channelToChunkDimensionIndices,
-              newSource,
-            );
-          }
+          chunkFormat.bindChunk(
+            gl,
+            shader!,
+            chunk,
+            fixedPositionWithinChunk,
+            chunkDisplayDimensionIndices,
+            channelToChunkDimensionIndices,
+            newSource,
+          );
           newSource = false;
-          // view shader code here
-          // console.log(shader);
-          drawChunk(gl, shader!, chunkPosition, wireFrame);
-          ++presentCount;
-        } else {
-          ++notPresentCount;
+          gl.uniform3fv(shader!.uniform("uTranslation"), chunkPosition);
+          gl.drawArrays(gl.TRIANGLE_FAN, 0, 6);
         }
       });
     }
