@@ -15,7 +15,6 @@
  */
 
 import { debounce } from 'es-toolkit';
-import { LayerChunkProgressInfo } from "#src/chunk_manager/base.js";
 import { RenderViewport, renderViewportsEqual } from "#src/layer/display_context.js";
 import type {
   DisplayDimensionRenderInfo,
@@ -40,7 +39,6 @@ export class RenderLayer extends RefCounted {
   messages = new MessageList();
   layerChanged = new NullarySignal();
   redrawNeeded = new NullarySignal();
-  layerChunkProgressInfo = new LayerChunkProgressInfo();
 }
 
 export class DerivedProjectionParameters<

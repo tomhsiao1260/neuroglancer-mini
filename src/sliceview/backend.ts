@@ -16,10 +16,7 @@
 
 import "#src/render/render_layer_backend.js";
 
-import type {
-  ChunkConstructor,
-  ChunkRenderLayerBackend,
-} from "#src/chunk_manager/backend.js";
+import type { ChunkConstructor } from "#src/chunk_manager/backend.js";
 import {
   Chunk,
   ChunkSource,
@@ -149,9 +146,7 @@ export class SliceViewBackend extends SliceViewIntermediateBase {
     this.velocityEstimator.addSample(
       this.projectionParameters.value.globalPosition,
     );
-    for (const [layer, visibleLayerSources] of this.visibleLayers) {
-      chunkManager.registerLayer(layer);
-      const { visibleSources } = visibleLayerSources;
+    for (const { visibleSources } of this.visibleLayers.values()) {
       for (
         let i = 0, numVisibleSources = visibleSources.length;
         i < numVisibleSources;
@@ -189,10 +184,6 @@ export class SliceViewBackend extends SliceViewIntermediateBase {
               priorityTier,
               sourceBasePriority + priority,
             );
-            ++layer.numVisibleChunksNeeded;
-            if (chunk.state === ChunkState.GPU_MEMORY) {
-              ++layer.numVisibleChunksAvailable;
-            }
             curVisibleChunks.push(chunk);
             // Mark visible chunks to avoid duplicate work when prefetching.  Once we hit a
             // visible chunk, we don't continue prefetching in the same direction.
@@ -227,10 +218,6 @@ export class SliceViewBackend extends SliceViewIntermediateBase {
                 ChunkPriorityTier.PREFETCH,
                 sourceBasePriority + newPriority,
               );
-              ++layer.numPrefetchChunksNeeded;
-              if (chunk.state === ChunkState.GPU_MEMORY) {
-                ++layer.numPrefetchChunksAvailable;
-              }
               j += PREFETCH_ENTRY_SIZE;
             }
           }
@@ -409,27 +396,16 @@ export class SliceViewChunkSourceBackend<
 @registerSharedObject(SLICEVIEW_RENDERLAYER_RPC_ID)
 export class SliceViewRenderLayerBackend
   extends SharedObjectCounterpart
-  implements SliceViewRenderLayerInterface, ChunkRenderLayerBackend
+  implements SliceViewRenderLayerInterface
 {
   rpcId: number;
   renderScaleTarget: SharedWatchableValue<number>;
   localPosition: WatchableValueInterface<Float32Array>;
 
-  numVisibleChunksNeeded: number;
-  numVisibleChunksAvailable: number;
-  numPrefetchChunksNeeded: number;
-  numPrefetchChunksAvailable: number;
-  chunkManagerGeneration: number;
-
   constructor(rpc: RPC, options: any) {
     super(rpc, options);
     this.renderScaleTarget = rpc.get(options.renderScaleTarget);
     this.localPosition = rpc.get(options.localPosition);
-    this.numVisibleChunksNeeded = 0;
-    this.numVisibleChunksAvailable = 0;
-    this.numPrefetchChunksAvailable = 0;
-    this.numPrefetchChunksNeeded = 0;
-    this.chunkManagerGeneration = -1;
   }
 
   filterVisibleSources(

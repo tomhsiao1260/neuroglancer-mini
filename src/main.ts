@@ -160,10 +160,6 @@ class DataManagementContext extends RefCounted {
             defaultItemLimit: 100,
             defaultSizeLimit: Number.POSITIVE_INFINITY,
           }),
-          compute: new CapacitySpecification({
-            defaultItemLimit: 128,
-            defaultSizeLimit: 5e8,
-          }),
         },
       ),
     );

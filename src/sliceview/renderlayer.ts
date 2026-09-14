@@ -15,7 +15,6 @@
  */
 
 import type { ChunkManager } from "#src/chunk_manager/frontend.js";
-import { ChunkRenderLayerFrontend } from "#src/chunk_manager/frontend.js";
 import type { CoordinateSpace } from "#src/state/coordinate_transform.js";
 import type {
   ChunkTransformParameters,
@@ -42,6 +41,7 @@ import type { WatchableValueInterface } from "#src/state/trackable_value.js";
 import { constantWatchableValue } from "#src/state/trackable_value.js";
 import type { Borrowed } from "#src/util/disposable.js";
 import type { RpcId } from "#src/worker/worker_rpc.js";
+import { SharedObject } from "#src/worker/worker_rpc.js";
 
 export interface SliceViewRenderLayerOptions {
   /**
@@ -167,9 +167,7 @@ export abstract class SliceViewRenderLayer<
   RPC_TYPE_ID: string;
 
   initializeCounterpart() {
-    const sharedObject = this.registerDisposer(
-      new ChunkRenderLayerFrontend(this.layerChunkProgressInfo),
-    );
+    const sharedObject = this.registerDisposer(new SharedObject());
     const rpc = this.chunkManager.rpc!;
     sharedObject.RPC_TYPE_ID = this.RPC_TYPE_ID;
     sharedObject.initializeCounterpart(rpc, {

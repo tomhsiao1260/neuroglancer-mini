@@ -14,6 +14,10 @@
  * limitations under the License.
  */
 
+/**
+ * Where a chunk is.  States with lower numbers are closer to being drawn; code compares states
+ * numerically (e.g. `state <= SYSTEM_MEMORY` means the main thread has the data).
+ */
 export enum ChunkState {
   // Chunk is stored in GPU memory in addition to system memory.
   GPU_MEMORY = 0,
@@ -34,13 +38,15 @@ export enum ChunkState {
   // Download failed.
   FAILED = 6,
 
+  // Chunk was evicted; the main thread should delete it.
   EXPIRED = 7,
-
-  // If new states are added, keep numChangeStates in sync.
 }
 
-export const numChunkStates = 8;
-
+/**
+ * Why a chunk is wanted.  Lower tiers always win over higher tiers; within the VISIBLE and PREFETCH
+ * tiers chunks are ordered by a numeric priority.  RECENT chunks are no longer requested and are
+ * kept in least-recently-used order until evicted.
+ */
 export enum ChunkPriorityTier {
   FIRST_TIER = 0,
   // eslint-disable-next-line @typescript-eslint/no-duplicate-enum-values
@@ -55,64 +61,12 @@ export enum ChunkPriorityTier {
   LAST_TIER = 2,
 }
 
-export const numChunkPriorityTiers = 3;
-
-export enum ChunkDownloadStatistics {
-  totalTime = 0,
-  totalChunks = 1,
-}
-
-export enum ChunkMemoryStatistics {
-  numChunks = 0,
-  systemMemoryBytes = 1,
-  gpuMemoryBytes = 2,
-}
-
-export const numChunkMemoryStatistics = 3;
-
-export const numChunkDownloadStatistics = 2;
-
-export const numChunkStatistics =
-  numChunkStates * numChunkPriorityTiers * numChunkMemoryStatistics +
-  numChunkDownloadStatistics;
-
-export function getChunkStateStatisticIndex(
-  state: ChunkState,
-  priorityTier: ChunkPriorityTier,
-) {
-  return state * numChunkPriorityTiers + priorityTier;
-}
-
-export function getChunkDownloadStatisticIndex(
-  statistic: ChunkDownloadStatistics,
-) {
-  return (
-    numChunkStates * numChunkPriorityTiers * numChunkMemoryStatistics +
-    statistic
-  );
-}
-
 export const PREFETCH_PRIORITY_MULTIPLIER = 1e13;
 
 export const CHUNK_QUEUE_MANAGER_RPC_ID = "ChunkQueueManager";
 export const CHUNK_MANAGER_RPC_ID = "ChunkManager";
-export const CHUNK_SOURCE_INVALIDATE_RPC_ID = "ChunkSource.invalidate";
-
-export const REQUEST_CHUNK_STATISTICS_RPC_ID =
-  "ChunkQueueManager.requestChunkStatistics";
-
-// Used for sending per-layer visible/prefetch chunk statistics from backend to frontend.
-export const CHUNK_LAYER_STATISTICS_RPC_ID =
-  "ChunkManager.chunkLayerStatistics";
 
 export interface ChunkSourceParametersConstructor<T> {
   new (): T;
   RPC_ID: string;
-}
-
-export class LayerChunkProgressInfo {
-  numVisibleChunksNeeded = 0;
-  numVisibleChunksAvailable = 0;
-  numPrefetchChunksNeeded = 0;
-  numPrefetchChunksAvailable = 0;
 }
