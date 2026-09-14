@@ -15,17 +15,18 @@
  */
 
 /**
- * @file Shared by the main thread and the worker: which scales of a volume to show for the current
- * zoom level (`filterVisibleSources`), and which chunks of a scale intersect the cross-section plane
- * (`forEachPlaneIntersectingVolumetricChunk`).
+ * @file Shared by the main thread and the worker: a panel's projection (`ProjectionParameters`), the
+ * chunk grid of a scale in view coordinates (`ChunkLayout`), which scales of a volume to show for
+ * the current zoom level (`filterVisibleSources`), and which chunks of a scale intersect the
+ * cross-section plane (`forEachPlaneIntersectingVolumetricChunk`).
  */
 
 import type { DisplayDimensionRenderInfo } from "#src/state/navigation_state.js";
-import { ProjectionParameters } from "#src/render/projection_parameters.js";
 import type {
   WatchableValueChangeInterface,
   WatchableValueInterface,
 } from "#src/state/trackable_value.js";
+import { arraysEqual } from "#src/util/array.js";
 import type { DataType } from "#src/util/data_type.js";
 import type { Disposable } from "#src/util/disposable.js";
 import {
@@ -35,9 +36,114 @@ import {
   vec3,
 } from "#src/util/geom.js";
 import * as matrix from "#src/util/matrix.js";
+import { kEmptyFloat32Vec } from "#src/util/vector.js";
 import { SharedObject } from "#src/worker/worker_rpc.js";
 
 const tempMat4 = mat4.create();
+
+export const PROJECTION_PARAMETERS_RPC_ID = "SharedProjectionParameters";
+export const PROJECTION_PARAMETERS_CHANGED_RPC_METHOD_ID =
+  "SharedProjectionParameters.changed";
+
+export class RenderViewport {
+  // Width of visible portion of panel in canvas pixels.
+  width = 0;
+
+  // Height of visible portion of panel in canvas pixels.
+  height = 0;
+
+  // Width in canvas pixels, including portions outside of the canvas (i.e. outside the "viewport"
+  // window).
+  logicalWidth = 0;
+
+  // Height in canvas pixels, including portions outside of the canvas (i.e. outside the "viewport"
+  // window).
+  logicalHeight = 0;
+
+  // Left edge of visible region within full (logical) panel, as fraction in [0, 1].
+  visibleLeftFraction = 0;
+
+  // Top edge of visible region within full (logical) panel, as fraction in [0, 1].
+  visibleTopFraction = 0;
+
+  // Fraction of logical width that is visible, equal to `widthInCanvasPixels / logicalWidth`.
+  visibleWidthFraction = 0;
+
+  // Fraction of logical height that is visible, equal to `heightInCanvasPixels / logicalHeight`.
+  visibleHeightFraction = 0;
+}
+
+export function renderViewportsEqual(a: RenderViewport, b: RenderViewport) {
+  return (
+    a.width === b.width &&
+    a.height === b.height &&
+    a.logicalWidth === b.logicalWidth &&
+    a.logicalHeight === b.logicalHeight &&
+    a.visibleLeftFraction === b.visibleLeftFraction &&
+    a.visibleTopFraction === b.visibleTopFraction
+  );
+}
+
+/**
+ * A panel's viewport and camera: `invViewMatrix` places the view in global voxel coordinates, and
+ * `projectionMat` maps it to clip coordinates.  The worker receives a copy to choose chunks.
+ */
+export class ProjectionParameters extends RenderViewport {
+  displayDimensionRenderInfo: DisplayDimensionRenderInfo;
+
+  /**
+   * Global position.
+   */
+  globalPosition: Float32Array = kEmptyFloat32Vec;
+
+  /**
+   * Transform from camera coordinates to OpenGL clip coordinates.
+   */
+  projectionMat: mat4 = mat4.create();
+
+  /**
+   * Transform from world coordinates to camera coordinates.
+   */
+  viewMatrix: mat4 = mat4.create();
+
+  /**
+   * Inverse of `viewMat`.
+   */
+  invViewMatrix: mat4 = mat4.create();
+
+  /**
+   * Transform from world coordinates to OpenGL clip coordinates.  Equal to:
+   * `projectionMat * viewMat`.
+   */
+  viewProjectionMat: mat4 = mat4.create();
+
+  /**
+   * Inverse of `viewProjectionMat`.
+   */
+  invViewProjectionMat: mat4 = mat4.create();
+}
+
+export function projectionParametersEqual(
+  a: ProjectionParameters,
+  b: ProjectionParameters,
+) {
+  return (
+    a.displayDimensionRenderInfo === b.displayDimensionRenderInfo &&
+    renderViewportsEqual(a, b) &&
+    arraysEqual(a.globalPosition, b.globalPosition) &&
+    arraysEqual(a.projectionMat, b.projectionMat) &&
+    arraysEqual(a.viewMatrix, b.viewMatrix)
+  );
+}
+
+export function updateProjectionParametersFromInverseViewAndProjection(
+  p: ProjectionParameters,
+) {
+  const { viewMatrix, viewProjectionMat } = p;
+  mat4.invert(viewMatrix, p.invViewMatrix);
+  mat4.multiply(viewProjectionMat, p.projectionMat, viewMatrix);
+  mat4.invert(p.invViewProjectionMat, viewProjectionMat);
+}
 
 /**
  * Regular grid of chunks: every chunk has size `size` in chunk coordinates, and `transform` maps

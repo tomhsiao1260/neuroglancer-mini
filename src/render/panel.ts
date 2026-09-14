@@ -15,9 +15,9 @@
  */
 
 import type { ChunkManager } from "#src/chunk_manager/frontend.js";
-import { RenderViewport } from "#src/render/projection_parameters.js";
-import { SliceView } from "#src/sliceview/frontend.js";
-import type { ImageRenderLayer } from "#src/sliceview/renderlayer.js";
+import { RenderViewport } from "#src/render/base.js";
+import { SliceView } from "#src/render/frontend.js";
+import type { ImageRenderLayer } from "#src/render/renderlayer.js";
 import type { WatchableValueInterface } from "#src/state/trackable_value.js";
 import { animationFrameDebounce } from "#src/util/animation_frame_debounce.js";
 import { RefCounted } from "#src/util/disposable.js";

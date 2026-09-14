@@ -22,14 +22,13 @@ import {
   ChunkQueueManager,
 } from "#src/chunk_manager/frontend.js";
 import { loadZarrVolume } from "#src/datasource/zarr/frontend.js";
-import { getRenderLayerTransform } from "#src/render/render_coordinate_transform.js";
 import {
   makeCombinedCoordinateSpace,
   TrackableCoordinateSpace,
 } from "#src/state/coordinate_transform.js";
 import type { WatchableValueInterface } from "#src/state/trackable_value.js";
 import { WatchableValue } from "#src/state/trackable_value.js";
-import { ImageRenderLayer } from "#src/sliceview/renderlayer.js";
+import { ImageRenderLayer } from "#src/render/renderlayer.js";
 import type { GL } from "#src/webgl/context.js";
 import { RPC, READY_ID } from "#src/worker/worker_rpc.js";
 import {
@@ -37,9 +36,8 @@ import {
   Position,
   TrackableZoom,
 } from "#src/state/navigation_state.js";
-import { DisplayContext, SliceViewPanel } from "#src/sliceview/panel.js";
+import { DisplayContext, SliceViewPanel } from "#src/render/panel.js";
 import { quat } from "#src/util/geom.js";
-import * as matrix from "#src/util/matrix.js";
 import { handleFileBtnOnClick } from "#src/util/file_system.js";
 
 // Chunks and metadata are read from the folder the user picked.  Only the path after the first
@@ -250,9 +248,6 @@ class Viewer extends RefCounted {
     this.localCoordinateSpace.value = makeCombinedCoordinateSpace(modelSpace);
 
     this.renderLayer.value = new ImageRenderLayer(volume, {
-      transform: new WatchableValue(
-        getRenderLayerTransform(matrix.createIdentity(Float32Array, 4)),
-      ),
       renderScaleTarget: this.renderScaleTarget,
       localPosition: this.localPosition,
     });

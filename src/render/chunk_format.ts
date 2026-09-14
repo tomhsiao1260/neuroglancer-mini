@@ -23,7 +23,7 @@
  * it.
  */
 
-import type { VolumeChunk } from "#src/sliceview/frontend.js";
+import type { VolumeChunk } from "#src/render/frontend.js";
 import type { TypedArray, TypedArrayConstructor } from "#src/util/array.js";
 import { DataType } from "#src/util/data_type.js";
 import { RefCounted } from "#src/util/disposable.js";

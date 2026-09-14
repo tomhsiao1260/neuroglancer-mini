@@ -14,8 +14,6 @@
  * limitations under the License.
  */
 
-import "#src/render/render_layer_backend.js";
-
 import type { ChunkConstructor } from "#src/chunk_manager/backend.js";
 import {
   Chunk,
@@ -27,25 +25,32 @@ import { ChunkPriorityTier } from "#src/chunk_manager/base.js";
 import type { SharedWatchableValue } from "#src/worker/shared_watchable_value.js";
 import type {
   MultiscaleVolumetricDataRenderLayer,
+  ProjectionParameters,
   SliceViewChunkSource as SliceViewChunkSourceInterface,
   SliceViewChunkSpecification,
   SliceViewRenderLayer as SliceViewRenderLayerInterface,
   TransformedSource,
   VolumeChunkSpecification,
-} from "#src/sliceview/base.js";
+} from "#src/render/base.js";
 import {
   ChunkLayout,
   filterVisibleSources,
   forEachPlaneIntersectingVolumetricChunk,
+  PROJECTION_PARAMETERS_CHANGED_RPC_METHOD_ID,
+  PROJECTION_PARAMETERS_RPC_ID,
   SLICEVIEW_ADD_VISIBLE_LAYER_RPC_ID,
   SLICEVIEW_REMOVE_VISIBLE_LAYER_RPC_ID,
   SLICEVIEW_RENDERLAYER_RPC_ID,
   SLICEVIEW_RPC_ID,
   SliceViewBase,
-} from "#src/sliceview/base.js";
-import type { WatchableValueInterface } from "#src/state/trackable_value.js";
+} from "#src/render/base.js";
+import type {
+  WatchableValueChangeInterface,
+  WatchableValueInterface,
+} from "#src/state/trackable_value.js";
 import { erf } from "#src/util/erf.js";
 import { vec3, vec3Key } from "#src/util/geom.js";
+import { Signal } from "#src/util/signal.js";
 import { VelocityEstimator } from "#src/util/velocity_estimation.js";
 import type { RPC } from "#src/worker/worker_rpc.js";
 import {
@@ -53,6 +58,35 @@ import {
   registerSharedObject,
   SharedObjectCounterpart,
 } from "#src/worker/worker_rpc.js";
+
+/**
+ * Worker copy of a panel's projection parameters, updated by `SharedProjectionParameters` in
+ * `frontend.ts`.  `changed` fires after each update.
+ */
+@registerSharedObject(PROJECTION_PARAMETERS_RPC_ID)
+export class SharedProjectionParametersBackend<
+    T extends ProjectionParameters = ProjectionParameters,
+  >
+  extends SharedObjectCounterpart
+  implements WatchableValueChangeInterface<T>
+{
+  value: T;
+  oldValue: T;
+  changed = new Signal<(oldValue: T, newValue: T) => void>();
+  constructor(rpc: RPC, options: any) {
+    super(rpc, options);
+    this.value = options.value;
+    this.oldValue = Object.assign({}, this.value);
+  }
+}
+
+registerRPC(PROJECTION_PARAMETERS_CHANGED_RPC_METHOD_ID, function (x) {
+  const obj: SharedProjectionParametersBackend = this.get(x.id);
+  const { value, oldValue } = obj;
+  Object.assign(oldValue, value);
+  Object.assign(value, x.value);
+  obj.changed.dispatch(oldValue, value);
+});
 
 export const BASE_PRIORITY = -1e12;
 export const SCALE_PRIORITY_MULTIPLIER = 1e9;
