@@ -21,9 +21,15 @@ import {
   ChunkManager,
   ChunkQueueManager,
 } from "#src/chunk_manager/frontend.js";
-import { TrackableCoordinateSpace } from "#src/state/coordinate_transform.js";
-import { DisplayContext } from "#src/layer/display_context.js";
-import { ImageUserLayer } from "#src/layer/index.js";
+import { loadZarrVolume } from "#src/datasource/zarr/frontend.js";
+import { getRenderLayerTransform } from "#src/render/render_coordinate_transform.js";
+import {
+  makeCombinedCoordinateSpace,
+  TrackableCoordinateSpace,
+} from "#src/state/coordinate_transform.js";
+import type { WatchableValueInterface } from "#src/state/trackable_value.js";
+import { WatchableValue } from "#src/state/trackable_value.js";
+import { ImageRenderLayer } from "#src/sliceview/renderlayer.js";
 import type { GL } from "#src/webgl/context.js";
 import { RPC, READY_ID } from "#src/worker/worker_rpc.js";
 import {
@@ -31,9 +37,15 @@ import {
   Position,
   TrackableZoom,
 } from "#src/state/navigation_state.js";
-import { SliceViewPanel } from "#src/sliceview/panel.js";
+import { DisplayContext, SliceViewPanel } from "#src/sliceview/panel.js";
 import { quat } from "#src/util/geom.js";
+import * as matrix from "#src/util/matrix.js";
 import { handleFileBtnOnClick } from "#src/util/file_system.js";
+
+// Chunks and metadata are read from the folder the user picked.  Only the path after the first
+// component (here `scroll.zarr`) is used to look files up in `self.fileTree`; see
+// `util/http_request.ts`.
+const DATA_URL = "http://localhost:9000/scroll.zarr";
 
 // root container element
 const root = document.querySelector<HTMLDivElement>('#app');
@@ -105,7 +117,8 @@ export interface ViewerUIState {
   coordinateSpace: TrackableCoordinateSpace;
   chunkManager: ChunkManager;
   navigationState: NavigationState;
-  layerManager: ImageUserLayer;
+  // The render layer that draws the volume; `undefined` until the volume has loaded.
+  renderLayer: WatchableValueInterface<ImageRenderLayer | undefined>;
 }
 
 /**
@@ -121,7 +134,7 @@ class DataManagementContext extends RefCounted {
     public gl: GL,
   ) {
     super();
-    
+
     // Initialize Web Worker for parallel processing
     this.worker = new Worker(
       new URL("./worker/chunk_worker.bundle.js", import.meta.url),
@@ -134,7 +147,7 @@ class DataManagementContext extends RefCounted {
     // Handle worker ready state and file tree initialization
     this.worker.addEventListener("message", (e: MessageEvent<{ functionName: string }>) => {
       const isReady = e.data.functionName === READY_ID;
-      if (isReady) { 
+      if (isReady) {
         this.worker.postMessage({ fileTree: self.fileTree });
       }
     });
@@ -172,11 +185,10 @@ class DataManagementContext extends RefCounted {
 }
 
 /**
- * Main viewer class that handles the 3D visualization
+ * Main viewer class: loads the volume and lays out the three panels.
  */
 class Viewer extends RefCounted {
   coordinateSpace = new TrackableCoordinateSpace();
-  chunkManager: ChunkManager;
   dataContext: DataManagementContext;
   navigationState = new NavigationState(
     new Position(this.coordinateSpace),
@@ -184,19 +196,29 @@ class Viewer extends RefCounted {
     quat.create()
   );
 
+  // Position in the image's local coordinate space, which spans the volume like the global
+  // coordinate space.  It is shared with the worker by the render layer.
+  localCoordinateSpace = new TrackableCoordinateSpace();
+  localPosition = this.registerDisposer(
+    new Position(this.localCoordinateSpace),
+  );
+  renderScaleTarget = new WatchableValue(1);
+
+  // The render layer that draws the volume, set once the volume has loaded.
+  renderLayer = new WatchableValue<ImageRenderLayer | undefined>(undefined);
+
   constructor(public display: DisplayContext) {
     super();
 
     this.dataContext = new DataManagementContext(display.gl);
-    const layerManager = new ImageUserLayer({
-      chunkManager: this.dataContext.chunkManager,
-      coordinateSpace: this.coordinateSpace,
+    this.loadVolume().catch((error) => {
+      console.error("Failed to load data source:", error);
     });
 
     // Create panel layout
     const panel = this.registerDisposer(
       new PanelLayout({
-        layerManager,
+        renderLayer: this.renderLayer,
         coordinateSpace: this.coordinateSpace,
         chunkManager: this.dataContext.chunkManager,
         navigationState: this.navigationState,
@@ -215,6 +237,25 @@ class Viewer extends RefCounted {
     container.style.position = "absolute";
     container.appendChild(panel.element);
     this.display.container.appendChild(container);
+  }
+
+  // Loads the zarr volume, sets the coordinate spaces from the volume bounds and creates the render
+  // layer that draws the volume.
+  private async loadVolume() {
+    const volume = await loadZarrVolume(this.dataContext.chunkManager, DATA_URL);
+    if (this.wasDisposed) return;
+
+    const { modelSpace } = volume;
+    this.coordinateSpace.value = makeCombinedCoordinateSpace(modelSpace);
+    this.localCoordinateSpace.value = makeCombinedCoordinateSpace(modelSpace);
+
+    this.renderLayer.value = new ImageRenderLayer(volume, {
+      transform: new WatchableValue(
+        getRenderLayerTransform(matrix.createIdentity(Float32Array, 4)),
+      ),
+      renderScaleTarget: this.renderScaleTarget,
+      localPosition: this.localPosition,
+    });
   }
 }
 
@@ -241,7 +282,7 @@ class PanelLayout extends RefCounted {
     const state =  {
       display: viewer.display,
       chunkManager: viewer.chunkManager,
-      layerManager: viewer.layerManager,
+      renderLayer: viewer.renderLayer,
     }
 
     // Create XY plane panel (top view)
@@ -250,7 +291,7 @@ class PanelLayout extends RefCounted {
     const navigationStateXY = new NavigationState(
       position.addRef(),
       crossSectionScale.addRef(),
-      { orientation: quat.create() }, 
+      { orientation: quat.create() },
     )
     new SliceViewPanel(elementXY, navigationStateXY, state);
 
@@ -260,7 +301,7 @@ class PanelLayout extends RefCounted {
     const navigationStateYZ = new NavigationState(
       position.addRef(),
       crossSectionScale.addRef(),
-      { orientation: quat.rotateY(quat.create(), quat.create(), Math.PI / 2) }, 
+      { orientation: quat.rotateY(quat.create(), quat.create(), Math.PI / 2) },
     )
     new SliceViewPanel(elementYZ, navigationStateYZ, state);
 

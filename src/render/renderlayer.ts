@@ -15,7 +15,6 @@
  */
 
 import { debounce } from 'es-toolkit';
-import { RenderViewport, renderViewportsEqual } from "#src/layer/display_context.js";
 import type {
   DisplayDimensionRenderInfo,
   NavigationState,
@@ -23,6 +22,8 @@ import type {
 import {
   ProjectionParameters,
   projectionParametersEqual,
+  RenderViewport,
+  renderViewportsEqual,
 } from "#src/render/projection_parameters.js";
 import type { WatchableValueChangeInterface } from "#src/state/trackable_value.js";
 import type { Borrowed } from "#src/util/disposable.js";

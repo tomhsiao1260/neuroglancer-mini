@@ -147,24 +147,19 @@ The code is split between two threads. The **main thread** owns the WebGL canvas
 ### How a chunk gets to the screen
 
 1. **Start-up** (`src/main.ts`): the chosen folder is turned into a file tree, which is sent to the worker once it reports ready. `main.ts` also creates the canvas, the worker and its RPC channel, and the chunk manager, with these limits: 100 simultaneous downloads, 2 GB of system memory and 1 GB of GPU memory. It then creates the three panels.
-2. **Loading the volume** (`src/layer/index.ts`, `src/datasource/zarr/frontend.ts`): the metadata of every scale is read, one chunk source is created per scale, and the render layer is added.
+2. **Loading the volume** (`src/main.ts`, `src/datasource/zarr/frontend.ts`): the viewer reads the metadata of every scale, creates one chunk source per scale, sets the coordinate spaces from the volume bounds and creates the render layer.
 3. **Choosing chunks** (`src/sliceview/backend.ts`): for each panel, the worker picks the scales that match the current zoom. It then finds the chunks the cross-section plane cuts through and requests them as `VISIBLE`. Chunks ahead of the current motion are requested as `PREFETCH`.
 4. **Queueing** (`src/chunk_manager/backend.ts`): chunks are ordered by tier and priority. The highest-priority chunks are downloaded while capacity allows, and lower-priority chunks are evicted to make room.
 5. **Downloading** (`src/datasource/zarr/backend.ts`, `decode.ts`): the worker reads the chunk file from the file tree and decodes it.
 6. **Upload** (`src/chunk_manager/frontend.ts`, `src/sliceview/frontend.ts`): the chunk data is transferred to the main thread in a `Chunk.update` message. The main thread applies these updates in 30 ms time slices and uploads each chunk to a texture.
-7. **Drawing** (`src/layer/display_context.ts`, `src/sliceview/panel.ts`, `src/sliceview/renderlayer.ts`): on each animation frame, every panel renders its slice into an offscreen texture and then draws that texture into its part of the canvas. Only chunks already on the GPU are drawn, and finer scales are drawn over coarser ones.
+7. **Drawing** (`src/sliceview/panel.ts`, `src/sliceview/renderlayer.ts`): on each animation frame, every panel renders its slice into an offscreen texture and then draws that texture into its part of the canvas. Only chunks already on the GPU are drawn, and finer scales are drawn over coarser ones.
 
 ### Files
 
 #### Entry
 
 - `index.html`, `src/style.css`: page and styles.
-- `src/main.ts`: folder picker, the viewer, the worker and chunk manager, and the three panels.
-
-#### `src/layer/`
-
-- `index.ts`: `ImageUserLayer`, the single image layer. It loads the volume, sets the coordinate spaces from the volume bounds and adds the render layer.
-- `display_context.ts`: `DisplayContext`, the canvas and WebGL context. It redraws all panels on an animation frame.
+- `src/main.ts`: folder picker, the worker and chunk manager, the viewer (loads the volume and creates the render layer) and the three panels.
 
 #### `src/sliceview/`: cross-section views
 
@@ -173,7 +168,7 @@ The code is split between two threads. The **main thread** owns the WebGL canvas
 - `backend.ts` (worker): `SliceViewBackend` requests the visible and prefetched chunks. The worker-side `VolumeChunk` holds downloaded data until it is sent to the main thread.
 - `chunk_format.ts`: how a chunk is stored as a texture (one texel per voxel) and read in the fragment shader. Missing chunks share one texture filled with 0.
 - `renderlayer.ts`: `ImageRenderLayer`. For each chunk it draws the polygon where the plane cuts the chunk's box (computed in the vertex shader) and maps the data value to gray.
-- `panel.ts`: `SliceViewPanel`. It draws its slice into its region of the canvas and handles mouse input.
+- `panel.ts`: `DisplayContext`, the canvas and WebGL context shared by all panels, which redraws them on an animation frame; and `SliceViewPanel`, which draws its slice into its region of the canvas and handles mouse input.
 
 #### `src/chunk_manager/`: chunk lifecycle
 
@@ -203,7 +198,7 @@ The code is split between two threads. The **main thread** owns the WebGL canvas
 
 - `renderlayer.ts`: the `RenderLayer` base class; `DerivedProjectionParameters`, which computes a panel's projection from the navigation state and viewport; and `SharedProjectionParameters`, which sends that projection to the worker.
 - `render_layer_backend.ts` (worker): receives the shared projection parameters.
-- `projection_parameters.ts`: viewport size and view and projection matrices.
+- `projection_parameters.ts`: `RenderViewport` (a panel's size in canvas pixels) and `ProjectionParameters` (viewport plus view and projection matrices).
 - `render_coordinate_transform.ts`: transforms from a scale's chunk coordinates to the view's coordinates.
 
 #### `src/state/`: navigation and coordinates

@@ -15,21 +15,90 @@
  */
 
 import type { ChunkManager } from "#src/chunk_manager/frontend.js";
-import type { DisplayContext } from "#src/layer/display_context.js";
-import { RenderViewport } from "#src/layer/display_context.js";
-import type { ImageUserLayer } from "#src/layer/index.js";
+import { RenderViewport } from "#src/render/projection_parameters.js";
 import { SliceView } from "#src/sliceview/frontend.js";
+import type { ImageRenderLayer } from "#src/sliceview/renderlayer.js";
+import type { WatchableValueInterface } from "#src/state/trackable_value.js";
+import { animationFrameDebounce } from "#src/util/animation_frame_debounce.js";
 import { RefCounted } from "#src/util/disposable.js";
 import { vec3 } from "#src/util/geom.js";
 import { Buffer } from "#src/webgl/buffer.js";
 import type { GL } from "#src/webgl/context.js";
+import { initializeWebGL } from "#src/webgl/context.js";
 import type { ShaderProgram } from "#src/webgl/shader.js";
 import { ShaderBuilder } from "#src/webgl/shader.js";
+
+/**
+ * The canvas shared by all panels, covering `container`.  After `scheduleRedraw`, `draw` runs on
+ * the next animation frame and lets each panel draw into its own region of the canvas.
+ */
+export class DisplayContext extends RefCounted {
+  canvas = document.createElement("canvas");
+  gl: GL;
+  panels = new Set<SliceViewPanel>();
+  // Incremented when panels are added; the canvas size and panel bounds are then recomputed.
+  resizeGeneration = 0;
+  boundsGeneration = -1;
+
+  constructor(public container: HTMLElement) {
+    super();
+    const { canvas } = this;
+    container.style.position = "relative";
+    canvas.style.position = "absolute";
+    canvas.style.top = "0px";
+    canvas.style.left = "0px";
+    canvas.style.width = "100%";
+    canvas.style.height = "100%";
+    canvas.style.zIndex = "0";
+    container.appendChild(canvas);
+    this.gl = initializeWebGL(canvas);
+  }
+
+  addPanel(panel: SliceViewPanel) {
+    this.panels.add(panel);
+    ++this.resizeGeneration;
+    this.scheduleRedraw();
+  }
+
+  readonly scheduleRedraw = this.registerCancellable(
+    animationFrameDebounce(() => this.draw()),
+  );
+
+  ensureBoundsUpdated() {
+    const { resizeGeneration } = this;
+    if (this.boundsGeneration === resizeGeneration) return;
+    const { canvas } = this;
+    canvas.width = canvas.offsetWidth;
+    canvas.height = canvas.offsetHeight;
+    this.boundsGeneration = resizeGeneration;
+  }
+
+  draw() {
+    const { gl } = this;
+    this.ensureBoundsUpdated();
+    gl.clearColor(0.0, 0.0, 0.0, 0.0);
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+    for (const panel of this.panels) {
+      panel.ensureBoundsUpdated();
+      const { renderViewport } = panel;
+      if (renderViewport.width === 0 || renderViewport.height === 0) continue;
+      panel.draw();
+    }
+
+    // Ensure the alpha buffer is set to 1.
+    gl.disable(gl.SCISSOR_TEST);
+    gl.clearColor(1.0, 1.0, 1.0, 1.0);
+    gl.colorMask(false, false, false, true);
+    gl.clear(gl.COLOR_BUFFER_BIT);
+    gl.colorMask(true, true, true, true);
+  }
+}
 
 export interface SliceViewerState {
   display: DisplayContext;
   chunkManager: ChunkManager;
-  layerManager: ImageUserLayer;
+  // The render layer that draws the volume; `undefined` until the volume has loaded.
+  renderLayer: WatchableValueInterface<ImageRenderLayer | undefined>;
 }
 
 /**
@@ -150,10 +219,10 @@ export class SliceViewPanel extends RefCounted {
     public viewer: SliceViewerState,
   ) {
     super();
-    const { display, chunkManager, layerManager } = viewer;
+    const { display, chunkManager, renderLayer } = viewer;
     display.addPanel(this);
 
-    this.sliceView = new SliceView(chunkManager, layerManager, navigationState);
+    this.sliceView = new SliceView(chunkManager, renderLayer, navigationState);
 
     this.registerDisposer(
       this.sliceView.viewChanged.add(() => display.scheduleRedraw()),

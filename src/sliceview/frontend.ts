@@ -18,8 +18,8 @@ import { debounce } from "es-toolkit";
 import { ChunkState } from "#src/chunk_manager/base.js";
 import type { ChunkManager } from "#src/chunk_manager/frontend.js";
 import { Chunk, ChunkSource } from "#src/chunk_manager/frontend.js";
-import type { ImageUserLayer } from "#src/layer/index.js";
 import type { NavigationState } from "#src/state/navigation_state.js";
+import type { WatchableValueInterface } from "#src/state/trackable_value.js";
 import { updateProjectionParametersFromInverseViewAndProjection } from "#src/render/projection_parameters.js";
 import type {
   ChunkDisplayTransformParameters,
@@ -54,7 +54,7 @@ import {
   FillValueTexture,
   TextureLayout,
 } from "#src/sliceview/chunk_format.js";
-import { ImageRenderLayer } from "#src/sliceview/renderlayer.js";
+import type { ImageRenderLayer } from "#src/sliceview/renderlayer.js";
 import type { TypedArray } from "#src/util/array.js";
 import type { DataType } from "#src/util/data_type.js";
 import type { Borrowed, Disposer, Owned } from "#src/util/disposable.js";
@@ -139,7 +139,8 @@ export class SliceView extends SliceViewBase {
 
   constructor(
     public chunkManager: ChunkManager,
-    public layerManager: ImageUserLayer,
+    // The render layer to draw; `undefined` until the volume has loaded.
+    public renderLayer: WatchableValueInterface<ImageRenderLayer | undefined>,
     public navigationState: Owned<NavigationState>,
   ) {
     super(
@@ -186,7 +187,7 @@ export class SliceView extends SliceViewBase {
       projectionParameters: sharedProjectionParameters.rpcId,
     });
     this.registerDisposer(
-      layerManager.layersChanged.add(() => {
+      renderLayer.changed.add(() => {
         this.updateVisibleLayers();
       }),
     );
@@ -245,7 +246,7 @@ export class SliceView extends SliceViewBase {
     );
   }
 
-  // Registers render layers added since the last update, and sends their sources to the worker.
+  // Registers the render layer once it exists, and sends its sources to the worker.
   private updateVisibleLayersNow() {
     if (this.wasDisposed) {
       return false;
@@ -256,28 +257,31 @@ export class SliceView extends SliceViewBase {
     const rpcMessage: any = { id: this.rpcId };
     let changed = false;
     visibleLayerList.length = 0;
-    for (const renderLayer of this.layerManager.readyRenderLayers()) {
-      if (!(renderLayer instanceof ImageRenderLayer)) continue;
+    const renderLayer = this.renderLayer.value;
+    if (renderLayer !== undefined) {
       visibleLayerList.push(renderLayer);
-      if (visibleLayers.has(renderLayer)) continue;
-      const disposers: Disposer[] = [];
-      const layerInfo: FrontendVisibleLayerSources = {
-        allSources: getVolumetricTransformedSources(
-          renderLayer.transform.value,
-          renderLayer.getSources(),
-          renderLayer,
-        ),
-        visibleSources: [],
-        disposers,
-        displayDimensionRenderInfo,
-      };
-      visibleLayers.set(renderLayer.addRef(), layerInfo);
-      this.bindVisibleRenderLayer(renderLayer, disposers);
-      rpcMessage.layerId = renderLayer.rpcId;
-      rpcMessage.sources = serializeAllTransformedSources(layerInfo.allSources);
-      this.flushBackendProjectionParameters();
-      rpc.invoke(SLICEVIEW_ADD_VISIBLE_LAYER_RPC_ID, rpcMessage);
-      changed = true;
+      if (!visibleLayers.has(renderLayer)) {
+        const disposers: Disposer[] = [];
+        const layerInfo: FrontendVisibleLayerSources = {
+          allSources: getVolumetricTransformedSources(
+            renderLayer.transform.value,
+            renderLayer.getSources(),
+            renderLayer,
+          ),
+          visibleSources: [],
+          disposers,
+          displayDimensionRenderInfo,
+        };
+        visibleLayers.set(renderLayer.addRef(), layerInfo);
+        this.bindVisibleRenderLayer(renderLayer, disposers);
+        rpcMessage.layerId = renderLayer.rpcId;
+        rpcMessage.sources = serializeAllTransformedSources(
+          layerInfo.allSources,
+        );
+        this.flushBackendProjectionParameters();
+        rpc.invoke(SLICEVIEW_ADD_VISIBLE_LAYER_RPC_ID, rpcMessage);
+        changed = true;
+      }
     }
     if (changed) {
       this.visibleSourcesStale = true;
