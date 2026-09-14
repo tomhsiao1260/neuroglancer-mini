@@ -131,7 +131,10 @@ Visit the deployed version at [neuroglancer-mini.vercel.app](https://neuroglance
 
 ### Supported Data
 
-The viewer opens one OME-Zarr multiscale volume stored as Zarr v2. Click "choose .zarr folder" and pick the `.zarr` folder itself (the one containing `.zattrs`); files are then read from that folder through the File System Access API.
+The viewer opens one OME-Zarr multiscale volume stored as Zarr v2, from either of two places:
+
+- A local folder: click "choose .zarr folder" and pick the `.zarr` folder itself (the one containing `.zattrs`). Files are read from it through the File System Access API.
+- An HTTP server: open the viewer with `?zarr=<url>`, where `<url>` is the URL of the `.zarr` folder, e.g. `http://localhost:3000/?zarr=http://localhost:9000/scroll.zarr`. Any server that returns the files (and 404 for missing ones) works, as long as it allows cross-origin requests (CORS), e.g. `npx http-server <folder containing scroll.zarr> -p 9000 --cors`.
 
 - Metadata: `.zattrs` with OME `multiscales`, and a `.zarray` for each scale (C order).
 - Compressors: blosc and null (raw).
@@ -146,11 +149,11 @@ The code is split between two threads. The **main thread** owns the WebGL canvas
 
 ### How a chunk gets to the screen
 
-1. **Start-up** (`src/main.ts`): the chosen folder is turned into a file tree, which is sent to the worker once it reports ready. `main.ts` also creates the canvas, the worker and its RPC channel, and the chunk manager, with these limits: 100 simultaneous downloads, 2 GB of system memory and 1 GB of GPU memory. It then creates the three panels.
+1. **Start-up** (`src/main.ts`): the store to read from is chosen: a local folder picked with the button, or the HTTP URL given as `?zarr=`. It is described by a `ZarrStoreSpec`, which is also sent to the worker. `main.ts` also creates the canvas, the worker and its RPC channel, and the chunk manager, with these limits: 100 simultaneous downloads, 2 GB of system memory and 1 GB of GPU memory. It then creates the three panels.
 2. **Loading the volume** (`src/main.ts`, `src/datasource/zarr/frontend.ts`): the viewer reads the metadata of every scale, creates one chunk source per scale, sets the coordinate spaces from the volume bounds and creates the render layer.
 3. **Choosing chunks** (`src/render/backend.ts`): for each panel, the worker picks the scales that match the current zoom. It then finds the chunks the cross-section plane cuts through and requests them as `VISIBLE`. The prefetching code, which would request chunks ahead of the current motion as `PREFETCH`, currently requests nothing: the transform it uses to turn motion into chunk coordinates (`combinedGlobalLocalToChunkTransform`) is never filled in.
 4. **Queueing** (`src/chunk_manager/backend.ts`): chunks are ordered by tier and priority. The highest-priority chunks are downloaded while capacity allows, and lower-priority chunks are evicted to make room.
-5. **Downloading** (`src/datasource/zarr/backend.ts`, `decode.ts`): the worker reads the chunk file from the file tree and decodes it.
+5. **Downloading** (`src/datasource/zarr/backend.ts`, `decode.ts`): the worker reads the chunk file from the store and decodes it.
 6. **Upload** (`src/chunk_manager/frontend.ts`, `src/render/frontend.ts`): the chunk data is transferred to the main thread in a `Chunk.update` message. The main thread applies these updates in 30 ms time slices and uploads each chunk to a texture.
 7. **Drawing** (`src/render/panel.ts`, `src/render/renderlayer.ts`): on each animation frame, every panel renders its slice into an offscreen texture and then draws that texture into its part of the canvas. Only chunks already on the GPU are drawn, and finer scales are drawn over coarser ones.
 
@@ -184,7 +187,8 @@ The code is split between two threads. The **main thread** owns the WebGL canvas
 - `frontend.ts`: `loadZarrVolume` and `MultiscaleVolumeChunkSource`, which creates one chunk source per scale and maps zarr's (z, y, x) axis order to chunk order.
 - `backend.ts` (worker): `ZarrVolumeChunkSource.download` reads one chunk file and decodes it.
 - `decode.ts`: blosc or raw decoding, size check and endianness conversion.
-- `base.ts`: chunk source parameters sent to the worker (URL and metadata).
+- `store.ts`: `ZarrStore`, where the store's files are read from: `HttpStore` (any HTTP server) or `DirectoryStore` (a local folder through the File System Access API). A `ZarrStoreSpec` describes the store so that the worker can create its own.
+- `base.ts`: chunk source parameters sent to the worker (store, path of the scale's array, and metadata).
 
 `src/datasource/file_protocols.md` and `src/datasource/zarr/README.md` are notes from the original Neuroglancer and describe more protocols and formats than this version supports.
 
@@ -213,11 +217,7 @@ The code is split between two threads. The **main thread** owns the WebGL canvas
 #### `src/util/`
 
 - Data: `data_type.ts`, `numpy_dtype.ts`, `endian.ts`, `array.ts`.
-- Files:
-  - `file_system.ts`: reads the chosen folder into a file tree.
-  - `http_request.ts`: looks a URL's path up in the file tree. The first path segment (the `.zarr` folder name) is dropped.
-  - `file_reader.ts`: reads one chunk file; a missing chunk returns `undefined`.
-  - `json.ts`: metadata validation and `stableStringify`.
+- `json.ts`: metadata validation and `stableStringify`.
 - Priority queues for the chunk manager:
   - `pairing_heap.ts` and `linked_list.ts`: the interfaces.
   - `pairing_heap.0.ts` / `.1.ts` and `linked_list.0.ts` / `.1.ts`: two copies of each with different link fields (`next0` vs `next1`), so one chunk can sit in the system memory eviction queue and in a download or GPU queue at the same time.

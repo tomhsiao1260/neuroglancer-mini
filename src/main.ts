@@ -22,6 +22,7 @@ import {
   ChunkQueueManager,
 } from "#src/chunk_manager/frontend.js";
 import { loadZarrVolume } from "#src/datasource/zarr/frontend.js";
+import type { ZarrStoreSpec } from "#src/datasource/zarr/store.js";
 import {
   makeCombinedCoordinateSpace,
   TrackableCoordinateSpace,
@@ -38,12 +39,13 @@ import {
 } from "#src/state/navigation_state.js";
 import { DisplayContext, SliceViewPanel } from "#src/render/panel.js";
 import { quat } from "#src/util/geom.js";
-import { handleFileBtnOnClick } from "#src/util/file_system.js";
 
-// Chunks and metadata are read from the folder the user picked.  Only the path after the first
-// component (here `scroll.zarr`) is used to look files up in `self.fileTree`; see
-// `util/http_request.ts`.
-const DATA_URL = "http://localhost:9000/scroll.zarr";
+declare global {
+  interface Window {
+    // File System Access API (Chrome and Edge).
+    showDirectoryPicker(): Promise<FileSystemDirectoryHandle>;
+  }
+}
 
 // root container element
 const root = document.querySelector<HTMLDivElement>('#app');
@@ -54,11 +56,21 @@ const root = document.querySelector<HTMLDivElement>('#app');
  */
 makeUploadButton();
 
+// With `?zarr=<url>` the store is read over HTTP from that URL; otherwise the user picks a local
+// `.zarr` folder with the button.
+const zarrUrl = new URLSearchParams(window.location.search).get("zarr");
+if (zarrUrl !== null) {
+  makeMinimalViewer({ kind: "http", url: zarrUrl });
+}
+
 function makeUploadButton() {
   const button = document.createElement("button");
   button.id = "upload";
   button.innerText = "choose .zarr folder";
-  button.onclick = makeMinimalViewer;
+  button.onclick = async () => {
+    const handle = await window.showDirectoryPicker();
+    makeMinimalViewer({ kind: "directory", handle });
+  };
 
   const loading = document.createElement("div");
   loading.id = "loading";
@@ -72,16 +84,12 @@ function makeUploadButton() {
 /**
  * Creates a minimal viewer for 3D volume data visualization
  */
-async function makeMinimalViewer() {
-  // Load data using file system API
-  const fileTree = await handleFileBtnOnClick();
-  self.fileTree = fileTree;
-
+function makeMinimalViewer(store: ZarrStoreSpec) {
   const target = document.createElement("div");
   target.id = "neuroglancer-container";
   root?.appendChild(target);
   const display = new DisplayContext(target);
-  const viewer = new Viewer(display);
+  const viewer = new Viewer(display, store);
 
   // Handle loading state
   loading(viewer.dataContext.worker);
@@ -142,14 +150,6 @@ class DataManagementContext extends RefCounted {
     // Setup RPC communication with the worker
     this.rpc = new RPC(this.worker, true);
 
-    // Handle worker ready state and file tree initialization
-    this.worker.addEventListener("message", (e: MessageEvent<{ functionName: string }>) => {
-      const isReady = e.data.functionName === READY_ID;
-      if (isReady) {
-        this.worker.postMessage({ fileTree: self.fileTree });
-      }
-    });
-
     // Initialize chunk queue manager with resource limits
     this.chunkQueueManager = this.registerDisposer(
       new ChunkQueueManager(
@@ -205,7 +205,11 @@ class Viewer extends RefCounted {
   // The render layer that draws the volume, set once the volume has loaded.
   renderLayer = new WatchableValue<ImageRenderLayer | undefined>(undefined);
 
-  constructor(public display: DisplayContext) {
+  constructor(
+    public display: DisplayContext,
+    // Where the volume is read from.
+    public store: ZarrStoreSpec,
+  ) {
     super();
 
     this.dataContext = new DataManagementContext(display.gl);
@@ -240,7 +244,7 @@ class Viewer extends RefCounted {
   // Loads the zarr volume, sets the coordinate spaces from the volume bounds and creates the render
   // layer that draws the volume.
   private async loadVolume() {
-    const volume = await loadZarrVolume(this.dataContext.chunkManager, DATA_URL);
+    const volume = await loadZarrVolume(this.dataContext.chunkManager, this.store);
     if (this.wasDisposed) return;
 
     const { modelSpace } = volume;

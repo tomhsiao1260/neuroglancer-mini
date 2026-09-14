@@ -17,34 +17,40 @@
 import { WithParameters } from "#src/chunk_manager/backend.js";
 import { VolumeChunkSourceParameters } from "#src/datasource/zarr/base.js";
 import { decodeChunk } from "#src/datasource/zarr/decode.js";
+import { createZarrStore } from "#src/datasource/zarr/store.js";
 import type { VolumeChunk } from "#src/render/backend.js";
 import { VolumeChunkSource } from "#src/render/backend.js";
-import { getFileReader } from "#src/util/file_reader.js";
 import { registerSharedObject } from "#src/worker/worker_rpc.js";
 
 /**
  * Worker side of one scale of a zarr volume.  The chunk manager calls `download` for each chunk it
- * decides to load: the chunk file is read and decoded into `chunk.data`.  A chunk missing from the
- * store keeps `data === null` and is drawn with the fill value.
+ * decides to load: the chunk file is read from the store and decoded into `chunk.data`.  A chunk
+ * missing from the store keeps `data === null` and is drawn with the fill value.
  */
 @registerSharedObject()
 export class ZarrVolumeChunkSource extends WithParameters(
   VolumeChunkSource,
   VolumeChunkSourceParameters,
 ) {
-  private fileReader = getFileReader(this.parameters.url + "/");
+  private store = createZarrStore(this.parameters.store);
 
   async download(chunk: VolumeChunk) {
     chunk.chunkDataSize = this.spec.chunkDataSize;
-    const { metadata } = this.parameters;
+    const { metadata, path } = this.parameters;
     // The chunk grid position is in (x, y, z) order, while zarr chunk keys list the chunk indices in
     // (z, y, x) order, e.g. `52/24/18`.
-    const key = Array.from(chunk.chunkGridPosition)
+    const key = `${path}/${Array.from(chunk.chunkGridPosition)
       .reverse()
-      .join(metadata.dimensionSeparator);
-    const response = await this.fileReader.read(key);
-    if (response !== undefined) {
-      chunk.data = await decodeChunk(metadata, response.data);
+      .join(metadata.dimensionSeparator)}`;
+    let data: Uint8Array | undefined;
+    try {
+      data = await this.store.get(key);
+    } catch (e) {
+      // Drawn like a missing chunk; the failure is only reported.
+      console.error(`Failed to read chunk: ${key}`, e);
+    }
+    if (data !== undefined) {
+      chunk.data = await decodeChunk(metadata, data);
     }
   }
 }

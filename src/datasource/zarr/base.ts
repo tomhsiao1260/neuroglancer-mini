@@ -1,6 +1,6 @@
 /**
  * @license
- * Copyright 2019 Google Inc.
+ * Copyright 2020 Google Inc.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -15,9 +15,13 @@
  */
 
 import type { ArrayMetadata } from "#src/datasource/zarr/metadata.js";
+import type { ZarrStoreSpec } from "#src/datasource/zarr/store.js";
 
 export class VolumeChunkSourceParameters {
-  url: string;
+  // The store holding the volume.
+  store: ZarrStoreSpec;
+  // Path of this scale's array within the store, e.g. `0`.
+  path: string;
   metadata: ArrayMetadata;
   static RPC_ID = "zarr/VolumeChunkSource";
 }

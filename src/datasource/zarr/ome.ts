@@ -30,7 +30,8 @@ import * as matrix from "#src/util/matrix.js";
 import { allSiPrefixes } from "#src/util/si_units.js";
 
 export interface OmeMultiscaleScale {
-  url: string;
+  // Path of the scale's array within the store, e.g. `0`.
+  path: string;
   transform: Float64Array;
 }
 
@@ -177,25 +178,17 @@ function parseOmeCoordinateTransforms(
   return transform;
 }
 
-function parseMultiscaleScale(
-  rank: number,
-  url: string,
-  obj: unknown,
-): OmeMultiscaleScale {
+function parseMultiscaleScale(rank: number, obj: unknown): OmeMultiscaleScale {
   const path = verifyObjectProperty(obj, "path", verifyString);
   const transform = verifyObjectProperty(
     obj,
     "coordinateTransformations",
     (x) => parseOmeCoordinateTransforms(rank, x),
   );
-  const scaleUrl = `${url}/${path}`;
-  return { url: scaleUrl, transform };
+  return { path, transform };
 }
 
-function parseOmeMultiscale(
-  url: string,
-  multiscale: unknown,
-): OmeMultiscaleMetadata {
+function parseOmeMultiscale(multiscale: unknown): OmeMultiscaleMetadata {
   const coordinateSpace = verifyObjectProperty(
     multiscale,
     "axes",
@@ -209,7 +202,7 @@ function parseOmeMultiscale(
   );
   const scales = verifyObjectProperty(multiscale, "datasets", (obj) =>
     parseArray(obj, (x) => {
-      const scale = parseMultiscaleScale(rank, url, x);
+      const scale = parseMultiscaleScale(rank, x);
       scale.transform = matrix.multiply(
         new Float64Array((rank + 1) ** 2),
         rank + 1,
@@ -263,7 +256,6 @@ function parseOmeMultiscale(
 }
 
 export function parseOmeMetadata(
-  url: string,
   attrs: any,
 ): OmeMultiscaleMetadata | undefined {
   const multiscales = attrs.multiscales;
@@ -288,7 +280,7 @@ export function parseOmeMetadata(
       );
       continue;
     }
-    return parseOmeMultiscale(url, multiscale);
+    return parseOmeMultiscale(multiscale);
   }
   if (errors.length !== 0) {
     throw new Error(errors[0]);

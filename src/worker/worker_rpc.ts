@@ -71,11 +71,6 @@ export class RPC {
     }
     target.onmessage = (e) => {
       const data = e.data;
-      if (data.fileTree) {
-        // The main thread sends the files of the picked folder once the worker is ready.
-        self.fileTree = data.fileTree;
-        return;
-      }
       handlers.get(data.functionName)!.call(this, data);
     };
   }

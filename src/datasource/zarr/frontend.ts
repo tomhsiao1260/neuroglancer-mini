@@ -26,6 +26,8 @@ import type { ArrayMetadata } from "#src/datasource/zarr/metadata.js";
 import { parseV2Metadata } from "#src/datasource/zarr/metadata.js";
 import type { OmeMultiscaleMetadata } from "#src/datasource/zarr/ome.js";
 import { parseOmeMetadata } from "#src/datasource/zarr/ome.js";
+import type { ZarrStore, ZarrStoreSpec } from "#src/datasource/zarr/store.js";
+import { createZarrStore } from "#src/datasource/zarr/store.js";
 import { makeDefaultVolumeChunkSpecifications } from "#src/render/base.js";
 import type { SliceViewSingleResolutionSource } from "#src/render/frontend.js";
 import {
@@ -35,11 +37,6 @@ import {
 import { transposeNestedArrays } from "#src/util/array.js";
 import { DataType } from "#src/util/data_type.js";
 import type { Borrowed } from "#src/util/disposable.js";
-import {
-  cancellableFetchOk,
-  isNotFoundError,
-  responseJson,
-} from "#src/util/http_request.js";
 import { verifyObject } from "#src/util/json.js";
 import * as matrix from "#src/util/matrix.js";
 
@@ -49,12 +46,14 @@ class ZarrVolumeChunkSource extends WithParameters(
 ) {}
 
 interface ZarrScaleInfo {
-  url: string;
+  // Path of the scale's array within the store.
+  path: string;
   transform: Float64Array;
   metadata: ArrayMetadata;
 }
 
 interface ZarrMultiscaleInfo {
+  store: ZarrStoreSpec;
   coordinateSpace: CoordinateSpace;
   dataType: DataType;
   scales: ZarrScaleInfo[];
@@ -123,7 +122,8 @@ export class MultiscaleVolumeChunkSource extends GenericMultiscaleVolumeChunkSou
               {
                 spec,
                 parameters: {
-                  url: scale.url,
+                  store: this.multiscale.store,
+                  path: scale.path,
                   metadata,
                 },
               },
@@ -136,21 +136,21 @@ export class MultiscaleVolumeChunkSource extends GenericMultiscaleVolumeChunkSou
   }
 }
 
-async function getJsonResource(url: string): Promise<any | undefined> {
-  try {
-    return await cancellableFetchOk(url, responseJson);
-  } catch (e) {
-    if (isNotFoundError(e)) return undefined;
-    throw e;
-  }
+// Reads and parses the JSON file at `key`, or returns `undefined` if the store has no such file.
+async function readJson(store: ZarrStore, key: string): Promise<any> {
+  const data = await store.get(key);
+  if (data === undefined) return undefined;
+  return JSON.parse(new TextDecoder().decode(data));
 }
 
 async function resolveOmeMultiscale(
+  storeSpec: ZarrStoreSpec,
+  store: ZarrStore,
   multiscale: OmeMultiscaleMetadata,
 ): Promise<ZarrMultiscaleInfo> {
   const scaleZarrMetadata: ArrayMetadata[] = await Promise.all(
     multiscale.scales.map(async (scale) =>
-      parseV2Metadata(await getJsonResource(`${scale.url}/.zarray`)),
+      parseV2Metadata(await readJson(store, `${scale.path}/.zarray`)),
     ),
   );
   const dataType = scaleZarrMetadata[0].dataType;
@@ -162,14 +162,14 @@ async function resolveOmeMultiscale(
     if (zarrMetadata.rank !== rank) {
       throw new Error(
         `Expected zarr array at ${JSON.stringify(
-          scale.url,
+          scale.path,
         )} to have rank ${rank}, ` + `but received: ${zarrMetadata.rank}`,
       );
     }
     if (zarrMetadata.dataType !== dataType) {
       throw new Error(
         `Expected zarr array at ${JSON.stringify(
-          scale.url,
+          scale.path,
         )} to have data type ` +
           `${DataType[dataType]}, but received: ${
             DataType[zarrMetadata.dataType]
@@ -200,10 +200,11 @@ async function resolveOmeMultiscale(
   });
 
   return {
+    store: storeSpec,
     coordinateSpace: resolvedCoordinateSpace,
     dataType,
     scales: multiscale.scales.map((scale, i) => ({
-      url: scale.url,
+      path: scale.path,
       transform: scale.transform,
       metadata: scaleZarrMetadata[i],
     })),
@@ -211,20 +212,21 @@ async function resolveOmeMultiscale(
 }
 
 /**
- * Loads an OME-Zarr (zarr v2) multiscale volume: reads `.zattrs` for the list of scales, then the
- * `.zarray` of every scale.
+ * Loads an OME-Zarr (zarr v2) multiscale volume from `storeSpec`: reads `.zattrs` for the list of
+ * scales, then the `.zarray` of every scale.
  */
 export async function loadZarrVolume(
   chunkManager: ChunkManager,
-  url: string,
+  storeSpec: ZarrStoreSpec,
 ): Promise<MultiscaleVolumeChunkSource> {
-  const zattrs = verifyObject(await getJsonResource(`${url}/.zattrs`));
-  const multiscale = parseOmeMetadata(url, zattrs);
+  const store = createZarrStore(storeSpec);
+  const zattrs = verifyObject(await readJson(store, ".zattrs"));
+  const multiscale = parseOmeMetadata(zattrs);
   if (multiscale === undefined) {
     throw new Error("No OME multiscale metadata found");
   }
   return new MultiscaleVolumeChunkSource(
     chunkManager,
-    await resolveOmeMultiscale(multiscale),
+    await resolveOmeMultiscale(storeSpec, store, multiscale),
   );
 }
