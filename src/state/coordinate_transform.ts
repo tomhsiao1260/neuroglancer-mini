@@ -225,6 +225,109 @@ export function getBoundingBoxCenter(
   return out;
 }
 
+export function computeCombinedLowerUpperBound(
+  boundingBox: TransformedBoundingBox,
+  outputDimension: number,
+  outputRank: number,
+): { lower: number; upper: number } | undefined {
+  const {
+    box: { lowerBounds: baseLowerBounds, upperBounds: baseUpperBounds },
+    transform,
+  } = boundingBox;
+  const inputRank = baseLowerBounds.length;
+  const stride = outputRank;
+  const offset = transform[stride * inputRank + outputDimension];
+  let targetLower = offset;
+  let targetUpper = offset;
+  let hasCoefficient = false;
+  for (let inputDim = 0; inputDim < inputRank; ++inputDim) {
+    const c = transform[stride * inputDim + outputDimension];
+    if (c === 0) continue;
+    const lower = c * baseLowerBounds[inputDim];
+    const upper = c * baseUpperBounds[inputDim];
+    targetLower += Math.min(lower, upper);
+    targetUpper += Math.max(lower, upper);
+    hasCoefficient = true;
+  }
+  if (!hasCoefficient) return undefined;
+  return { lower: targetLower, upper: targetUpper };
+}
+
+const INTEGER_BOUNDS_EPSILON = 1e-3;
+
+export function computeCombinedBounds(
+  boundingBoxes: readonly TransformedBoundingBox[],
+  outputRank: number,
+): CoordinateSpaceBounds {
+  const lowerBounds = new Float64Array(outputRank);
+  const upperBounds = new Float64Array(outputRank);
+  lowerBounds.fill(Number.NEGATIVE_INFINITY);
+  upperBounds.fill(Number.POSITIVE_INFINITY);
+
+  // Number of bounding boxes for which both lower and upper bound has a fractional part of `0.5`.
+  const halfIntegerBounds = new Array<number>(outputRank);
+  halfIntegerBounds.fill(0);
+
+  // Number of bounding boxes for which both lower and upper bound has a fractional part of `0.0`.
+  const integerBounds = new Array<number>(outputRank);
+  integerBounds.fill(0);
+
+  for (const boundingBox of boundingBoxes) {
+    for (let outputDim = 0; outputDim < outputRank; ++outputDim) {
+      const result = computeCombinedLowerUpperBound(
+        boundingBox,
+        outputDim,
+        outputRank,
+      );
+      if (result === undefined) continue;
+      let { lower: targetLower, upper: targetUpper } = result;
+      if (Number.isFinite(targetLower) && Number.isFinite(targetUpper)) {
+        let lowerRound: number;
+        let upperRound: number;
+        let lowerFloor: number;
+        let upperFloor: number;
+        if (
+          Math.abs(targetLower - (lowerRound = Math.round(targetLower))) <
+            INTEGER_BOUNDS_EPSILON &&
+          Math.abs(targetUpper - (upperRound = Math.round(targetUpper))) <
+            INTEGER_BOUNDS_EPSILON
+        ) {
+          ++integerBounds[outputDim];
+          targetLower = lowerRound;
+          targetUpper = upperRound;
+        } else if (
+          Math.abs(targetLower - (lowerFloor = Math.floor(targetLower)) - 0.5) <
+            INTEGER_BOUNDS_EPSILON &&
+          Math.abs(targetUpper - (upperFloor = Math.floor(targetUpper)) - 0.5) <
+            INTEGER_BOUNDS_EPSILON
+        ) {
+          ++halfIntegerBounds[outputDim];
+          targetLower = lowerFloor + 0.5;
+          targetUpper = upperFloor + 0.5;
+        }
+      }
+      lowerBounds[outputDim] =
+        lowerBounds[outputDim] === Number.NEGATIVE_INFINITY
+          ? targetLower
+          : Math.min(lowerBounds[outputDim], targetLower);
+      upperBounds[outputDim] =
+        upperBounds[outputDim] === Number.POSITIVE_INFINITY
+          ? targetUpper
+          : Math.max(upperBounds[outputDim], targetUpper);
+    }
+  }
+
+  const voxelCenterAtIntegerCoordinates = integerBounds.map(
+    (integerCount, i) => {
+      const halfIntegerCount = halfIntegerBounds[i];
+      // If all bounding boxes have half-integer bounds, assume voxel center is at integer
+      // coordinates.  Otherwise, assume voxel center is at half-integer coordinates.
+      return halfIntegerCount > 0 && integerCount === 0;
+    },
+  );
+  return { lowerBounds, upperBounds, voxelCenterAtIntegerCoordinates };
+}
+
 export interface TransformedBoundingBox {
   box: BoundingBox;
 
@@ -375,11 +478,11 @@ export class CoordinateSpaceCombiner {
   }
 
   private update() {
-    const bounds = {
-      lowerBounds: new Float64Array([-0.5, -0.5, -0.5]),
-      upperBounds: new Float64Array([767.5, 767.5, 767.5]),
-      voxelCenterAtIntegerCoordinates: [true, true, true],
+    const boundingBoxes: TransformedBoundingBox[] = [];
+    for (const { space } of this.bindings) {
+      boundingBoxes.push(...space.value.boundingBoxes);
     }
+    const bounds = computeCombinedBounds(boundingBoxes, 3);
 
     const newCombined = {
       boundingBoxes: [

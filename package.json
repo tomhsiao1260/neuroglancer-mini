@@ -13,8 +13,9 @@
     "vite": "^6.3.1"
   },
   "dependencies": {
+    "es-toolkit": "^1.36.0",
     "gl-matrix": "^3.4.3",
-    "es-toolkit": "^1.36.0"
+    "numcodecs": "^0.3.2"
   },
   "imports": {
     "#src/*.js": "./src/*.ts",

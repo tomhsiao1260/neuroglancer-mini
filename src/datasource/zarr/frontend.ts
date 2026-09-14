@@ -28,6 +28,7 @@ import type {
 } from "#src/datasource/index.js";
 import { DataSourceProvider } from "#src/datasource/index.js";
 import { VolumeChunkSourceParameters } from "#src/datasource/zarr/base.js";
+import "#src/datasource/zarr/codec/blosc/resolve.js";
 import "#src/datasource/zarr/codec/bytes/resolve.js";
 import "#src/datasource/zarr/codec/gzip/resolve.js";
 import type {

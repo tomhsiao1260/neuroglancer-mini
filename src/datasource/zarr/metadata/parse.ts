@@ -339,6 +339,18 @@ export function parseV2Metadata(obj: unknown): any {
         endian: numpyDtype.endianness === Endianness.LITTLE ? "little" : "big",
       },
     });
+    verifyObjectProperty(obj, "compressor", (compressor) => {
+      if (compressor === null) return;
+      verifyObject(compressor);
+      const id = verifyObjectProperty(compressor, "id", verifyString);
+      switch (id) {
+        case "blosc":
+          codecs.push({ name: "blosc", configuration: compressor });
+          break;
+        default:
+          throw new Error(`Unsupported compressor: ${JSON.stringify(id)}`);
+      }
+    });
 
     const codecChainSpec = parseCodecChainSpec(codecs, {
       dataType,

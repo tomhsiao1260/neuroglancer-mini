@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { cancellableFetchOk } from "#src/util/http_request.js";
+import { cancellableFetchOk, isNotFoundError } from "#src/util/http_request.js";
 
 export interface FileReadResponse {
   data: Uint8Array;
@@ -36,7 +36,10 @@ export class SimpleFileReader {
         totalSize: data.byteLength,
       };
     } catch (e) {
-      console.error(`Failed to read file: ${url}`, e);
+      // Chunks absent from a sparse volume are expected; only report other failures.
+      if (!isNotFoundError(e)) {
+        console.error(`Failed to read file: ${url}`, e);
+      }
       return undefined;
     }
   }

@@ -14,6 +14,17 @@
  * limitations under the License.
  */
 
-// Register all codecs
-import "./bytes/decode.ts";
-import "#src/datasource/zarr/codec/blosc/decode.js";
+import { CodecKind } from "#src/datasource/zarr/codec/index.js";
+import { registerCodec } from "#src/datasource/zarr/codec/resolve.js";
+import { verifyObject } from "#src/util/json.js";
+
+export type Configuration = object;
+
+registerCodec({
+  name: "blosc",
+  kind: CodecKind.bytesToBytes,
+  resolve(configuration: unknown): { configuration: Configuration } {
+    verifyObject(configuration);
+    return { configuration: {} };
+  },
+});

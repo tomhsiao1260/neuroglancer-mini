@@ -26,6 +26,7 @@ import type {
 } from "#src/sliceview/volume/frontend.js";
 import { registerChunkFormatHandler } from "#src/sliceview/volume/frontend.js";
 import type { TypedArray, TypedArrayConstructor } from "#src/util/array.js";
+import { DATA_TYPE_ARRAY_CONSTRUCTOR } from "#src/util/data_type.js";
 import { RefCounted } from "#src/util/disposable.js";
 import { Uint64 } from "#src/util/uint64.js";
 import type { GL } from "#src/webgl/context.js";
@@ -35,6 +36,7 @@ import type {
   ShaderSamplerPrefix,
   ShaderSamplerType,
 } from "#src/webgl/shader.js";
+import { textureTargetForSamplerType } from "#src/webgl/shader.js";
 import { getShaderType } from "#src/webgl/shader_lib.js";
 import type { TextureFormat } from "#src/webgl/texture_access.js";
 import {
@@ -309,12 +311,49 @@ export class UncompressedVolumeChunk extends SingleTextureVolumeChunk<
   }
 }
 
+class FillValueChunk extends RefCounted {
+  constructor(
+    public textureLayout: TextureLayout,
+    public texture: WebGLTexture | null,
+  ) {
+    super();
+  }
+}
+
+// A chunk missing from the store arrives with no data.  All such chunks share a single-voxel
+// texture holding the fill value, so a sparse volume does not allocate a texture per chunk.
+function getFillValueChunk(
+  gl: GL,
+  chunkFormat: ChunkFormat,
+  fillValue: number | Uint64,
+  rank: number,
+  textureDims: number,
+): FillValueChunk {
+  const { dataType } = chunkFormat;
+  const array =
+    fillValue instanceof Uint64
+      ? Uint32Array.of(fillValue.low, fillValue.high)
+      : (DATA_TYPE_ARRAY_CONSTRUCTOR[dataType] as any).of(fillValue);
+  const chunkSizeInVoxels = new Uint32Array(rank);
+  chunkSizeInVoxels.fill(1);
+  const textureLayout = new TextureLayout(gl, chunkSizeInVoxels, textureDims);
+  textureLayout.strides.fill(0);
+  const texture = gl.createTexture();
+  const textureTarget =
+    textureTargetForSamplerType[chunkFormat.shaderSamplerType];
+  gl.bindTexture(textureTarget, texture);
+  chunkFormat.setTextureData(gl, textureLayout, array);
+  gl.bindTexture(textureTarget, null);
+  return new FillValueChunk(textureLayout, texture);
+}
+
 export class UncompressedChunkFormatHandler
   extends RefCounted
   implements ChunkFormatHandler
 {
   chunkFormat: ChunkFormat;
   textureLayout: TextureLayout;
+  fillValueChunk: FillValueChunk;
 
   constructor(gl: GL, spec: VolumeChunkSpecification) {
     super();
@@ -329,10 +368,28 @@ export class UncompressedChunkFormatHandler
     this.textureLayout = this.registerDisposer(
       this.chunkFormat.getTextureLayout(gl, spec.chunkDataSize),
     );
+    this.fillValueChunk = this.registerDisposer(
+      gl.memoize.get(
+        `sliceview.UncompressedChunkFormat.fillValue:${spec.chunkDataSize.length}:` +
+          `${spec.dataType}:${spec.fillValue}:${textureDims}`,
+        () =>
+          getFillValueChunk(
+            gl,
+            this.chunkFormat,
+            spec.fillValue,
+            spec.chunkDataSize.length,
+            textureDims,
+          ),
+      ),
+    );
   }
 
   getChunk(source: VolumeChunkSource, x: any) {
     const chunk = new UncompressedVolumeChunk(source, x);
+    if (chunk.data === null) {
+      chunk.texture = this.fillValueChunk.texture;
+      chunk.textureLayout = this.fillValueChunk.textureLayout;
+    }
     return chunk;
   }
 }
