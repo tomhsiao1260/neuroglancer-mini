@@ -26,16 +26,14 @@ import type { ArrayMetadata } from "#src/datasource/zarr/metadata.js";
 import { parseV2Metadata } from "#src/datasource/zarr/metadata.js";
 import type { OmeMultiscaleMetadata } from "#src/datasource/zarr/ome.js";
 import { parseOmeMetadata } from "#src/datasource/zarr/ome.js";
+import { makeDefaultVolumeChunkSpecifications } from "#src/sliceview/base.js";
 import type { SliceViewSingleResolutionSource } from "#src/sliceview/frontend.js";
-import {
-  DataType,
-  makeDefaultVolumeChunkSpecifications,
-} from "#src/sliceview/volume/base.js";
 import {
   MultiscaleVolumeChunkSource as GenericMultiscaleVolumeChunkSource,
   VolumeChunkSource,
-} from "#src/sliceview/volume/frontend.js";
+} from "#src/sliceview/frontend.js";
 import { transposeNestedArrays } from "#src/util/array.js";
+import { DataType } from "#src/util/data_type.js";
 import type { Borrowed } from "#src/util/disposable.js";
 import {
   cancellableFetchOk,

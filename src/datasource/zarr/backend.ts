@@ -17,8 +17,8 @@
 import { WithParameters } from "#src/chunk_manager/backend.js";
 import { VolumeChunkSourceParameters } from "#src/datasource/zarr/base.js";
 import { decodeChunk } from "#src/datasource/zarr/decode.js";
-import type { VolumeChunk } from "#src/sliceview/volume/backend.js";
-import { VolumeChunkSource } from "#src/sliceview/volume/backend.js";
+import type { VolumeChunk } from "#src/sliceview/backend.js";
+import { VolumeChunkSource } from "#src/sliceview/backend.js";
 import { getFileReader } from "#src/util/file_reader.js";
 import { registerSharedObject } from "#src/worker/worker_rpc.js";
 

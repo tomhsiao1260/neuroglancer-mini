@@ -18,7 +18,7 @@ import type { ChunkManager } from "#src/chunk_manager/frontend.js";
 import { loadZarrVolume } from "#src/datasource/zarr/frontend.js";
 import { getRenderLayerTransform } from "#src/render/render_coordinate_transform.js";
 import type { RenderLayer } from "#src/render/renderlayer.js";
-import { ImageRenderLayer } from "#src/sliceview/volume/image_renderlayer.js";
+import { ImageRenderLayer } from "#src/sliceview/renderlayer.js";
 import {
   makeCombinedCoordinateSpace,
   TrackableCoordinateSpace,

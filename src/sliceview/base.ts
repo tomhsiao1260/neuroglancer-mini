@@ -22,19 +22,76 @@
 
 import type { DisplayDimensionRenderInfo } from "#src/state/navigation_state.js";
 import { ProjectionParameters } from "#src/render/projection_parameters.js";
-import type { ChunkLayout } from "#src/sliceview/chunk_layout.js";
 import type {
   WatchableValueChangeInterface,
   WatchableValueInterface,
 } from "#src/state/trackable_value.js";
-import { DATA_TYPE_BYTES, DataType } from "#src/util/data_type.js";
+import type { DataType } from "#src/util/data_type.js";
 import type { Disposable } from "#src/util/disposable.js";
-import { isAABBIntersectingPlane, mat4, vec3 } from "#src/util/geom.js";
+import {
+  isAABBIntersectingPlane,
+  mat4,
+  transformVectorByMat4,
+  vec3,
+} from "#src/util/geom.js";
+import * as matrix from "#src/util/matrix.js";
 import { SharedObject } from "#src/worker/worker_rpc.js";
 
-export { DATA_TYPE_BYTES, DataType };
-
 const tempMat4 = mat4.create();
+
+/**
+ * Regular grid of chunks: every chunk has size `size` in chunk coordinates, and `transform` maps
+ * chunk coordinates to global voxel coordinates.
+ */
+export class ChunkLayout {
+  /**
+   * Size of each chunk in "chunk" coordinates.
+   */
+  size: vec3;
+
+  /**
+   * Transform from local "chunk" coordinates to global voxel coordinates.
+   */
+  transform: mat4;
+
+  /**
+   * Inverse of transform.  Transform from global voxel coordinates to "chunk" coordinates.
+   */
+  invTransform: mat4;
+
+  constructor(size: vec3, transform: mat4) {
+    this.size = vec3.clone(size);
+    this.transform = mat4.clone(transform);
+    const invTransform = mat4.create();
+    const det = matrix.inverse(invTransform, 4, transform, 4, 4);
+    if (det === 0) {
+      throw new Error("Transform is singular");
+    }
+    this.invTransform = invTransform;
+  }
+
+  toObject() {
+    return {
+      size: this.size,
+      transform: this.transform,
+    };
+  }
+
+  static fromObject(msg: any) {
+    return new ChunkLayout(msg.size, msg.transform);
+  }
+
+  /**
+   * Transform global spatial coordinates to local spatial coordinates.
+   */
+  globalToLocalSpatial(out: vec3, globalSpatial: vec3): vec3 {
+    return vec3.transformMat4(out, globalSpatial, this.invTransform);
+  }
+
+  localSpatialVectorToGlobal(out: vec3, localVector: vec3): vec3 {
+    return transformVectorByMat4(out, localVector, this.transform);
+  }
+}
 
 export interface MultiscaleVolumetricDataRenderLayer {
   localPosition: WatchableValueInterface<Float32Array>;
@@ -280,6 +337,27 @@ export function makeSliceViewChunkSpecification<
     lowerVoxelBound,
     upperVoxelBound,
   };
+}
+
+export interface VolumeChunkSpecification
+  extends SliceViewChunkSpecification<Uint32Array> {
+  dataType: DataType;
+}
+
+/**
+ * Returns a chunk specification for each chunk size in `chunkDataSizes`.
+ */
+export function makeDefaultVolumeChunkSpecifications(options: {
+  rank: number;
+  dataType: DataType;
+  upperVoxelBound: Float32Array;
+  chunkDataSizes: Uint32Array[];
+}): VolumeChunkSpecification[] {
+  const { dataType } = options;
+  return options.chunkDataSizes.map((chunkDataSize) => ({
+    ...makeSliceViewChunkSpecification({ ...options, chunkDataSize }),
+    dataType,
+  }));
 }
 
 /**

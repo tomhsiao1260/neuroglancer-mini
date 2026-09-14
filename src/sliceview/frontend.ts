@@ -39,25 +39,34 @@ import type {
   SliceViewChunkSpecification,
   TransformedSource,
   VisibleLayerSources,
+  VolumeChunkSpecification,
 } from "#src/sliceview/base.js";
 import {
+  ChunkLayout,
   forEachPlaneIntersectingVolumetricChunk,
   SLICEVIEW_ADD_VISIBLE_LAYER_RPC_ID,
   SLICEVIEW_RPC_ID,
   SliceViewBase,
   SliceViewProjectionParameters,
 } from "#src/sliceview/base.js";
-import { ChunkLayout } from "#src/sliceview/chunk_layout.js";
-import { SliceViewRenderLayer } from "#src/sliceview/renderlayer.js";
+import {
+  ChunkFormat,
+  FillValueTexture,
+  TextureLayout,
+} from "#src/sliceview/chunk_format.js";
+import { ImageRenderLayer } from "#src/sliceview/renderlayer.js";
+import type { TypedArray } from "#src/util/array.js";
+import type { DataType } from "#src/util/data_type.js";
 import type { Borrowed, Disposer, Owned } from "#src/util/disposable.js";
 import { kOneVec, mat4, vec3 } from "#src/util/geom.js";
 import { NullarySignal } from "#src/util/signal.js";
+import type { GL } from "#src/webgl/context.js";
 import { OffscreenFramebuffer } from "#src/webgl/offscreen.js";
 import type { RPC } from "#src/worker/worker_rpc.js";
 import { registerSharedObjectOwner } from "#src/worker/worker_rpc.js";
 
 export interface FrontendTransformedSource<
-  RLayer extends SliceViewRenderLayer = SliceViewRenderLayer,
+  RLayer extends ImageRenderLayer = ImageRenderLayer,
   Source extends SliceViewChunkSource = SliceViewChunkSource,
 > extends TransformedSource<RLayer, Source> {
   chunkTransform: ChunkTransformParameters;
@@ -66,7 +75,7 @@ export interface FrontendTransformedSource<
 
 interface FrontendVisibleLayerSources
   extends VisibleLayerSources<
-    SliceViewRenderLayer,
+    ImageRenderLayer,
     SliceViewChunkSource,
     FrontendTransformedSource
   > {
@@ -74,7 +83,7 @@ interface FrontendVisibleLayerSources
 }
 
 function serializeTransformedSource(
-  tsource: TransformedSource<SliceViewRenderLayer, SliceViewChunkSource>,
+  tsource: TransformedSource<ImageRenderLayer, SliceViewChunkSource>,
 ) {
   return {
     source: tsource.source.addCounterpartRef(),
@@ -94,7 +103,7 @@ function serializeTransformedSource(
 }
 
 export function serializeAllTransformedSources(
-  allSources: TransformedSource<SliceViewRenderLayer, SliceViewChunkSource>[][],
+  allSources: TransformedSource<ImageRenderLayer, SliceViewChunkSource>[][],
 ) {
   return allSources.map((scales) => scales.map(serializeTransformedSource));
 }
@@ -109,8 +118,8 @@ export class SliceView extends SliceViewBase {
   gl = this.chunkManager.gl;
   viewChanged = new NullarySignal();
   renderingStale = true;
-  visibleLayerList = new Array<SliceViewRenderLayer>();
-  visibleLayers: Map<SliceViewRenderLayer, FrontendVisibleLayerSources>;
+  visibleLayerList = new Array<ImageRenderLayer>();
+  visibleLayers: Map<ImageRenderLayer, FrontendVisibleLayerSources>;
 
   offscreenFramebuffer = this.registerDisposer(
     new OffscreenFramebuffer(this.gl),
@@ -220,7 +229,7 @@ export class SliceView extends SliceViewBase {
   }
 
   private bindVisibleRenderLayer(
-    renderLayer: SliceViewRenderLayer,
+    renderLayer: ImageRenderLayer,
     disposers: Disposer[],
   ) {
     disposers.push(
@@ -248,7 +257,7 @@ export class SliceView extends SliceViewBase {
     let changed = false;
     visibleLayerList.length = 0;
     for (const renderLayer of this.layerManager.readyRenderLayers()) {
-      if (!(renderLayer instanceof SliceViewRenderLayer)) continue;
+      if (!(renderLayer instanceof ImageRenderLayer)) continue;
       visibleLayerList.push(renderLayer);
       if (visibleLayers.has(renderLayer)) continue;
       const disposers: Disposer[] = [];
@@ -306,19 +315,18 @@ export class SliceView extends SliceViewBase {
     gl.clearColor(0, 0, 0, 0);
     gl.colorMask(true, true, true, true);
     gl.clear(WebGL2RenderingContext.COLOR_BUFFER_BIT);
-    let renderLayerNum = 0;
     const renderContext = {
       sliceView: this,
       projectionParameters,
     };
+    // The viewer has a single render layer, so nothing is blended over another layer.
     for (const renderLayer of this.visibleLayerList) {
       gl.enable(WebGL2RenderingContext.DEPTH_TEST);
       gl.depthFunc(WebGL2RenderingContext.LESS);
       gl.clearDepth(1);
       gl.clear(WebGL2RenderingContext.DEPTH_BUFFER_BIT);
-      renderLayer.setGLBlendMode(gl, renderLayerNum);
+      gl.disable(WebGL2RenderingContext.BLEND);
       renderLayer.draw(renderContext);
-      ++renderLayerNum;
     }
     gl.disable(WebGL2RenderingContext.BLEND);
     gl.disable(WebGL2RenderingContext.DEPTH_TEST);
@@ -507,4 +515,85 @@ export function getVolumetricTransformedSources(
     };
   };
   return allSources.map((scales) => scales.map(getTransformedSource));
+}
+
+export class VolumeChunkSource extends SliceViewChunkSource<
+  VolumeChunkSpecification,
+  VolumeChunk
+> {
+  chunkFormat: ChunkFormat;
+  // Layout of the texture of each chunk of this source.
+  textureLayout: TextureLayout;
+  fillValueTexture: FillValueTexture;
+
+  constructor(
+    chunkManager: ChunkManager,
+    options: { spec: VolumeChunkSpecification },
+  ) {
+    super(chunkManager, options);
+    const { gl } = chunkManager.chunkQueueManager;
+    const { chunkDataSize, dataType } = this.spec;
+    let numDims = 0;
+    for (const x of chunkDataSize) {
+      if (x > 1) ++numDims;
+    }
+    const textureDims = numDims >= 3 ? 3 : 2;
+    this.chunkFormat = this.registerDisposer(
+      ChunkFormat.get(gl, dataType, textureDims),
+    );
+    this.textureLayout = new TextureLayout(gl, chunkDataSize, textureDims);
+    this.fillValueTexture = this.registerDisposer(
+      FillValueTexture.get(gl, this.chunkFormat, chunkDataSize.length),
+    );
+  }
+
+  getChunk(x: any): VolumeChunk {
+    const chunk = new VolumeChunk(this, x);
+    if (chunk.data === null) {
+      chunk.texture = this.fillValueTexture.texture;
+      chunk.textureLayout = this.fillValueTexture.textureLayout;
+    }
+    return chunk;
+  }
+}
+
+/**
+ * Main-thread copy of a volume chunk.  Its data is uploaded to a texture while the chunk is in GPU
+ * memory; a chunk with no data uses the source's fill value texture instead.
+ */
+export class VolumeChunk extends SliceViewChunk {
+  source: VolumeChunkSource;
+  chunkDataSize: Uint32Array;
+  data: TypedArray | null;
+  texture: WebGLTexture | null = null;
+  textureLayout: TextureLayout | null = null;
+
+  constructor(source: VolumeChunkSource, x: any) {
+    super(source, x);
+    this.chunkDataSize = x.chunkDataSize || source.spec.chunkDataSize;
+    this.data = x.data;
+  }
+
+  copyToGPU(gl: GL) {
+    super.copyToGPU(gl);
+    if (this.data === null) return;
+    const { chunkFormat, textureLayout } = this.source;
+    const texture = (this.texture = gl.createTexture());
+    gl.bindTexture(chunkFormat.textureTarget, texture);
+    this.textureLayout = textureLayout;
+    chunkFormat.setTextureData(gl, textureLayout, this.data);
+    gl.bindTexture(chunkFormat.textureTarget, null);
+  }
+
+  freeGPUMemory(gl: GL) {
+    super.freeGPUMemory(gl);
+    if (this.data === null) return;
+    gl.deleteTexture(this.texture);
+    this.texture = null;
+    this.textureLayout = null;
+  }
+}
+
+export abstract class MultiscaleVolumeChunkSource extends MultiscaleSliceViewChunkSource<VolumeChunkSource> {
+  abstract dataType: DataType;
 }
