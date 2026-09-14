@@ -60,10 +60,6 @@ import {
   SharedObjectCounterpart,
 } from "#src/worker/worker_rpc.js";
 
-export interface ChunkStateListener {
-  (chunk: Chunk, oldState: ChunkState): void;
-}
-
 let nextMarkGeneration = 0;
 export function getNextMarkGeneration() {
   return ++nextMarkGeneration;
@@ -83,7 +79,7 @@ export class Chunk implements Disposable {
 
   key: string | null = null;
 
-  private state_ = ChunkState.NEW;
+  state = ChunkState.NEW;
 
   error: any = null;
 
@@ -193,19 +189,6 @@ export class Chunk implements Disposable {
     return this.key;
   }
 
-  set state(newState: ChunkState) {
-    if (newState === this.state_) {
-      return;
-    }
-    const oldState = this.state_;
-    this.state_ = newState;
-    this.source!.chunkStateChanged(this, oldState);
-  }
-
-  get state() {
-    return this.state_;
-  }
-
   set systemMemoryBytes(bytes: number) {
     this.chunkManager.queueManager.adjustCapacitiesForChunk(this, false);
     this.systemMemoryBytes_ = bytes;
@@ -247,7 +230,6 @@ export interface ChunkConstructor<T extends Chunk> {
  */
 // eslint-disable-next-line @typescript-eslint/no-unsafe-declaration-merging
 export class ChunkSource extends SharedObject {
-  private listeners_ = new Map<string, ChunkStateListener[]>();
   chunks: Map<string, Chunk> = new Map<string, Chunk>();
   // Chunk objects removed from `chunks`, kept for reuse.
   freeChunks: Chunk[] = new Array<Chunk>();
@@ -301,41 +283,6 @@ export class ChunkSource extends SharedObject {
     freeChunks[freeChunks.length] = chunk;
     if (chunks.size === 0) {
       this.dispose();
-    }
-  }
-
-  registerChunkListener(key: string, listener: ChunkStateListener) {
-    if (!this.listeners_.has(key)) {
-      this.listeners_.set(key, [listener]);
-    } else {
-      this.listeners_.get(key)!.push(listener);
-    }
-    return true;
-  }
-
-  unregisterChunkListener(key: string, listener: ChunkStateListener) {
-    if (!this.listeners_.has(key)) {
-      return false;
-    }
-    const keyListeners = this.listeners_.get(key)!;
-    const idx = keyListeners.indexOf(listener);
-    if (idx < 0) {
-      return false;
-    }
-    keyListeners.splice(idx, 1);
-    if (keyListeners.length === 0) {
-      this.listeners_.delete(key);
-    }
-    return true;
-  }
-
-  chunkStateChanged(chunk: Chunk, oldState: ChunkState) {
-    const { key } = chunk;
-    if (key === null) return;
-    const listeners = this.listeners_.get(key);
-    if (listeners === undefined) return;
-    for (const listener of listeners.slice()) {
-      listener(chunk, oldState);
     }
   }
 }

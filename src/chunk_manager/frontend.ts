@@ -196,17 +196,6 @@ export class ChunkQueueManager extends SharedObject {
             );
         }
       }
-      if (newState <= ChunkState.SYSTEM_MEMORY) {
-        const { chunkRequesters } = source;
-        if (chunkRequesters !== undefined) {
-          const requesters = chunkRequesters.get(key);
-          if (requesters !== undefined) {
-            for (const requester of requesters) {
-              requester(chunk);
-            }
-          }
-        }
-      }
     }
     return visibleChunksChanged;
   }
@@ -270,16 +259,10 @@ export class ChunkManager extends SharedObject {
   }
 }
 
-export interface ChunkRequesterState {
-  (chunk: Chunk): void;
-}
-
 // eslint-disable-next-line @typescript-eslint/no-unsafe-declaration-merging
 export class ChunkSource extends SharedObject {
   OPTIONS: object;
   chunks = new Map<string, Chunk>();
-
-  chunkRequesters: Map<string, ChunkRequesterState[]> | undefined;
 
   constructor(
     public chunkManager: Borrowed<ChunkManager>,

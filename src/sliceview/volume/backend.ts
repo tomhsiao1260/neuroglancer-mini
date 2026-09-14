@@ -14,23 +14,20 @@
  * limitations under the License.
  */
 
-import type { Chunk } from "#src/chunk_manager/backend.js";
 import {
   SliceViewChunk,
   SliceViewChunkSourceBackend,
 } from "#src/sliceview/backend.js";
 import type {
-  DataType,
-  SliceViewChunkSpecification,
-} from "#src/sliceview/base.js";
-import type {
   VolumeChunkSource as VolumeChunkSourceInterface,
   VolumeChunkSpecification,
 } from "#src/sliceview/volume/base.js";
 import type { vec3 } from "#src/util/geom.js";
-import * as vector from "#src/util/vector.js";
-import type { RPC } from "#src/worker/worker_rpc.js";
 
+/**
+ * Worker-side volume chunk.  `download` fills `data`; the data is transferred to the main thread
+ * (and dropped here) when the chunk is serialized for an upload to the GPU.
+ */
 export class VolumeChunk extends SliceViewChunk {
   source: VolumeChunkSource | null = null;
   data: ArrayBufferView | null;
@@ -65,95 +62,10 @@ export class VolumeChunk extends SliceViewChunk {
   }
 }
 
-interface ChunkWithGridPositionAndDataSize extends Chunk {
-  chunkGridPosition: Float32Array;
-  chunkDataSize: Uint32Array | null;
-}
-
-interface SliceViewChunkSpecWithOffsetAndDatatype
-  extends SliceViewChunkSpecification<Uint32Array> {
-  baseVoxelOffset: Float32Array;
-  dataType: DataType;
-}
-
-interface ChunkSourceForChunkBounds {
-  spec: SliceViewChunkSpecWithOffsetAndDatatype;
-  tempChunkDataSize: Uint32Array;
-  tempChunkPosition: Float32Array;
-}
-
-/**
- * Helper function for computing the voxel bounds of a chunk based on its chunkGridPosition.
- *
- * This assumes that the grid of chunk positions starts at this.baseVoxelOffset.  Chunks are
- * clipped to lie within upperVoxelBound, but are not clipped to lie within lowerVoxelBound.  (The
- * frontend code currently cannot handle chunks clipped at their lower corner, and the chunk
- * layout can generally be chosen so that lowerVoxelBound lies on a chunk boundary.)
- *
- * This sets chunk.chunkDataSize to a copy of the returned chunkDataSize if it differs from
- * source.spec.chunkDataSize; otherwise, it is set to source.spec.chunkDataSize.
- *
- * @returns A globally-allocated Vec3 containing the chunk corner position in voxel coordinates.
- * The returned Vec3 will be invalidated by any subsequent call to this method, even on a
- * different VolumeChunkSource instance.
- */
-export function computeChunkBounds(
-  source: ChunkSourceForChunkBounds,
-  chunk: ChunkWithGridPositionAndDataSize,
-) {
-  const { spec, tempChunkDataSize, tempChunkPosition } = source;
-  const { upperVoxelBound, rank, baseVoxelOffset } = spec;
-
-  const origChunkDataSize = spec.chunkDataSize;
-  const newChunkDataSize = tempChunkDataSize;
-
-  // Chunk start position in voxel coordinates.
-  const chunkPosition = vector.multiply(
-    tempChunkPosition,
-    chunk.chunkGridPosition,
-    origChunkDataSize,
-  );
-
-  // Specifies whether the chunk only partially fits within the data bounds.
-  let partial = false;
-  for (let i = 0; i < rank; ++i) {
-    const upper = Math.min(
-      upperVoxelBound[i],
-      chunkPosition[i] + origChunkDataSize[i],
-    );
-    const size = (newChunkDataSize[i] = upper - chunkPosition[i]);
-    if (size !== origChunkDataSize[i]) {
-      partial = true;
-    }
-  }
-
-  vector.add(chunkPosition, chunkPosition, baseVoxelOffset);
-
-  if (partial) {
-    chunk.chunkDataSize = Uint32Array.from(newChunkDataSize);
-  } else {
-    chunk.chunkDataSize = origChunkDataSize;
-  }
-
-  return chunkPosition;
-}
-
 export class VolumeChunkSource
   extends SliceViewChunkSourceBackend
   implements VolumeChunkSourceInterface
 {
   spec: VolumeChunkSpecification;
-  tempChunkDataSize: Uint32Array;
-  tempChunkPosition: Float32Array;
-  constructor(rpc: RPC, options: any) {
-    super(rpc, options);
-    const rank = this.spec.rank;
-    this.tempChunkDataSize = new Uint32Array(rank);
-    this.tempChunkPosition = new Float32Array(rank);
-  }
-
-  computeChunkBounds(chunk: VolumeChunk) {
-    return computeChunkBounds(this, chunk);
-  }
 }
 VolumeChunkSource.prototype.chunkConstructor = VolumeChunk;

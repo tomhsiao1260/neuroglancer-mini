@@ -278,37 +278,6 @@ export class UncompressedVolumeChunk extends SingleTextureVolumeChunk<
     this.textureLayout = textureLayout = chunkFormatHandler.textureLayout.addRef();
     this.chunkFormat.setTextureData(gl, textureLayout, this.data!);
   }
-
-  getValueAt(dataPosition: Uint32Array): number | Uint64 {
-    const { data } = this;
-    if (data === null) {
-      return this.source.spec.fillValue;
-    }
-    const { chunkFormat } = this;
-    const { chunkDataSize } = this;
-    let index = 0;
-    let stride = 1;
-    const rank = dataPosition.length;
-    for (let i = 0; i < rank; ++i) {
-      index += stride * dataPosition[i];
-      stride *= chunkDataSize[i];
-    }
-    const dataType = chunkFormat.dataType;
-    switch (dataType) {
-      case DataType.UINT8:
-      case DataType.INT8:
-      case DataType.FLOAT32:
-      case DataType.UINT16:
-      case DataType.INT16:
-      case DataType.UINT32:
-      case DataType.INT32:
-        return data[index];
-      case DataType.UINT64: {
-        const index2 = index * 2;
-        return new Uint64(data[index2], data[index2 + 1]);
-      }
-    }
-  }
 }
 
 class FillValueChunk extends RefCounted {
@@ -394,9 +363,7 @@ export class UncompressedChunkFormatHandler
   }
 }
 
-registerChunkFormatHandler((gl: GL, spec: VolumeChunkSpecification) => {
-  if (spec.compressedSegmentationBlockSize == null) {
-    return new UncompressedChunkFormatHandler(gl, spec);
-  }
-  return null;
-});
+registerChunkFormatHandler(
+  (gl: GL, spec: VolumeChunkSpecification) =>
+    new UncompressedChunkFormatHandler(gl, spec),
+);

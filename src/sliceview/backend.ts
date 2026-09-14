@@ -23,7 +23,7 @@ import {
   getNextMarkGeneration,
   withChunkManager,
 } from "#src/chunk_manager/backend.js";
-import { ChunkPriorityTier, ChunkState } from "#src/chunk_manager/base.js";
+import { ChunkPriorityTier } from "#src/chunk_manager/base.js";
 import type { SharedWatchableValue } from "#src/worker/shared_watchable_value.js";
 import type {
   MultiscaleVolumetricDataRenderLayer,
@@ -35,18 +35,14 @@ import type {
 import {
   filterVisibleSources,
   forEachPlaneIntersectingVolumetricChunk,
-  getNormalizedChunkLayout,
   SLICEVIEW_ADD_VISIBLE_LAYER_RPC_ID,
   SLICEVIEW_REMOVE_VISIBLE_LAYER_RPC_ID,
   SLICEVIEW_RENDERLAYER_RPC_ID,
-  SLICEVIEW_REQUEST_CHUNK_RPC_ID,
   SLICEVIEW_RPC_ID,
   SliceViewBase,
 } from "#src/sliceview/base.js";
 import { ChunkLayout } from "#src/sliceview/chunk_layout.js";
 import type { WatchableValueInterface } from "#src/state/trackable_value.js";
-import type { CancellationToken } from "#src/util/cancellation.js";
-import { CANCELED } from "#src/util/cancellation.js";
 import { erf } from "#src/util/erf.js";
 import { vec3, vec3Key } from "#src/util/geom.js";
 import { VelocityEstimator } from "#src/util/velocity_estimation.js";
@@ -55,9 +51,8 @@ import {
   getPriorityTier,
   withSharedVisibility,
 } from "#src/visibility_priority/backend.js";
-import type { RPC, RPCPromise } from "#src/worker/worker_rpc.js";
+import type { RPC } from "#src/worker/worker_rpc.js";
 import {
-  registerPromiseRPC,
   registerRPC,
   registerSharedObject,
   SharedObjectCounterpart,
@@ -158,12 +153,7 @@ export class SliceViewBackend extends SliceViewIntermediateBase {
           : [];
         const { chunkLayout } = tsource;
         chunkLayout.globalToLocalSpatial(localCenter, centerDataPosition);
-        const { size, finiteRank } = chunkLayout;
-        vec3.copy(chunkSize, size);
-        for (let i = finiteRank; i < 3; ++i) {
-          chunkSize[i] = 0;
-          localCenter[i] = 0;
-        }
+        vec3.copy(chunkSize, chunkLayout.size);
         const priorityIndex = i;
         const sourceBasePriority =
           basePriority + SCALE_PRIORITY_MULTIPLIER * priorityIndex;
@@ -171,9 +161,8 @@ export class SliceViewBackend extends SliceViewIntermediateBase {
         const curMarkGeneration = getNextMarkGeneration();
         forEachPlaneIntersectingVolumetricChunk(
           projectionParameters,
-          tsource.renderLayer.localPosition.value,
           tsource,
-          getNormalizedChunkLayout(projectionParameters, tsource.chunkLayout),
+          chunkLayout,
           (positionInChunks) => {
             vec3.multiply(tempChunkPosition, positionInChunks, chunkSize);
             const priority = -vec3.distance(localCenter, tempChunkPosition);
@@ -292,8 +281,6 @@ export function deserializeTransformedSources<
         source,
         chunkLayout: ChunkLayout.fromObject(chunkLayout),
         layerRank: serializedSource.layerRank,
-        nonDisplayLowerClipBound: serializedSource.nonDisplayLowerClipBound,
-        nonDisplayUpperClipBound: serializedSource.nonDisplayUpperClipBound,
         lowerClipBound: serializedSource.lowerClipBound,
         upperClipBound: serializedSource.upperClipBound,
         lowerClipDisplayBound: serializedSource.lowerClipDisplayBound,
@@ -303,7 +290,6 @@ export function deserializeTransformedSources<
         effectiveVoxelSize: serializedSource.effectiveVoxelSize,
         chunkDisplayDimensionIndices:
           serializedSource.chunkDisplayDimensionIndices,
-        fixedLayerToChunkTransform: serializedSource.fixedLayerToChunkTransform,
         combinedGlobalLocalToChunkTransform:
           serializedSource.combinedGlobalLocalToChunkTransform,
         curPositionInChunks: new Float32Array(rank),
@@ -506,55 +492,3 @@ function getPrefetchChunkOffsets(
   }
   return offsets;
 }
-
-registerPromiseRPC(
-  SLICEVIEW_REQUEST_CHUNK_RPC_ID,
-  async function (
-    x: { this: RPC; source: number; chunkGridPosition: Float32Array },
-    cancellationToken: CancellationToken,
-  ): RPCPromise<void> {
-    const source = this.get(x.source) as SliceViewChunkSourceBackend;
-    const { chunkManager } = source;
-    const chunk = source.getChunk(x.chunkGridPosition);
-    const key = chunk.key!;
-    if (chunk.state <= ChunkState.SYSTEM_MEMORY) {
-      // Already available on frontend.
-      return { value: undefined };
-    }
-    const disposeRecompute = chunkManager.recomputeChunkPriorities.add(() => {
-      chunkManager.requestChunk(
-        chunk,
-        ChunkPriorityTier.VISIBLE,
-        Number.POSITIVE_INFINITY,
-        ChunkState.SYSTEM_MEMORY,
-      );
-    });
-    chunkManager.scheduleUpdateChunkPriorities();
-    let listener: (chunk: Chunk) => void;
-    const promise = new Promise<void>((resolve, reject) => {
-      listener = (chunk) => {
-        if (chunk.state === ChunkState.FAILED) {
-          reject(chunk.error);
-          return;
-        }
-        if (chunk.state <= ChunkState.SYSTEM_MEMORY) {
-          resolve();
-        }
-      };
-    });
-    source.registerChunkListener(key, listener!);
-    const cancelPromise = new Promise((_resolve, reject) => {
-      cancellationToken.add(() => {
-        reject(CANCELED);
-      });
-    });
-    try {
-      await Promise.race([promise, cancelPromise]);
-      return { value: undefined };
-    } finally {
-      source.unregisterChunkListener(key, listener!);
-      disposeRecompute();
-      chunkManager.scheduleUpdateChunkPriorities();
-    }
-  },
-);

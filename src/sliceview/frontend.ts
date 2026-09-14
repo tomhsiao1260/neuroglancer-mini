@@ -14,23 +14,17 @@
  * limitations under the License.
  */
 
-import { debounce } from 'es-toolkit';
+import { debounce } from "es-toolkit";
 import { ChunkState } from "#src/chunk_manager/base.js";
-import type {
-  ChunkManager,
-  ChunkRequesterState,
-} from "#src/chunk_manager/frontend.js";
+import type { ChunkManager } from "#src/chunk_manager/frontend.js";
 import { Chunk, ChunkSource } from "#src/chunk_manager/frontend.js";
-import type { LayerManager } from "#src/layer/index.js";
-import type {
-  DisplayDimensionRenderInfo,
-  NavigationState,
-} from "#src/state/navigation_state.js";
+import type { ImageUserLayer } from "#src/layer/index.js";
+import type { NavigationState } from "#src/state/navigation_state.js";
 import { updateProjectionParametersFromInverseViewAndProjection } from "#src/render/projection_parameters.js";
 import type {
   ChunkDisplayTransformParameters,
   ChunkTransformParameters,
-  RenderLayerTransformOrError,
+  RenderLayerTransform,
 } from "#src/render/render_coordinate_transform.js";
 import {
   getChunkDisplayTransformParameters,
@@ -43,27 +37,22 @@ import {
 import type {
   SliceViewChunkSource as SliceViewChunkSourceInterface,
   SliceViewChunkSpecification,
-  SliceViewSourceOptions,
   TransformedSource,
   VisibleLayerSources,
 } from "#src/sliceview/base.js";
 import {
   forEachPlaneIntersectingVolumetricChunk,
   SLICEVIEW_ADD_VISIBLE_LAYER_RPC_ID,
-  SLICEVIEW_REQUEST_CHUNK_RPC_ID,
   SLICEVIEW_RPC_ID,
   SliceViewBase,
   SliceViewProjectionParameters,
 } from "#src/sliceview/base.js";
 import { ChunkLayout } from "#src/sliceview/chunk_layout.js";
 import { SliceViewRenderLayer } from "#src/sliceview/renderlayer.js";
-import type { CancellationToken } from "#src/util/cancellation.js";
-import { uncancelableToken } from "#src/util/cancellation.js";
 import type { Borrowed, Disposer, Owned } from "#src/util/disposable.js";
 import { RefCounted } from "#src/util/disposable.js";
 import type { vec4 } from "#src/util/geom.js";
 import { kOneVec, mat4, vec3 } from "#src/util/geom.js";
-import { MessageList, MessageSeverity } from "#src/util/message_list.js";
 import { getObjectId } from "#src/util/object_id.js";
 import { NullarySignal } from "#src/util/signal.js";
 import { withSharedVisibility } from "#src/visibility_priority/frontend.js";
@@ -95,10 +84,7 @@ interface FrontendVisibleLayerSources
     SliceViewChunkSource,
     FrontendTransformedSource
   > {
-  transformGeneration: number;
-  lastSeenGeneration: number;
   disposers: Disposer[];
-  messages: MessageList;
 }
 
 function serializeTransformedSource(
@@ -108,8 +94,6 @@ function serializeTransformedSource(
     source: tsource.source.addCounterpartRef(),
     effectiveVoxelSize: tsource.effectiveVoxelSize,
     layerRank: tsource.layerRank,
-    nonDisplayLowerClipBound: tsource.nonDisplayLowerClipBound,
-    nonDisplayUpperClipBound: tsource.nonDisplayUpperClipBound,
     lowerClipBound: tsource.lowerClipBound,
     upperClipBound: tsource.upperClipBound,
     lowerClipDisplayBound: tsource.lowerClipDisplayBound,
@@ -117,7 +101,6 @@ function serializeTransformedSource(
     chunkDisplayDimensionIndices: tsource.chunkDisplayDimensionIndices,
     lowerChunkDisplayBound: tsource.lowerChunkDisplayBound,
     upperChunkDisplayBound: tsource.upperChunkDisplayBound,
-    fixedLayerToChunkTransform: tsource.fixedLayerToChunkTransform,
     combinedGlobalLocalToChunkTransform:
       tsource.combinedGlobalLocalToChunkTransform,
     chunkLayout: tsource.chunkLayout.toObject(),
@@ -130,18 +113,11 @@ export function serializeAllTransformedSources(
   return allSources.map((scales) => scales.map(serializeTransformedSource));
 }
 
-function disposeTransformedSources(
-  layer: SliceViewRenderLayer,
-  allSources: TransformedSource<SliceViewRenderLayer, SliceViewChunkSource>[][],
-) {
-  for (const scales of allSources) {
-    for (const { source } of scales) {
-      layer.removeSource(source);
-      source.dispose();
-    }
-  }
-}
-
+/**
+ * Main-thread side of one cross-section view.  Sends its layers' sources and the projection
+ * parameters to its worker counterpart (`SliceViewBackend`), which requests the visible chunks,
+ * and draws the chunks that have reached the GPU into `offscreenFramebuffer`.
+ */
 @registerSharedObjectOwner(SLICEVIEW_RPC_ID)
 export class SliceView extends Base {
   gl = this.chunkManager.gl;
@@ -172,7 +148,7 @@ export class SliceView extends Base {
 
   constructor(
     public chunkManager: ChunkManager,
-    public layerManager: LayerManager,
+    public layerManager: ImageUserLayer,
     public navigationState: Owned<NavigationState>,
   ) {
     super(
@@ -180,7 +156,6 @@ export class SliceView extends Base {
         parametersConstructor: SliceViewProjectionParameters,
         navigationState,
         update: (out, navigationState) => {
-          // console.log("updating ...");
           const { invViewMatrix, centerDataPosition } = out;
           navigationState.toMat4(invViewMatrix);
           for (let i = 0; i < 3; ++i) {
@@ -243,7 +218,6 @@ export class SliceView extends Base {
   ) {
     forEachPlaneIntersectingVolumetricChunk(
       this.projectionParameters.value,
-      tsource.renderLayer.localPosition.value,
       tsource,
       chunkLayout,
       () => {
@@ -273,7 +247,6 @@ export class SliceView extends Base {
       ),
     );
     disposers.push(renderLayer.redrawNeeded.add(this.viewChanged.dispatch));
-    disposers.push(renderLayer.transform.changed.add(this.updateVisibleLayers));
     disposers.push(
       renderLayer.renderScaleTarget.changed.add(() =>
         this.invalidateVisibleSources(),
@@ -281,12 +254,11 @@ export class SliceView extends Base {
     );
   }
 
+  // Registers render layers added since the last update, and sends their sources to the worker.
   private updateVisibleLayersNow() {
     if (this.wasDisposed) {
       return false;
     }
-    // Used to determine which layers are no longer visible.
-    const curUpdateGeneration = Date.now();
     const { visibleLayers, visibleLayerList } = this;
     const { displayDimensionRenderInfo } = this.projectionParameters.value;
     const rpc = this.rpc!;
@@ -294,51 +266,27 @@ export class SliceView extends Base {
     let changed = false;
     visibleLayerList.length = 0;
     for (const renderLayer of this.layerManager.readyRenderLayers()) {
-      if (renderLayer instanceof SliceViewRenderLayer) {
-        visibleLayerList.push(renderLayer);
-        let layerInfo = visibleLayers.get(renderLayer);
-        if (layerInfo === undefined) {
-          const disposers: Disposer[] = [];
-          const messages = new MessageList();
-          layerInfo = {
-            messages,
-            allSources: this.getTransformedSources(renderLayer, messages),
-            transformGeneration: renderLayer.transform.changed.count,
-            visibleSources: [],
-            disposers,
-            lastSeenGeneration: curUpdateGeneration,
-            displayDimensionRenderInfo,
-          };
-          disposers.push(renderLayer.messages.addChild(layerInfo.messages));
-          visibleLayers.set(renderLayer.addRef(), layerInfo);
-          this.bindVisibleRenderLayer(renderLayer, disposers);
-        } else {
-          layerInfo.lastSeenGeneration = curUpdateGeneration;
-          const curTransformGeneration = renderLayer.transform.changed.count;
-          if (
-            layerInfo.transformGeneration === curTransformGeneration &&
-            layerInfo.displayDimensionRenderInfo === displayDimensionRenderInfo
-          ) {
-            continue;
-          }
-          const allSources = layerInfo.allSources;
-          layerInfo.allSources = this.getTransformedSources(
-            renderLayer,
-            layerInfo.messages,
-          );
-          disposeTransformedSources(renderLayer, allSources);
-          layerInfo.visibleSources.length = 0;
-          layerInfo.displayDimensionRenderInfo = displayDimensionRenderInfo;
-          layerInfo.transformGeneration = curTransformGeneration;
-        }
-        rpcMessage.layerId = renderLayer.rpcId;
-        rpcMessage.sources = serializeAllTransformedSources(
-          layerInfo.allSources,
-        );
-        this.flushBackendProjectionParameters();
-        rpc.invoke(SLICEVIEW_ADD_VISIBLE_LAYER_RPC_ID, rpcMessage);
-        changed = true;
-      }
+      if (!(renderLayer instanceof SliceViewRenderLayer)) continue;
+      visibleLayerList.push(renderLayer);
+      if (visibleLayers.has(renderLayer)) continue;
+      const disposers: Disposer[] = [];
+      const layerInfo: FrontendVisibleLayerSources = {
+        allSources: getVolumetricTransformedSources(
+          renderLayer.transform.value,
+          renderLayer.getSources(),
+          renderLayer,
+        ),
+        visibleSources: [],
+        disposers,
+        displayDimensionRenderInfo,
+      };
+      visibleLayers.set(renderLayer.addRef(), layerInfo);
+      this.bindVisibleRenderLayer(renderLayer, disposers);
+      rpcMessage.layerId = renderLayer.rpcId;
+      rpcMessage.sources = serializeAllTransformedSources(layerInfo.allSources);
+      this.flushBackendProjectionParameters();
+      rpc.invoke(SLICEVIEW_ADD_VISIBLE_LAYER_RPC_ID, rpcMessage);
+      changed = true;
     }
     if (changed) {
       this.visibleSourcesStale = true;
@@ -394,25 +342,6 @@ export class SliceView extends Base {
     gl.disable(WebGL2RenderingContext.DEPTH_TEST);
     offscreenFramebuffer.unbind();
   }
-
-  getTransformedSources(
-    layer: SliceViewRenderLayer,
-    messages: MessageList,
-  ): FrontendTransformedSource[][] {
-    const transformedSources = getVolumetricTransformedSources(
-      this.projectionParameters.value.displayDimensionRenderInfo,
-      layer.transform.value,
-      (options) => layer.getSources(options),
-      messages,
-      layer,
-    );
-    for (const scales of transformedSources) {
-      for (const tsource of scales) {
-        layer.addSource(tsource.source, tsource.chunkTransform);
-      }
-    }
-    return transformedSources;
-  }
 }
 
 export interface SliceViewChunkSourceOptions<
@@ -460,59 +389,6 @@ export abstract class SliceViewChunkSource<
   initializeCounterpart(rpc: RPC, options: any) {
     options.spec = this.spec;
     super.initializeCounterpart(rpc, options);
-  }
-
-  // Requests a chunk by its grid position, and returns the result of `transform(chunk)`, where
-  // `transform` is guaranteed to be called while the chunk is present in system memory.
-  //
-  // The `transform` function is used in place of simply returning the chunk, because it is not
-  // possible to guarantee that the chunk remains in system memory by the time the promise resolves.
-  async fetchChunk<T>(
-    chunkGridPosition: Float32Array,
-    transform: (chunk: Chunk) => T,
-    cancellationToken: CancellationToken = uncancelableToken,
-  ): Promise<T> {
-    const key = chunkGridPosition.join();
-    const existingChunk = this.chunks.get(key);
-    if (
-      existingChunk !== undefined &&
-      existingChunk.state <= ChunkState.SYSTEM_MEMORY
-    ) {
-      return transform(existingChunk);
-    }
-    this.addRef();
-    let { chunkRequesters } = this;
-    if (chunkRequesters === undefined) {
-      chunkRequesters = this.chunkRequesters = new Map();
-    }
-    let requester: ChunkRequesterState;
-    let entry = chunkRequesters!.get(key);
-    if (entry === undefined) {
-      entry = [];
-      chunkRequesters!.set(key, entry);
-    }
-    const promise = new Promise<T>((resolve) => {
-      requester = (chunk) => resolve(transform(chunk));
-      entry!.push(requester);
-    });
-    try {
-      await this.rpc!.promiseInvoke(
-        SLICEVIEW_REQUEST_CHUNK_RPC_ID,
-        { source: this.rpcId, chunkGridPosition },
-        cancellationToken,
-      );
-      return await promise;
-    } finally {
-      const entryIndex = entry.indexOf(requester!);
-      entry.splice(entryIndex, 1);
-      if (entry.length === 0) {
-        chunkRequesters!.delete(key);
-      }
-      if (chunkRequesters.size === 0) {
-        this.chunkRequesters = undefined;
-      }
-      this.dispose();
-    }
   }
 }
 
@@ -635,27 +511,10 @@ export interface SliceViewSingleResolutionSource<
    * the MultiscaleSliceViewChunkSource space.
    */
   chunkToMultiscaleTransform: Float32Array;
-
-  /**
-   * Lower clipping bound in voxels within the "chunk" coordinate space.  If not specified, defaults
-   * to `chunkSource.spec.lowerVoxelBound`.  Non-integer values are supported.
-   *
-   * Both lowerClipBound and upperClipBound are applied during rendering but do not affect which
-   * chunks/voxels are actually retrieved.  That is determined by lowerVoxelBound and
-   * upperVoxelBound of `chunkSource.spec`.
-   */
-  lowerClipBound?: Float32Array;
-
-  /**
-   * Upper clipping bound in voxels within the "chunk" coordinate space.  If not specified, defaults
-   * to `chunkSource.spec.upperVoxelBound`.
-   */
-  upperClipBound?: Float32Array;
 }
 
 export abstract class MultiscaleSliceViewChunkSource<
   Source extends SliceViewChunkSource = SliceViewChunkSource,
-  SourceOptions extends SliceViewSourceOptions = SliceViewSourceOptions,
 > {
   abstract get rank(): number;
 
@@ -665,208 +524,96 @@ export abstract class MultiscaleSliceViewChunkSource<
    *
    * Every chunk source must have rank equal to `this.rank`.
    */
-  abstract getSources(
-    options: SourceOptions,
-  ): SliceViewSingleResolutionSource<Source>[][];
+  abstract getSources(): SliceViewSingleResolutionSource<Source>[][];
 
   constructor(public chunkManager: Borrowed<ChunkManager>) {}
 }
 
+/**
+ * Computes, for every scale, where its chunk grid lies in the view: the chunk layout (chunk size
+ * and chunk-to-view transform), the chunk and voxel bounds, and the effective voxel size used to
+ * choose which scales to show.
+ */
 export function getVolumetricTransformedSources(
-  displayDimensionRenderInfo: DisplayDimensionRenderInfo,
-  transform: RenderLayerTransformOrError,
-  getSources: (
-    options: SliceViewSourceOptions,
-  ) => SliceViewSingleResolutionSource<SliceViewChunkSource>[][],
-  messages: MessageList,
+  transform: RenderLayerTransform,
+  allSources: SliceViewSingleResolutionSource<SliceViewChunkSource>[][],
   layer: any,
 ): FrontendTransformedSource[][] {
-  messages.clearMessages();
-  const returnError = (message: string) => {
-    messages.addMessage({
-      severity: MessageSeverity.error,
-      message,
-    });
-    return [];
-  };
-  if (transform.error !== undefined) {
-    return returnError(transform.error);
-  }
-  const layerRank = transform.rank;
   const chunkRank = transform.unpaddedRank;
-  const { displayRank } = displayDimensionRenderInfo;
   const layerDisplayDimensionMapping = {
     displayToLayerDimensionIndices: [0, 1, 2],
-    layerDisplayDimensionIndices: [0, 1, 2]
-  }
+    layerDisplayDimensionIndices: [0, 1, 2],
+  };
 
-  const { displayToLayerDimensionIndices } = layerDisplayDimensionMapping;
-  const multiscaleToViewTransform = new Float32Array(displayRank * chunkRank);
-  const { modelToRenderLayerTransform } = transform;
-  for (let displayDim = 0; displayDim < displayRank; ++displayDim) {
-    const layerDim = displayToLayerDimensionIndices[displayDim];
-    if (layerDim === -1) continue;
-    const factor = 1;
-    for (let chunkDim = 0; chunkDim < chunkRank; ++chunkDim) {
-      multiscaleToViewTransform[displayRank * chunkDim + displayDim] =
-        modelToRenderLayerTransform[(layerRank + 1) * chunkDim + layerDim] *
-        factor;
-    }
-  }
-  const allSources = getSources({
-    displayRank: displayRank,
-    multiscaleToViewTransform: multiscaleToViewTransform,
-    modelChannelDimensionIndices: transform.channelToRenderLayerDimensions,
-  });
-  try {
-    const getTransformedSource = (
-      singleResolutionSource: SliceViewSingleResolutionSource,
-    ): FrontendTransformedSource => {
-      const { chunkSource: source } = singleResolutionSource;
-      const { spec } = source;
-      const {
-        lowerClipBound = spec.lowerVoxelBound,
-        upperClipBound = spec.upperVoxelBound,
-      } = singleResolutionSource;
-      const chunkTransform = getChunkTransformParameters(
-        transform,
-        singleResolutionSource.chunkToMultiscaleTransform,
-      );
-      const { chunkDataSize } = spec;
-      const { channelToChunkDimensionIndices } = chunkTransform;
-      const nonDisplayLowerClipBound = new Float32Array(chunkRank);
-      const nonDisplayUpperClipBound = new Float32Array(chunkRank);
-      nonDisplayLowerClipBound.set(lowerClipBound);
-      nonDisplayUpperClipBound.set(upperClipBound);
-      const channelRank = channelToChunkDimensionIndices.length;
-      const { channelSpaceShape } = transform;
-      for (let channelDim = 0; channelDim < channelRank; ++channelDim) {
-        const chunkDim = channelToChunkDimensionIndices[channelDim];
-        if (chunkDim === -1) continue;
-        const size = channelSpaceShape[channelDim];
-        if (chunkDataSize[chunkDim] !== size) {
-          throw new Error(
-            "Channel dimension " +
-              transform.layerDimensionNames[
-                transform.channelToRenderLayerDimensions[channelDim]
-              ] +
-              ` has extent ${size} but corresponding chunk dimension has extent ` +
-              `${chunkDataSize[chunkDim]}`,
-          );
-        }
-        nonDisplayLowerClipBound[chunkDim] = Number.NEGATIVE_INFINITY;
-        nonDisplayUpperClipBound[chunkDim] = Number.POSITIVE_INFINITY;
-      }
-      const chunkDisplayTransform = getChunkDisplayTransformParameters(
-        chunkTransform,
-        layerDisplayDimensionMapping,
-      );
-      // Compute `chunkDisplaySize`, and `{lower,upper}ChunkDisplayBound`.
-      const lowerChunkDisplayBound = vec3.create();
-      const upperChunkDisplayBound = vec3.create();
-      const lowerClipDisplayBound = vec3.create();
-      const upperClipDisplayBound = vec3.create();
-      // Size of chunk in "display" coordinate space.
-      const chunkDisplaySize = vec3.create();
-      const { numChunkDisplayDims, chunkDisplayDimensionIndices } =
-        chunkDisplayTransform;
-      const {
-        combinedGlobalLocalToChunkTransform,
-        layerRank,
-        combinedGlobalLocalRank,
-      } = chunkTransform;
-      const fixedLayerToChunkTransform = new Float32Array(
-        combinedGlobalLocalToChunkTransform,
-      );
-      for (
-        let chunkDisplayDimIndex = 0;
-        chunkDisplayDimIndex < numChunkDisplayDims;
-        ++chunkDisplayDimIndex
-      ) {
-        const chunkDim = chunkDisplayDimensionIndices[chunkDisplayDimIndex];
-        for (let i = 0; i <= combinedGlobalLocalRank; ++i) {
-          fixedLayerToChunkTransform[chunkDim + i * layerRank] = 0;
-        }
-        if (chunkDim < chunkRank) {
-          chunkDisplaySize[chunkDisplayDimIndex] = spec.chunkDataSize[chunkDim];
-          lowerChunkDisplayBound[chunkDisplayDimIndex] =
-            spec.lowerChunkBound[chunkDim];
-          upperChunkDisplayBound[chunkDisplayDimIndex] =
-            spec.upperChunkBound[chunkDim];
-          lowerClipDisplayBound[chunkDisplayDimIndex] =
-            lowerClipBound[chunkDim];
-          upperClipDisplayBound[chunkDisplayDimIndex] =
-            upperClipBound[chunkDim];
-          nonDisplayLowerClipBound[chunkDim] = Number.NEGATIVE_INFINITY;
-          nonDisplayUpperClipBound[chunkDim] = Number.POSITIVE_INFINITY;
-        } else {
-          chunkDisplaySize[chunkDisplayDimIndex] = 1;
-          lowerChunkDisplayBound[chunkDisplayDimIndex] = 0;
-          upperChunkDisplayBound[chunkDisplayDimIndex] = 1;
-          lowerClipDisplayBound[chunkDisplayDimIndex] = 0;
-          upperClipDisplayBound[chunkDisplayDimIndex] = 1;
-        }
-      }
-      chunkDisplaySize.fill(1, numChunkDisplayDims);
-      lowerChunkDisplayBound.fill(0, numChunkDisplayDims);
-      upperChunkDisplayBound.fill(1, numChunkDisplayDims);
-      lowerClipDisplayBound.fill(0, numChunkDisplayDims);
-      upperClipDisplayBound.fill(1, numChunkDisplayDims);
-      const chunkLayout = new ChunkLayout(
-        chunkDisplaySize,
-        chunkDisplayTransform.displaySubspaceModelMatrix,
-        numChunkDisplayDims,
-      );
-      // This is an approximation of the voxel size (exact only for permutation/scaling
-      // transforms).  It would be better to model the voxel as an ellipsiod and find the
-      // lengths of the axes.
-      const effectiveVoxelSize = chunkLayout.localSpatialVectorToGlobal(
-        vec3.create(),
-        /*baseVoxelSize=*/ kOneVec,
-      );
-      effectiveVoxelSize.fill(1, displayRank);
-      return {
-        layerRank,
-        lowerClipBound,
-        upperClipBound,
-        nonDisplayLowerClipBound,
-        nonDisplayUpperClipBound,
-        renderLayer: layer,
-        source,
-        lowerChunkDisplayBound,
-        upperChunkDisplayBound,
-        lowerClipDisplayBound,
-        upperClipDisplayBound,
-        effectiveVoxelSize,
-        chunkLayout,
-        chunkDisplayDimensionIndices,
-        fixedLayerToChunkTransform,
-        curPositionInChunks: new Float32Array(chunkRank),
-        combinedGlobalLocalToChunkTransform:
-          chunkTransform.combinedGlobalLocalToChunkTransform,
-        fixedPositionWithinChunk: new Uint32Array(chunkRank),
-        chunkTransform,
-        chunkDisplayTransform,
-      };
-    };
-    return allSources.map((scales) =>
-      scales.map((s) => getTransformedSource(s)),
+  const getTransformedSource = (
+    singleResolutionSource: SliceViewSingleResolutionSource,
+  ): FrontendTransformedSource => {
+    const { chunkSource: source } = singleResolutionSource;
+    const { spec } = source;
+    const lowerClipBound = spec.lowerVoxelBound;
+    const upperClipBound = spec.upperVoxelBound;
+    const chunkTransform = getChunkTransformParameters(
+      transform,
+      singleResolutionSource.chunkToMultiscaleTransform,
     );
-  } catch (e) {
-    // Ensure references are released in the case of an exception.
-    for (const scales of allSources) {
-      for (const { chunkSource: source } of scales) {
-        source.dispose();
-      }
+    const chunkDisplayTransform = getChunkDisplayTransformParameters(
+      chunkTransform,
+      layerDisplayDimensionMapping,
+    );
+    // Compute `chunkDisplaySize`, and `{lower,upper}ChunkDisplayBound`.
+    const lowerChunkDisplayBound = vec3.create();
+    const upperChunkDisplayBound = vec3.create();
+    const lowerClipDisplayBound = vec3.create();
+    const upperClipDisplayBound = vec3.create();
+    // Size of chunk in "display" coordinate space.
+    const chunkDisplaySize = vec3.create();
+    const { numChunkDisplayDims, chunkDisplayDimensionIndices } =
+      chunkDisplayTransform;
+    for (
+      let chunkDisplayDimIndex = 0;
+      chunkDisplayDimIndex < numChunkDisplayDims;
+      ++chunkDisplayDimIndex
+    ) {
+      const chunkDim = chunkDisplayDimensionIndices[chunkDisplayDimIndex];
+      chunkDisplaySize[chunkDisplayDimIndex] = spec.chunkDataSize[chunkDim];
+      lowerChunkDisplayBound[chunkDisplayDimIndex] =
+        spec.lowerChunkBound[chunkDim];
+      upperChunkDisplayBound[chunkDisplayDimIndex] =
+        spec.upperChunkBound[chunkDim];
+      lowerClipDisplayBound[chunkDisplayDimIndex] = lowerClipBound[chunkDim];
+      upperClipDisplayBound[chunkDisplayDimIndex] = upperClipBound[chunkDim];
     }
-    const { globalDimensionNames } = displayDimensionRenderInfo;
-    const dimensionDesc = Array.from(
-      displayDimensionRenderInfo.displayDimensionIndices.filter(
-        (i) => i !== -1,
-      ),
-      (i) => globalDimensionNames[i],
-    ).join(",\u00a0");
-    const message = `Cannot render (${dimensionDesc}) cross section: ${e.message}`;
-    return returnError(message);
-  }
+    const chunkLayout = new ChunkLayout(
+      chunkDisplaySize,
+      chunkDisplayTransform.displaySubspaceModelMatrix,
+    );
+    // This is an approximation of the voxel size (exact only for permutation/scaling
+    // transforms).  It would be better to model the voxel as an ellipsiod and find the
+    // lengths of the axes.
+    const effectiveVoxelSize = chunkLayout.localSpatialVectorToGlobal(
+      vec3.create(),
+      /*baseVoxelSize=*/ kOneVec,
+    );
+    return {
+      layerRank: chunkTransform.layerRank,
+      lowerClipBound,
+      upperClipBound,
+      renderLayer: layer,
+      source,
+      lowerChunkDisplayBound,
+      upperChunkDisplayBound,
+      lowerClipDisplayBound,
+      upperClipDisplayBound,
+      effectiveVoxelSize,
+      chunkLayout,
+      chunkDisplayDimensionIndices,
+      curPositionInChunks: new Float32Array(chunkRank),
+      combinedGlobalLocalToChunkTransform:
+        chunkTransform.combinedGlobalLocalToChunkTransform,
+      fixedPositionWithinChunk: new Uint32Array(chunkRank),
+      chunkTransform,
+      chunkDisplayTransform,
+    };
+  };
+  return allSources.map((scales) => scales.map(getTransformedSource));
 }

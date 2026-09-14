@@ -16,15 +16,11 @@
 
 import type { ChunkManager } from "#src/chunk_manager/frontend.js";
 import type { CoordinateSpace } from "#src/state/coordinate_transform.js";
-import type {
-  ChunkTransformParameters,
-  RenderLayerTransformOrError,
-} from "#src/render/render_coordinate_transform.js";
+import type { RenderLayerTransform } from "#src/render/render_coordinate_transform.js";
 import { RenderLayer } from "#src/render/renderlayer.js";
 import { SharedWatchableValue } from "#src/worker/shared_watchable_value.js";
 import type {
   SliceViewProjectionParameters,
-  SliceViewSourceOptions,
   TransformedSource,
 } from "#src/sliceview/base.js";
 import {
@@ -35,11 +31,9 @@ import type {
   MultiscaleSliceViewChunkSource,
   SliceView,
   SliceViewChunkSource,
-  SliceViewSingleResolutionSource,
 } from "#src/sliceview/frontend.js";
 import type { WatchableValueInterface } from "#src/state/trackable_value.js";
 import { constantWatchableValue } from "#src/state/trackable_value.js";
-import type { Borrowed } from "#src/util/disposable.js";
 import type { RpcId } from "#src/worker/worker_rpc.js";
 import { SharedObject } from "#src/worker/worker_rpc.js";
 
@@ -48,21 +42,13 @@ export interface SliceViewRenderLayerOptions {
    * Specifies the transform from the "model" coordinate space (specified by the multiscale source)
    * to the "render layer" coordinate space.
    */
-  transform: WatchableValueInterface<RenderLayerTransformOrError>;
+  transform: WatchableValueInterface<RenderLayerTransform>;
   renderScaleTarget?: WatchableValueInterface<number>;
 
   /**
    * Specifies the position within the "local" coordinate space.
    */
   localPosition: WatchableValueInterface<Float32Array>;
-
-  rpcTransfer?: { [index: string]: number | string | null };
-}
-
-export interface VisibleSourceInfo<Source extends SliceViewChunkSource> {
-  source: Borrowed<Source>;
-  refCount: number;
-  chunkTransform: ChunkTransformParameters;
 }
 
 export interface SliceViewRenderContext {
@@ -72,87 +58,22 @@ export interface SliceViewRenderContext {
 
 export abstract class SliceViewRenderLayer<
   Source extends SliceViewChunkSource = SliceViewChunkSource,
-  SourceOptions extends SliceViewSourceOptions = SliceViewSourceOptions,
 > extends RenderLayer {
   rpcId: RpcId | null = null;
-  rpcTransfer: { [index: string]: number | string | null } = {};
 
   localPosition: WatchableValueInterface<Float32Array>;
   channelCoordinateSpace: WatchableValueInterface<CoordinateSpace>;
-  transform: WatchableValueInterface<RenderLayerTransformOrError>;
+  transform: WatchableValueInterface<RenderLayerTransform>;
 
   renderScaleTarget: WatchableValueInterface<number>;
 
-  /**
-   * Currently visible sources for this render layer.
-   */
-  private visibleSources = new Map<
-    Borrowed<Source>,
-    VisibleSourceInfo<Source>
-  >();
-
-  /**
-   * Cached list of sources in `visibleSources`, ordered by voxel size.
-   *
-   * Truncated to zero length when `visibleSources` changes to indicate that it is invalid.
-   */
-  private visibleSourcesList_: VisibleSourceInfo<Source>[] = [];
-
-  getSources(
-    options: SliceViewSourceOptions,
-  ): SliceViewSingleResolutionSource<Source>[][] {
-    return this.multiscaleSource.getSources(options as any);
-  }
-
-  addSource(
-    source: Borrowed<Source>,
-    chunkTransform: ChunkTransformParameters,
-  ) {
-    const { visibleSources } = this;
-    const info = visibleSources.get(source);
-    if (info !== undefined) {
-      ++info.refCount;
-      info.chunkTransform = chunkTransform;
-    } else {
-      visibleSources.set(source, { source, refCount: 1, chunkTransform });
-      this.visibleSourcesList_.length = 0;
-    }
-  }
-
-  removeSource(source: Borrowed<Source>) {
-    const { visibleSources } = this;
-    const info = visibleSources.get(source)!;
-    if (info.refCount !== 1) {
-      --info.refCount;
-    } else {
-      visibleSources.delete(source);
-      this.visibleSourcesList_.length = 0;
-    }
-  }
-
-  get visibleSourcesList() {
-    const { visibleSources, visibleSourcesList_ } = this;
-    if (visibleSourcesList_.length === 0 && visibleSources.size !== 0) {
-      for (const info of visibleSources.values()) {
-        visibleSourcesList_.push(info);
-      }
-      // Sort by volume scaling factor.
-      visibleSourcesList_.sort((a, b) => {
-        return (
-          a.chunkTransform.chunkToLayerTransformDet -
-          b.chunkTransform.chunkToLayerTransformDet
-        );
-      });
-    }
-    return visibleSourcesList_;
+  getSources() {
+    return this.multiscaleSource.getSources();
   }
 
   constructor(
     public chunkManager: ChunkManager,
-    public multiscaleSource: MultiscaleSliceViewChunkSource<
-      Source,
-      SourceOptions
-    >,
+    public multiscaleSource: MultiscaleSliceViewChunkSource<Source>,
     options: SliceViewRenderLayerOptions,
   ) {
     super();
@@ -161,11 +82,12 @@ export abstract class SliceViewRenderLayer<
     this.renderScaleTarget = renderScaleTarget;
     this.transform = options.transform;
     this.localPosition = options.localPosition;
-    this.rpcTransfer = options.rpcTransfer || {};
   }
 
   RPC_TYPE_ID: string;
 
+  // Creates the worker counterpart (`SliceViewRenderLayerBackend`), sharing the values the worker
+  // needs to choose chunks.
   initializeCounterpart() {
     const sharedObject = this.registerDisposer(new SharedObject());
     const rpc = this.chunkManager.rpc!;
@@ -177,7 +99,6 @@ export abstract class SliceViewRenderLayer<
       renderScaleTarget: this.registerDisposer(
         SharedWatchableValue.makeFromExisting(rpc, this.renderScaleTarget),
       ).rpcId,
-      ...this.rpcTransfer,
     });
     this.rpcId = sharedObject.rpcId;
   }

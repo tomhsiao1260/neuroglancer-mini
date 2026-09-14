@@ -22,6 +22,10 @@ import {
 } from "#src/util/geom.js";
 import * as matrix from "#src/util/matrix.js";
 
+/**
+ * Regular grid of chunks: every chunk has size `size` in chunk coordinates, and `transform` maps
+ * chunk coordinates to global voxel coordinates.
+ */
 export class ChunkLayout {
   /**
    * Size of each chunk in "chunk" coordinates.
@@ -43,12 +47,9 @@ export class ChunkLayout {
    */
   detTransform: number;
 
-  finiteRank: number;
-
-  constructor(size: vec3, transform: mat4, finiteRank: number) {
+  constructor(size: vec3, transform: mat4) {
     this.size = vec3.clone(size);
     this.transform = mat4.clone(transform);
-    this.finiteRank = finiteRank;
     const invTransform = mat4.create();
     const det = matrix.inverse(invTransform, 4, transform, 4, 4);
     if (det === 0) {
@@ -61,12 +62,11 @@ export class ChunkLayout {
     return {
       size: this.size,
       transform: this.transform,
-      finiteRank: this.finiteRank,
     };
   }
 
   static fromObject(msg: any) {
-    return new ChunkLayout(msg.size, msg.transform, msg.finiteRank);
+    return new ChunkLayout(msg.size, msg.transform);
   }
 
   /**

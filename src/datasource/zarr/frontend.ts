@@ -30,11 +30,9 @@ import { parseV2Metadata } from "#src/datasource/zarr/metadata/parse.js";
 import type { OmeMultiscaleMetadata } from "#src/datasource/zarr/ome.js";
 import { parseOmeMetadata } from "#src/datasource/zarr/ome.js";
 import type { SliceViewSingleResolutionSource } from "#src/sliceview/frontend.js";
-import type { VolumeSourceOptions } from "#src/sliceview/volume/base.js";
 import {
   DataType,
   makeDefaultVolumeChunkSpecifications,
-  VolumeType,
 } from "#src/sliceview/volume/base.js";
 import {
   MultiscaleVolumeChunkSource as GenericMultiscaleVolumeChunkSource,
@@ -68,8 +66,6 @@ interface ZarrMultiscaleInfo {
 }
 
 export class MultiscaleVolumeChunkSource extends GenericMultiscaleVolumeChunkSource {
-  volumeType = VolumeType.IMAGE;
-
   get dataType() {
     return this.multiscale.dataType;
   }
@@ -91,7 +87,7 @@ export class MultiscaleVolumeChunkSource extends GenericMultiscaleVolumeChunkSou
 
   // Returns, for each scale, the chunk sources that load it (one per chunk size).  The chunk
   // sources run their `download` in the worker (see `datasource/zarr/backend.ts`).
-  getSources(volumeSourceOptions: VolumeSourceOptions) {
+  getSources() {
     return transposeNestedArrays(
       this.multiscale.scales.map((scale) => {
         const { metadata } = scale;
@@ -122,12 +118,9 @@ export class MultiscaleVolumeChunkSource extends GenericMultiscaleVolumeChunkSou
         );
         return makeDefaultVolumeChunkSpecifications({
           rank,
-          chunkToMultiscaleTransform: transform,
           dataType: metadata.dataType,
           upperVoxelBound: permutedDataShape,
-          volumeType: this.volumeType,
           chunkDataSizes: [permutedChunkShape],
-          volumeSourceOptions,
           fillValue: metadata.fillValue,
         }).map(
           (spec): SliceViewSingleResolutionSource<VolumeChunkSource> => ({

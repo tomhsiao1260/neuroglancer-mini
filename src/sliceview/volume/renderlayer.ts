@@ -16,7 +16,6 @@
 
 import { ChunkState } from "#src/chunk_manager/base.js";
 import type { CoordinateSpace } from "#src/state/coordinate_transform.js";
-import { getNormalizedChunkLayout } from "#src/sliceview/base.js";
 import {
   defineBoundingBoxCrossSectionShader,
   setBoundingBoxCrossSectionShaderViewportPlane,
@@ -31,7 +30,6 @@ import type {
   SliceViewRenderLayerOptions,
 } from "#src/sliceview/renderlayer.js";
 import { SliceViewRenderLayer } from "#src/sliceview/renderlayer.js";
-import type { VolumeSourceOptions } from "#src/sliceview/volume/base.js";
 import type {
   ChunkFormat,
   MultiscaleVolumeChunkSource,
@@ -137,10 +135,7 @@ interface ShaderParameters {
   numChannelDimensions: number;
 }
 
-export abstract class SliceViewVolumeRenderLayer extends SliceViewRenderLayer<
-  VolumeChunkSource,
-  VolumeSourceOptions
-> {
+export abstract class SliceViewVolumeRenderLayer extends SliceViewRenderLayer<VolumeChunkSource> {
   multiscaleSource: MultiscaleVolumeChunkSource;
   protected shaderGetter: ParameterizedContextDependentShaderGetter<{
     chunkFormat: ChunkFormat;
@@ -243,10 +238,7 @@ void emit(vec4 color) {
     };
     let newSource = true;
     for (const transformedSource of visibleSources) {
-      const chunkLayout = getNormalizedChunkLayout(
-        projectionParameters,
-        transformedSource.chunkLayout,
-      );
+      const { chunkLayout } = transformedSource;
       const {
         chunkTransform: { channelToChunkDimensionIndices },
       } = transformedSource;

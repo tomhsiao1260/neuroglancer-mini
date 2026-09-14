@@ -15,7 +15,6 @@
  */
 
 import type { ChunkManager } from "#src/chunk_manager/frontend.js";
-import type { ChunkChannelAccessParameters } from "#src/render/render_coordinate_transform.js";
 import type {
   DataType,
   SliceViewChunkSpecification,
@@ -28,8 +27,6 @@ import {
 import type {
   VolumeChunkSource as VolumeChunkSourceInterface,
   VolumeChunkSpecification,
-  VolumeSourceOptions,
-  VolumeType,
 } from "#src/sliceview/volume/base.js";
 import type { Disposable } from "#src/util/disposable.js";
 import type { GL } from "#src/webgl/context.js";
@@ -174,8 +171,6 @@ export class VolumeChunkSource
   implements VolumeChunkSourceInterface
 {
   chunkFormatHandler: ChunkFormatHandler;
-  private tempChunkGridPosition: Float32Array;
-  private tempPositionWithinChunk: Uint32Array;
 
   constructor(
     chunkManager: ChunkManager,
@@ -185,9 +180,6 @@ export class VolumeChunkSource
     this.chunkFormatHandler = this.registerDisposer(
       getChunkFormatHandler(chunkManager.chunkQueueManager.gl, this.spec),
     );
-    const rank = this.spec.upperVoxelBound.length;
-    this.tempChunkGridPosition = new Float32Array(rank);
-    this.tempPositionWithinChunk = new Uint32Array(rank);
   }
 
   static encodeSpec(spec: SliceViewChunkSpecification) {
@@ -195,65 +187,11 @@ export class VolumeChunkSource
     return {
       ...super.encodeSpec(spec),
       dataType: s.dataType,
-      compressedSegmentationBlockSize:
-        s.compressedSegmentationBlockSize &&
-        Array.from(s.compressedSegmentationBlockSize),
-      baseVoxelOffset: Array.from(s.baseVoxelOffset),
     };
   }
 
   get chunkFormat() {
     return this.chunkFormatHandler.chunkFormat;
-  }
-
-  getValueAt(
-    chunkPosition: Float32Array,
-    channelAccess: ChunkChannelAccessParameters,
-  ) {
-    const rank = this.spec.rank;
-    const chunkGridPosition = this.tempChunkGridPosition;
-    const positionWithinChunk = this.tempPositionWithinChunk;
-    const { spec } = this;
-    {
-      const { chunkDataSize } = spec;
-      for (let chunkDim = 0; chunkDim < rank; ++chunkDim) {
-        const voxel = chunkPosition[chunkDim];
-        const chunkSize = chunkDataSize[chunkDim];
-        const chunk = Math.floor(voxel / chunkSize);
-        chunkGridPosition[chunkDim] = chunk;
-        positionWithinChunk[chunkDim] = Math.floor(voxel - chunkSize * chunk);
-      }
-    }
-    const chunk = this.chunks.get(chunkGridPosition.join()) as VolumeChunk;
-    if (chunk === undefined) {
-      return null;
-    }
-    const chunkDataSize = chunk.chunkDataSize;
-    for (let i = 0; i < 3; ++i) {
-      if (positionWithinChunk[i] >= chunkDataSize[i]) {
-        return undefined;
-      }
-    }
-    if (channelAccess.channelSpaceShape.length === 0) {
-      // Return a single value.
-      return chunk.getValueAt(positionWithinChunk);
-    }
-    const {
-      numChannels,
-      chunkChannelCoordinates,
-      chunkChannelDimensionIndices,
-    } = channelAccess;
-    const chunkChannelRank = chunkChannelDimensionIndices.length;
-    let offset = 0;
-    const values = new Array<any>(numChannels);
-    for (let channelIndex = 0; channelIndex < numChannels; ++channelIndex) {
-      for (let i = 0; i < chunkChannelRank; ++i) {
-        positionWithinChunk[chunkChannelDimensionIndices[i]] =
-          chunkChannelCoordinates[offset++];
-      }
-      values[channelIndex] = chunk.getValueAt(positionWithinChunk);
-    }
-    return values;
   }
 
   getChunk(x: any): VolumeChunk {
@@ -274,13 +212,8 @@ export abstract class VolumeChunk extends SliceViewChunk {
     super(source, x);
     this.chunkDataSize = x.chunkDataSize || source.spec.chunkDataSize;
   }
-  abstract getValueAt(dataPosition: Uint32Array): any;
 }
 
-export abstract class MultiscaleVolumeChunkSource extends MultiscaleSliceViewChunkSource<
-  VolumeChunkSource,
-  VolumeSourceOptions
-> {
+export abstract class MultiscaleVolumeChunkSource extends MultiscaleSliceViewChunkSource<VolumeChunkSource> {
   abstract dataType: DataType;
-  abstract volumeType: VolumeType;
 }

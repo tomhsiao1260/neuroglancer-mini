@@ -14,7 +14,6 @@
  * limitations under the License.
  */
 
-import type { ValueOrError } from "#src/util/error.js";
 import { mat4 } from "#src/util/geom.js";
 import * as matrix from "#src/util/matrix.js";
 
@@ -66,8 +65,6 @@ export interface RenderLayerTransform {
   modelDimensionNames: readonly string[];
   layerDimensionNames: readonly string[];
 }
-
-export type RenderLayerTransformOrError = ValueOrError<RenderLayerTransform>;
 
 /**
  * The render layer space is the model space itself: its three dimensions (z, y, x) are the global

@@ -27,7 +27,6 @@ import {
 import type { WatchableValueChangeInterface } from "#src/state/trackable_value.js";
 import type { Borrowed } from "#src/util/disposable.js";
 import { RefCounted } from "#src/util/disposable.js";
-import { MessageList } from "#src/util/message_list.js";
 import { NullarySignal, Signal } from "#src/util/signal.js";
 import type { RPC } from "#src/worker/worker_rpc.js";
 import { registerSharedObjectOwner, SharedObject } from "#src/worker/worker_rpc.js";
@@ -36,7 +35,6 @@ export const PROJECTION_PARAMETERS_RPC_ID = "SharedProjectionParameters";
 export const PROJECTION_PARAMETERS_CHANGED_RPC_METHOD_ID = "SharedProjectionParameters.changed";
 
 export class RenderLayer extends RefCounted {
-  messages = new MessageList();
   layerChanged = new NullarySignal();
   redrawNeeded = new NullarySignal();
 }

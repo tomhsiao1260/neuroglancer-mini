@@ -14,65 +14,36 @@
  * limitations under the License.
  */
 
+/**
+ * @file Shared by the main thread and the worker: which scales of a volume to show for the current
+ * zoom level (`filterVisibleSources`), and which chunks of a scale intersect the cross-section plane
+ * (`forEachPlaneIntersectingVolumetricChunk`).
+ */
+
 import type { DisplayDimensionRenderInfo } from "#src/state/navigation_state.js";
 import { ProjectionParameters } from "#src/render/projection_parameters.js";
-import { ChunkLayout } from "#src/sliceview/chunk_layout.js";
+import type { ChunkLayout } from "#src/sliceview/chunk_layout.js";
 import type {
   WatchableValueChangeInterface,
   WatchableValueInterface,
 } from "#src/state/trackable_value.js";
 import { DATA_TYPE_BYTES, DataType } from "#src/util/data_type.js";
 import type { Disposable } from "#src/util/disposable.js";
-import {
-  getViewFrustrumDepthRange,
-  isAABBIntersectingPlane,
-  mat4,
-  vec3,
-} from "#src/util/geom.js";
-import * as vector from "#src/util/vector.js";
+import { isAABBIntersectingPlane, mat4, vec3 } from "#src/util/geom.js";
 import { SharedObject } from "#src/worker/worker_rpc.js";
 
 export { DATA_TYPE_BYTES, DataType };
 
-const DEBUG_VISIBLE_SOURCES = false;
-const DEBUG_CHUNK_VISIBILITY = false;
-
 const tempMat4 = mat4.create();
-
-/**
- * Average cross-sectional area contained within a chunk of the specified size and rotation.
- *
- * This is estimated by taking the total volume of the chunk and dividing it by the total length of
- * the chunk along the z axis.
- */
-export function estimateSliceAreaPerChunk(
-  chunkLayout: ChunkLayout,
-  viewMatrix: mat4,
-) {
-  // Compute the length of the projection of the chunk along the z axis in view space.
-  //
-  // Each chunk dimension `i` can independently affect the z projection by the dot product of column
-  // `i` of `chunkLayout.transform` and row 2 of `viewMatrix`.
-  let viewZProjection = 0;
-  let chunkVolume = Math.abs(chunkLayout.detTransform);
-  const { transform, size } = chunkLayout;
-  for (let i = 0; i < 3; ++i) {
-    let sum = 0;
-    for (let j = 0; j < 3; ++j) {
-      sum += viewMatrix[j * 4 + 2] * transform[4 * i + j];
-    }
-    const s = size[i];
-    viewZProjection += Math.abs(sum) * s;
-    chunkVolume *= s;
-  }
-  return chunkVolume / viewZProjection;
-}
 
 export interface MultiscaleVolumetricDataRenderLayer {
   localPosition: WatchableValueInterface<Float32Array>;
   renderScaleTarget: WatchableValueInterface<number>;
 }
 
+/**
+ * One scale of a volume, together with how its chunk grid sits in the view.
+ */
 export interface TransformedSource<
   RLayer extends MultiscaleVolumetricDataRenderLayer = SliceViewRenderLayer,
   Source extends SliceViewChunkSource = SliceViewChunkSource,
@@ -87,14 +58,6 @@ export interface TransformedSource<
   effectiveVoxelSize: vec3;
 
   chunkLayout: ChunkLayout;
-
-  /**
-   * Arrays of length `rank` specifying the clip bounds (in voxels) for dimensions not in
-   * `chunkDisplayDimensionIndices` and not channel dimensions.  The values for display/channel
-   * dimensions are set to -/+infinity.
-   */
-  nonDisplayLowerClipBound: Float32Array;
-  nonDisplayUpperClipBound: Float32Array;
 
   /**
    * Arrays of length `rank` specifying the clip bounds (in voxels) for all dimensions.
@@ -134,19 +97,6 @@ export interface TransformedSource<
   combinedGlobalLocalToChunkTransform: Float32Array;
 
   /**
-   * Transform from non-display dimensions of layer space to non-display dimensions of chunk space.
-   *
-   * Same as `combinedGlobalLocalToChunkTransform`, except that rows corresponding to "display"
-   * chunk dimensions are all 0.
-   *
-   * Matrix has dimensions `(globalRank + localRank + 1) * layerRank`.
-   *
-   * Input space is `[global dimensions, local dimensions]`.  Output space is the "chunk clip"
-   * coordinate space, in units of voxels.
-   */
-  fixedLayerToChunkTransform: Float32Array;
-
-  /**
    * When `computeVisibleChunks` invokes the `addChunk` callback, this is set to the position of the
    * chunk.
    */
@@ -168,62 +118,23 @@ export interface SliceViewRenderLayer {
   ): Iterable<TransformedSource>;
 }
 
-function pickBestAlternativeSource<
-  RLayer extends MultiscaleVolumetricDataRenderLayer,
-  Source extends SliceViewChunkSource,
-  Transformed extends TransformedSource<RLayer, Source>,
->(viewMatrix: mat4, alternatives: Transformed[]) {
-  const numAlternatives = alternatives.length;
-  let bestAlternativeIndex = 0;
-  if (DEBUG_VISIBLE_SOURCES) {
-    console.log(alternatives);
-  }
-  if (numAlternatives > 1) {
-    let bestSliceArea = 0;
-    for (
-      let alternativeIndex = 0;
-      alternativeIndex < numAlternatives;
-      ++alternativeIndex
-    ) {
-      const alternative = alternatives[alternativeIndex];
-      const { chunkLayout } = alternative;
-      const sliceArea = estimateSliceAreaPerChunk(chunkLayout, viewMatrix);
-      if (DEBUG_VISIBLE_SOURCES) {
-        console.log(
-          `chunksize = ${chunkLayout.size}, sliceArea = ${sliceArea}`,
-        );
-      }
-      if (sliceArea > bestSliceArea) {
-        bestSliceArea = sliceArea;
-        bestAlternativeIndex = alternativeIndex;
-      }
-    }
-  }
-  return bestAlternativeIndex;
-}
-
 export interface VisibleLayerSources<
   RLayer extends MultiscaleVolumetricDataRenderLayer,
   Source extends SliceViewChunkSource,
   Transformed extends TransformedSource<RLayer, Source>,
 > {
+  // Transformed sources of the layer, indexed by chunk layout and then by scale (finest first).
   allSources: Transformed[][];
+  // Scales currently shown, ordered from finest to coarsest.
   visibleSources: Transformed[];
   displayDimensionRenderInfo: DisplayDimensionRenderInfo;
 }
-
-const tempChunkLayout = new ChunkLayout(vec3.create(), mat4.create(), 0);
 
 export class SliceViewProjectionParameters extends ProjectionParameters {
   /**
    * Normal vector of cross section in (non-isotropic) global voxel coordinates.
    */
   viewportNormalInGlobalCoordinates = vec3.create();
-
-  /**
-   * Normal vector of cross section in isotropic global canonical voxel coordinates.
-   */
-  viewportNormalInCanonicalCoordinates = vec3.create();
 
   centerDataPosition = vec3.create();
 
@@ -308,12 +219,8 @@ export class SliceViewBase<
       ) {
         continue;
       }
-      const preferredOrientationIndex = pickBestAlternativeSource(
-        this.projectionParameters.value.viewMatrix,
-        allSources.map((x) => x[0]),
-      );
-
-      const sources = allSources[preferredOrientationIndex];
+      // A zarr volume has a single chunk layout per scale.
+      const sources = allSources[0];
 
       for (const source of renderLayer.filterVisibleSources(this, sources)) {
         visibleSources.push(source as Transformed);
@@ -321,227 +228,7 @@ export class SliceViewBase<
       // Reverse visibleSources list since we added sources from coarsest to finest resolution, but
       // we want them ordered from finest to coarsest.
       visibleSources.reverse();
-      if (DEBUG_VISIBLE_SOURCES) {
-        console.log("visible sources chosen", visibleSources);
-      }
     }
-  }
-}
-
-/**
- * By default, choose a chunk size with at most 2^18 = 262144 voxels.
- */
-export const DEFAULT_MAX_VOXELS_PER_CHUNK_LOG2 = 18;
-
-/**
- * Specifies common options for getNearIsotropicBlockSize and getTwoDimensionalBlockSize.
- */
-export interface BaseChunkLayoutOptions {
-  /**
-   * Number of chunk dimensions.
-   */
-  rank: number;
-
-  /**
-   * This, together with upperVoxelBound, specifies the total volume dimensions, which serves as a
-   * bound on the maximum chunk size.  If not specified, defaults to a zero vector.
-   */
-  lowerVoxelBound?: Float32Array;
-
-  /**
-   * Upper voxel bound.  If not specified, the total volume dimensions are not used to bound the
-   * chunk size.
-   */
-  upperVoxelBound?: Float32Array;
-
-  /**
-   * Base 2 logarithm of the maximum number of voxels per chunk.  Defaults to
-   * DEFAULT_MAX_VOXELS_PER_CHUNK_LOG2.
-   */
-  maxVoxelsPerChunkLog2?: number;
-
-  /**
-   * Linear (not affine) transformation matrix with `rank` columns and `displayRank` rows in
-   * column-major order.  Specifies the transformation from chunk space to an isotropic "camera view
-   * space".  Note that only relative scales of input dimensions are relevant, any rotations applied
-   * are irrelevant.
-   */
-  chunkToViewTransform: Float32Array;
-  displayRank: number;
-
-  minBlockSize?: Uint32Array;
-  maxBlockSize?: Uint32Array;
-}
-
-export type GetNearIsotropicBlockSizeOptions = BaseChunkLayoutOptions;
-
-/**
- * Determines a near-isotropic (in camera view space) block size.  All dimensions will be
- * powers of 2, and will not exceed upperVoxelBound - lowerVoxelBound.  The total number of voxels
- * will not exceed maxVoxelsPerChunkLog2.
- */
-export function getNearIsotropicBlockSize(
-  options: GetNearIsotropicBlockSizeOptions,
-): Uint32Array {
-  let {
-    rank,
-    upperVoxelBound,
-    maxVoxelsPerChunkLog2 = DEFAULT_MAX_VOXELS_PER_CHUNK_LOG2,
-    chunkToViewTransform,
-    displayRank,
-    minBlockSize,
-    maxBlockSize,
-  } = options;
-
-  const { lowerVoxelBound = new Uint32Array(rank) } = options;
-
-  // Adjust voxelSize by effective scaling factor.
-  const effectiveVoxelSize = new Float32Array(rank);
-  for (let chunkDim = 0; chunkDim < rank; ++chunkDim) {
-    let factor = 0;
-    for (let displayDim = 0; displayDim < displayRank; ++displayDim) {
-      const c = chunkToViewTransform[chunkDim * displayRank + displayDim];
-      factor += c * c;
-    }
-    effectiveVoxelSize[chunkDim] = Math.sqrt(factor);
-  }
-
-  const chunkDataSize = new Uint32Array(rank);
-  if (minBlockSize !== undefined) {
-    chunkDataSize.set(minBlockSize);
-  } else {
-    chunkDataSize.fill(1);
-  }
-  const chunkDataSizeUpperBound = new Array<number>(rank);
-  for (let chunkDim = 0; chunkDim < rank; ++chunkDim) {
-    let bound = Number.POSITIVE_INFINITY;
-    if (effectiveVoxelSize[chunkDim] === 0) {
-      bound = chunkDataSize[chunkDim];
-    } else {
-      if (upperVoxelBound !== undefined) {
-        bound =
-          2 **
-          Math.floor(
-            Math.log2(upperVoxelBound[chunkDim] - lowerVoxelBound[chunkDim]),
-          );
-      }
-      if (maxBlockSize !== undefined) {
-        bound = Math.min(bound, maxBlockSize[chunkDim]);
-      }
-    }
-    chunkDataSizeUpperBound[chunkDim] = bound;
-  }
-
-  // Determine the dimension in which chunkDataSize should be increased.  This is the smallest
-  // dimension (in nanometers) that is < maxChunkDataSize (in voxels).
-  //
-  // Returns -1 if there is no such dimension.
-  function findNextDimension() {
-    let minSize = Infinity;
-    let minDimension = -1;
-    for (let chunkDim = 0; chunkDim < rank; ++chunkDim) {
-      if (chunkDataSize[chunkDim] >= chunkDataSizeUpperBound[chunkDim]) {
-        continue;
-      }
-      const size = chunkDataSize[chunkDim] * effectiveVoxelSize[chunkDim];
-      if (size < minSize) {
-        minSize = size;
-        minDimension = chunkDim;
-      }
-    }
-    return minDimension;
-  }
-
-  maxVoxelsPerChunkLog2 -= Math.log2(vector.prod(chunkDataSize));
-  for (let i = 0; i < maxVoxelsPerChunkLog2; ++i) {
-    const nextDim = findNextDimension();
-    if (nextDim === -1) {
-      break;
-    }
-    chunkDataSize[nextDim] *= 2;
-  }
-  return chunkDataSize;
-}
-
-/**
- * Returns an array of [xy, yz, xz] 2-dimensional block sizes, where [x, y, z] refer to the view
- * dimensions.
- */
-export function getTwoDimensionalBlockSizes(options: BaseChunkLayoutOptions) {
-  const chunkDataSizes: Uint32Array[] = [];
-  const { displayRank, chunkToViewTransform, rank } = options;
-  if (displayRank > 3) {
-    throw new Error("Unsupported view transform");
-  }
-  if (displayRank < 3) {
-    return [getNearIsotropicBlockSize(options)];
-  }
-  for (let i = 0; i < 3; ++i) {
-    const excludedDim = (i + 2) % 3;
-    const restrictedTransform = new Float32Array(chunkToViewTransform);
-    for (let j = 0; j < rank; ++j) {
-      restrictedTransform[j * displayRank + excludedDim] = 0;
-    }
-    chunkDataSizes[i] = getNearIsotropicBlockSize({
-      ...options,
-      chunkToViewTransform: restrictedTransform,
-    });
-  }
-  return chunkDataSizes;
-}
-
-export enum ChunkLayoutPreference {
-  /**
-   * Indicates that isotropic chunks are desired.
-   */
-  ISOTROPIC = 0,
-
-  /**
-   * Indicates that 2-D chunks are desired.
-   */
-  FLAT = 1,
-}
-
-export interface SliceViewSourceOptions {
-  /**
-   * Transform from the multiscale source coordinate space to a "view" coordinate space that
-   * reflects the relative scales.  This is a *linear* (not affine) transformation matrix with
-   * `rank` columns and `displayRank` rows in column-major order, where `rank` is the rank of the
-   * multiscale source.
-   */
-  multiscaleToViewTransform: Float32Array;
-  displayRank: number;
-  modelChannelDimensionIndices: readonly number[];
-}
-
-/**
- * Specifies parameters for getChunkDataSizes.
- */
-export interface ChunkLayoutOptions {
-  /**
-   * Chunk sizes in voxels.
-   */
-  chunkDataSizes?: Uint32Array[];
-
-  /**
-   * Preferred chunk layout, which determines chunk sizes to use if chunkDataSizes is not
-   * specified.
-   */
-  chunkLayoutPreference?: ChunkLayoutPreference;
-}
-
-export function getChunkDataSizes(
-  options: ChunkLayoutOptions & BaseChunkLayoutOptions,
-) {
-  if (options.chunkDataSizes !== undefined) {
-    return options.chunkDataSizes;
-  }
-  const { chunkLayoutPreference = ChunkLayoutPreference.ISOTROPIC } = options;
-  switch (chunkLayoutPreference) {
-    case ChunkLayoutPreference.ISOTROPIC:
-      return [getNearIsotropicBlockSize(options)];
-    case ChunkLayoutPreference.FLAT:
-      return getTwoDimensionalBlockSizes(options);
   }
 }
 
@@ -595,6 +282,11 @@ export function makeSliceViewChunkSpecification<
   };
 }
 
+/**
+ * Yields the scales to draw, from coarsest to finest: starts at the coarsest scale and keeps adding
+ * finer scales while they get closer to the on-screen pixel size.  Finer scales are drawn on top,
+ * and coarser ones fill in wherever finer chunks are not loaded yet.
+ */
 export function* filterVisibleSources(
   sliceView: any,
   renderLayer: SliceViewRenderLayer,
@@ -700,13 +392,14 @@ export const SLICEVIEW_RENDERLAYER_RPC_ID = "sliceview/RenderLayer";
 export const SLICEVIEW_ADD_VISIBLE_LAYER_RPC_ID = "SliceView.addVisibleLayer";
 export const SLICEVIEW_REMOVE_VISIBLE_LAYER_RPC_ID =
   "SliceView.removeVisibleLayer";
-export const SLICEVIEW_REQUEST_CHUNK_RPC_ID = "ChunkManager.requestChunk";
 
 const tempVisibleVolumetricChunkLower = new Float32Array(3);
 const tempVisibleVolumetricChunkUpper = new Float32Array(3);
 const tempVisibleVolumetricModelViewProjection = mat4.create();
 const tempVisibleVolumetricClippingPlanes = new Float32Array(24);
 
+// Recursively splits the chunk range `[lower, upper)` in half along its longest dimension, pruning
+// halves that `predicate` rejects, and calls `callback` for each single chunk that remains.
 function forEachVolumetricChunkWithinFrustrum<
   RLayer extends MultiscaleVolumetricDataRenderLayer,
 >(
@@ -780,11 +473,15 @@ function forEachVolumetricChunkWithinFrustrum<
   recurse();
 }
 
+/**
+ * Calls `callback` for each chunk of `transformedSource` intersected by the cross-section plane
+ * within the viewport.  `transformedSource.curPositionInChunks` holds the chunk position during the
+ * call.
+ */
 export function forEachPlaneIntersectingVolumetricChunk<
   RLayer extends MultiscaleVolumetricDataRenderLayer,
 >(
   projectionParameters: ProjectionParameters,
-  localPosition: Float32Array,
   transformedSource: TransformedSource<RLayer>,
   chunkLayout: ChunkLayout,
   callback: (positionInChunks: vec3) => void,
@@ -841,57 +538,10 @@ export function forEachPlaneIntersectingVolumetricChunk<
     clippingPlanes[16 + i] = zCoeff;
     clippingPlanes[20 + i] = -zCoeff;
   }
-  if (DEBUG_CHUNK_VISIBILITY) {
-    console.log("clippingPlanes", clippingPlanes);
-    console.log("modelViewProjection", modelViewProjection.join(","));
-    console.log(`lower=${lower.join(",")}, upper=${upper.join(",")}`);
-  }
   forEachVolumetricChunkWithinFrustrum(
     clippingPlanes,
     transformedSource,
     callback,
     isAABBIntersectingPlane,
   );
-}
-
-/**
- * For chunk layouts with finiteRank < 3, returns an adjusted chunk layout where chunk 0 in each
- * non-finite dimension is guaranteed to cover the viewport.
- */
-export function getNormalizedChunkLayout(
-  projectionParameters: ProjectionParameters,
-  chunkLayout: ChunkLayout,
-): ChunkLayout {
-  const { finiteRank } = chunkLayout;
-  if (finiteRank === 3) return chunkLayout;
-  tempChunkLayout.finiteRank = finiteRank;
-  vec3.copy(tempChunkLayout.size, chunkLayout.size);
-  const transform = mat4.copy(tempChunkLayout.transform, chunkLayout.transform);
-  const invTransform = mat4.copy(
-    tempChunkLayout.invTransform,
-    chunkLayout.invTransform,
-  );
-  tempChunkLayout.detTransform = chunkLayout.detTransform;
-  const { invViewMatrix, width, height } = projectionParameters;
-  const depth = getViewFrustrumDepthRange(projectionParameters.projectionMat);
-  for (let chunkRenderDim = finiteRank; chunkRenderDim < 3; ++chunkRenderDim) {
-    // we want to ensure chunk [0] fully covers the viewport
-    const offset = invViewMatrix[12 + chunkRenderDim];
-    let lower = offset;
-    let upper = offset;
-    const xc = Math.abs(invViewMatrix[chunkRenderDim] * width);
-    lower -= xc;
-    upper += xc;
-    const yc = Math.abs(invViewMatrix[chunkRenderDim + 4] * height);
-    lower -= yc;
-    upper += yc;
-    const zc = Math.abs(invViewMatrix[chunkRenderDim + 8] * depth);
-    lower -= zc;
-    upper += zc;
-    const scaleFactor = Math.max(1, upper - lower);
-    transform[12 + chunkRenderDim] = lower;
-    transform[5 * chunkRenderDim] = scaleFactor;
-  }
-  mat4.invert(invTransform, transform);
-  return tempChunkLayout;
 }
