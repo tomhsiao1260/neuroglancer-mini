@@ -16,11 +16,6 @@
 
 import { Endianness, ENDIANNESS } from "#src/util/endian.js";
 
-const denormMin = 2 ** -1074;
-
-const float64Buf = new Float64Array(1);
-const uint32Buf = new Uint32Array(float64Buf.buffer);
-
 // The following implementation is derived from:
 // https://github.com/scijs/nextafter/
 //
@@ -48,31 +43,3 @@ const uint32Buf = new Uint32Array(float64Buf.buffer);
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
 
-// Like the C standard library `nextafter` function, returns the next representable JavaScript
-// number (float64) after `x` in the direction of `y`.  Returns `y` if `x === y`.
-export function nextAfterFloat64(x: number, y: number) {
-  if (Number.isNaN(x) || Number.isNaN(y)) return NaN;
-  if (x === y) return y;
-  if (x === 0) {
-    return y < 0 ? -denormMin : denormMin;
-  }
-  float64Buf[0] = x;
-  const lowIndex = ENDIANNESS === Endianness.LITTLE ? 0 : 1;
-  const highIndex = 1 - lowIndex;
-  if (y > x === x > 0) {
-    if (uint32Buf[lowIndex] === 0xffffffff) {
-      uint32Buf[lowIndex] = 0;
-      uint32Buf[highIndex] += 1;
-    } else {
-      uint32Buf[lowIndex] += 1;
-    }
-  } else {
-    if (uint32Buf[lowIndex] === 0) {
-      uint32Buf[lowIndex] = 0xffffffff;
-      uint32Buf[highIndex] -= 1;
-    } else {
-      uint32Buf[lowIndex] -= 1;
-    }
-  }
-  return float64Buf[0];
-}

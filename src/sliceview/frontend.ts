@@ -50,25 +50,11 @@ import {
 import { ChunkLayout } from "#src/sliceview/chunk_layout.js";
 import { SliceViewRenderLayer } from "#src/sliceview/renderlayer.js";
 import type { Borrowed, Disposer, Owned } from "#src/util/disposable.js";
-import { RefCounted } from "#src/util/disposable.js";
-import type { vec4 } from "#src/util/geom.js";
 import { kOneVec, mat4, vec3 } from "#src/util/geom.js";
-import { getObjectId } from "#src/util/object_id.js";
 import { NullarySignal } from "#src/util/signal.js";
-import { withSharedVisibility } from "#src/visibility_priority/frontend.js";
-import type { GL } from "#src/webgl/context.js";
-import {
-  DepthTextureBuffer,
-  FramebufferConfiguration,
-  makeTextureBuffers,
-} from "#src/webgl/offscreen.js";
-import type { ShaderModule, ShaderProgram } from "#src/webgl/shader.js";
-import { ShaderBuilder } from "#src/webgl/shader.js";
-import { getSquareCornersBuffer } from "#src/webgl/square_corners_buffer.js";
+import { OffscreenFramebuffer } from "#src/webgl/offscreen.js";
 import type { RPC } from "#src/worker/worker_rpc.js";
 import { registerSharedObjectOwner } from "#src/worker/worker_rpc.js";
-
-const Base = withSharedVisibility(SliceViewBase);
 
 export interface FrontendTransformedSource<
   RLayer extends SliceViewRenderLayer = SliceViewRenderLayer,
@@ -119,19 +105,15 @@ export function serializeAllTransformedSources(
  * and draws the chunks that have reached the GPU into `offscreenFramebuffer`.
  */
 @registerSharedObjectOwner(SLICEVIEW_RPC_ID)
-export class SliceView extends Base {
+export class SliceView extends SliceViewBase {
   gl = this.chunkManager.gl;
   viewChanged = new NullarySignal();
   renderingStale = true;
-  visibleChunksStale = true;
   visibleLayerList = new Array<SliceViewRenderLayer>();
   visibleLayers: Map<SliceViewRenderLayer, FrontendVisibleLayerSources>;
 
   offscreenFramebuffer = this.registerDisposer(
-    new FramebufferConfiguration(this.gl, {
-      colorBuffers: makeTextureBuffers(this.gl, 1),
-      depthBuffer: new DepthTextureBuffer(this.gl),
-    }),
+    new OffscreenFramebuffer(this.gl),
   );
 
   projectionParameters: Owned<
@@ -407,97 +389,6 @@ export class SliceViewChunk extends Chunk {
     super(source);
     this.chunkGridPosition = x.chunkGridPosition;
     this.state = ChunkState.SYSTEM_MEMORY;
-  }
-}
-
-/**
- * Helper for rendering a SliceView that has been pre-rendered to a texture.
- */
-export class SliceViewRenderHelper extends RefCounted {
-  private copyVertexPositionsBuffer = getSquareCornersBuffer(this.gl);
-  private shader: ShaderProgram;
-
-  private textureCoordinateAdjustment = new Float32Array(4);
-
-  constructor(
-    public gl: GL,
-    emitter: ShaderModule,
-  ) {
-    super();
-    const builder = new ShaderBuilder(gl);
-    builder.addVarying("vec2", "vTexCoord");
-    builder.addUniform("sampler2D", "uSampler");
-    builder.addInitializer((shader) => {
-      gl.uniform1i(shader.uniform("uSampler"), 0);
-    });
-    builder.addUniform("vec4", "uColorFactor");
-    builder.addUniform("vec4", "uBackgroundColor");
-    builder.addUniform("mat4", "uProjectionMatrix");
-    builder.addUniform("vec4", "uTextureCoordinateAdjustment");
-    builder.require(emitter);
-    builder.setFragmentMain(`
-vec4 sampledColor = texture(uSampler, vTexCoord);
-if (sampledColor.a == 0.0) {
-  sampledColor = uBackgroundColor;
-}
-emit(sampledColor * uColorFactor, 0u);
-`);
-    builder.addAttribute("vec4", "aVertexPosition");
-    builder.setVertexMain(`
-vTexCoord = uTextureCoordinateAdjustment.xy + 0.5 * (aVertexPosition.xy + 1.0) * uTextureCoordinateAdjustment.zw;
-gl_Position = uProjectionMatrix * aVertexPosition;
-`);
-    this.shader = this.registerDisposer(builder.build());
-  }
-
-  draw(
-    texture: WebGLTexture | null,
-    projectionMatrix: mat4,
-    colorFactor: vec4,
-    backgroundColor: vec4,
-    xStart: number,
-    yStart: number,
-    xEnd: number,
-    yEnd: number,
-  ) {
-    const { gl, shader, textureCoordinateAdjustment } = this;
-    textureCoordinateAdjustment[0] = xStart;
-    textureCoordinateAdjustment[1] = yStart;
-    textureCoordinateAdjustment[2] = xEnd - xStart;
-    textureCoordinateAdjustment[3] = yEnd - yStart;
-    shader.bind();
-    gl.activeTexture(gl.TEXTURE0);
-    gl.bindTexture(gl.TEXTURE_2D, texture);
-    gl.disable(WebGL2RenderingContext.BLEND);
-    gl.uniformMatrix4fv(
-      shader.uniform("uProjectionMatrix"),
-      false,
-      projectionMatrix,
-    );
-    gl.uniform4fv(shader.uniform("uColorFactor"), colorFactor);
-    gl.uniform4fv(shader.uniform("uBackgroundColor"), backgroundColor);
-    gl.uniform4fv(
-      shader.uniform("uTextureCoordinateAdjustment"),
-      textureCoordinateAdjustment,
-    );
-
-    const aVertexPosition = shader.attribute("aVertexPosition");
-    this.copyVertexPositionsBuffer.bindToVertexAttrib(
-      aVertexPosition,
-      /*components=*/ 2,
-    );
-
-    gl.drawArrays(gl.TRIANGLE_FAN, 0, 4);
-
-    gl.disableVertexAttribArray(aVertexPosition);
-    gl.bindTexture(gl.TEXTURE_2D, null);
-  }
-
-  static get(gl: GL, emitter: ShaderModule) {
-    return gl.memoize.get(
-      `sliceview/SliceViewRenderHelper:${getObjectId(emitter)}`,
-      () => new SliceViewRenderHelper(gl, emitter),
-    );
   }
 }
 

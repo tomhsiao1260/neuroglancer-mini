@@ -25,17 +25,11 @@ export interface GL extends WebGL2RenderingContext {
   tempTextureUnit: number;
 }
 
-export const DEBUG_SHADERS = false;
-
 export function initializeWebGL(canvas: HTMLCanvasElement) {
-  const options: any = {
+  const options = {
     antialias: false,
     stencil: true,
   };
-  if (DEBUG_SHADERS) {
-    console.log("DEBUGGING via preserveDrawingBuffer");
-    options.preserveDrawingBuffer = true;
-  }
   const gl = <GL>canvas.getContext("webgl2", options);
   if (gl == null) {
     throw new Error("WebGL not supported.");
@@ -45,10 +39,6 @@ export function initializeWebGL(canvas: HTMLCanvasElement) {
   gl.max3dTextureSize = gl.getParameter(gl.MAX_3D_TEXTURE_SIZE);
   gl.maxTextureImageUnits = gl.getParameter(gl.MAX_TEXTURE_IMAGE_UNITS);
   gl.tempTextureUnit = gl.maxTextureImageUnits - 1;
-
-  // FIXME: verify that we received a stencil buffer
-  // var contextAttributes = gl.getContextAttributes();
-  // var haveStencilBuffer = contextAttributes.stencil;
 
   for (const extension of ["EXT_color_buffer_float"]) {
     if (!gl.getExtension(extension)) {

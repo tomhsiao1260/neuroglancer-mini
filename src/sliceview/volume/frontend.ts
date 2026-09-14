@@ -15,170 +15,52 @@
  */
 
 import type { ChunkManager } from "#src/chunk_manager/frontend.js";
-import type {
-  DataType,
-  SliceViewChunkSpecification,
-} from "#src/sliceview/base.js";
+import type { SliceViewChunkSpecification } from "#src/sliceview/base.js";
 import {
   MultiscaleSliceViewChunkSource,
   SliceViewChunk,
   SliceViewChunkSource,
 } from "#src/sliceview/frontend.js";
 import type {
+  DataType,
   VolumeChunkSource as VolumeChunkSourceInterface,
   VolumeChunkSpecification,
 } from "#src/sliceview/volume/base.js";
-import type { Disposable } from "#src/util/disposable.js";
+import {
+  ChunkFormat,
+  FillValueTexture,
+  TextureLayout,
+} from "#src/sliceview/volume/chunk_format.js";
+import type { TypedArray } from "#src/util/array.js";
 import type { GL } from "#src/webgl/context.js";
-import type { ShaderBuilder, ShaderProgram } from "#src/webgl/shader.js";
-import { getShaderType, glsl_mixLinear } from "#src/webgl/shader_lib.js";
-
-export interface ChunkFormat {
-  shaderKey: string;
-
-  dataType: DataType;
-
-  /**
-   * Called on the ChunkFormat of the first source of a RenderLayer.
-   *
-   * This should define a fragment shader function:
-   *
-   *   value_type getDataValueAt(ivec3 position, int channelIndex...);
-   *
-   * where value_type is `getShaderType(this.dataType)`.
-   */
-  defineShader: (builder: ShaderBuilder, numChannelDimensions: number) => void;
-
-  /**
-   * Called once per RenderLayer when starting to draw chunks, on the ChunkFormat of the first
-   * source.  This is not called before each source is drawn.
-   */
-  beginDrawing: (gl: GL, shader: ShaderProgram) => void;
-
-  /**
-   * Called once after all chunks have been drawn, on the ChunkFormat of the first source.
-   */
-  endDrawing: (gl: GL, shader: ShaderProgram) => void;
-
-  /**
-   * Called just before drawing each chunk, on the ChunkFormat .
-   */
-  bindChunk: (
-    gl: GL,
-    shader: ShaderProgram,
-    chunk: SliceViewChunk,
-    fixedChunkPosition: Uint32Array,
-    displayChunkDimensions: readonly number[],
-    channelDimensions: readonly number[],
-    newSource: boolean,
-  ) => void;
-
-  /**
-   * Called just before drawing chunks for the source.
-   */
-  beginSource: (gl: GL, shader: ShaderProgram) => void;
-}
-
-export function defineChunkDataShaderAccess(
-  builder: ShaderBuilder,
-  chunkFormat: ChunkFormat,
-  numChannelDimensions: number,
-  getPositionWithinChunkExpr: string,
-) {
-  const { dataType } = chunkFormat;
-  chunkFormat.defineShader(builder, numChannelDimensions);
-  let dataAccessChannelParams = "";
-  let dataAccessChannelArgs = "";
-  if (numChannelDimensions === 0) {
-    dataAccessChannelParams += "highp int ignoredChannelIndex";
-  } else {
-    for (let channelDim = 0; channelDim < numChannelDimensions; ++channelDim) {
-      if (channelDim !== 0) dataAccessChannelParams += ", ";
-      dataAccessChannelParams += `highp int channelIndex${channelDim}`;
-      dataAccessChannelArgs += `, channelIndex${channelDim}`;
-    }
-  }
-
-  builder.addFragmentCode(glsl_mixLinear);
-  const dataAccessCode = `
-${getShaderType(dataType)} getDataValue(${dataAccessChannelParams}) {
-  highp ivec3 p = ivec3(max(vec3(0.0, 0.0, 0.0), min(floor(${getPositionWithinChunkExpr}), uChunkDataSize - 1.0)));
-  return getDataValueAt(p${dataAccessChannelArgs});
-}
-${getShaderType(
-  dataType,
-)} getInterpolatedDataValue(${dataAccessChannelParams}) {
-  highp vec3 positionWithinChunk = ${getPositionWithinChunkExpr};
-  highp ivec3[2] points;
-  points[0] = ivec3(max(vec3(0.0, 0.0, 0.0), min(floor(positionWithinChunk - 0.5), uChunkDataSize - 1.0)));
-  points[1] = ivec3(max(vec3(0.0, 0.0, 0.0), min(ceil(positionWithinChunk - 0.5), uChunkDataSize - 1.0)));
-  highp vec3 mixCoeff = fract(positionWithinChunk - 0.5);
-  ${getShaderType(dataType)} xvalues[2];
-  for (int ix = 0; ix < 2; ++ix) {
-    ${getShaderType(dataType)} yvalues[2];
-    for (int iy = 0; iy < 2; ++iy) {
-      ${getShaderType(dataType)} zvalues[2];
-      for (int iz = 0; iz < 2; ++iz) {
-        zvalues[iz] = getDataValueAt(ivec3(points[ix].x, points[iy].y, points[iz].z)
-                                     ${dataAccessChannelArgs});
-      }
-      yvalues[iy] = mixLinear(zvalues[0], zvalues[1], mixCoeff.z);
-    }
-    xvalues[ix] = mixLinear(yvalues[0], yvalues[1], mixCoeff.y);
-  }
-  return mixLinear(xvalues[0], xvalues[1], mixCoeff.x);
-}
-`;
-  builder.addFragmentCode(dataAccessCode);
-  if (numChannelDimensions <= 1) {
-    builder.addFragmentCode(`
-${getShaderType(dataType)} getDataValue() { return getDataValue(0); }
-${getShaderType(
-  dataType,
-)} getInterpolatedDataValue() { return getInterpolatedDataValue(0); }
-`);
-  }
-}
-
-export interface ChunkFormatHandler extends Disposable {
-  chunkFormat: ChunkFormat;
-  getChunk(source: SliceViewChunkSource, x: any): SliceViewChunk;
-}
-
-export type ChunkFormatHandlerFactory = (
-  gl: GL,
-  spec: VolumeChunkSpecification,
-) => ChunkFormatHandler | null;
-
-const chunkFormatHandlers = new Array<ChunkFormatHandlerFactory>();
-
-export function registerChunkFormatHandler(factory: ChunkFormatHandlerFactory) {
-  chunkFormatHandlers.push(factory);
-}
-
-export function getChunkFormatHandler(gl: GL, spec: VolumeChunkSpecification) {
-  for (const handler of chunkFormatHandlers) {
-    const result = handler(gl, spec);
-    if (result != null) {
-      return result;
-    }
-  }
-  throw new Error("No chunk format handler found.");
-}
 
 export class VolumeChunkSource
   extends SliceViewChunkSource<VolumeChunkSpecification, VolumeChunk>
   implements VolumeChunkSourceInterface
 {
-  chunkFormatHandler: ChunkFormatHandler;
+  chunkFormat: ChunkFormat;
+  // Layout of the texture of each chunk of this source.
+  textureLayout: TextureLayout;
+  fillValueTexture: FillValueTexture;
 
   constructor(
     chunkManager: ChunkManager,
     options: { spec: VolumeChunkSpecification },
   ) {
     super(chunkManager, options);
-    this.chunkFormatHandler = this.registerDisposer(
-      getChunkFormatHandler(chunkManager.chunkQueueManager.gl, this.spec),
+    const { gl } = chunkManager.chunkQueueManager;
+    const { chunkDataSize, dataType } = this.spec;
+    let numDims = 0;
+    for (const x of chunkDataSize) {
+      if (x > 1) ++numDims;
+    }
+    const textureDims = numDims >= 3 ? 3 : 2;
+    this.chunkFormat = this.registerDisposer(
+      ChunkFormat.get(gl, dataType, textureDims),
+    );
+    this.textureLayout = new TextureLayout(gl, chunkDataSize, textureDims);
+    this.fillValueTexture = this.registerDisposer(
+      FillValueTexture.get(gl, this.chunkFormat, chunkDataSize.length),
     );
   }
 
@@ -190,27 +72,50 @@ export class VolumeChunkSource
     };
   }
 
-  get chunkFormat() {
-    return this.chunkFormatHandler.chunkFormat;
-  }
-
   getChunk(x: any): VolumeChunk {
-    return <VolumeChunk>this.chunkFormatHandler.getChunk(this, x);
+    const chunk = new VolumeChunk(this, x);
+    if (chunk.data === null) {
+      chunk.texture = this.fillValueTexture.texture;
+      chunk.textureLayout = this.fillValueTexture.textureLayout;
+    }
+    return chunk;
   }
 }
 
-export abstract class VolumeChunk extends SliceViewChunk {
+/**
+ * Main-thread copy of a volume chunk.  Its data is uploaded to a texture while the chunk is in GPU
+ * memory; a chunk with no data uses the source's fill value texture instead.
+ */
+export class VolumeChunk extends SliceViewChunk {
   source: VolumeChunkSource;
   chunkDataSize: Uint32Array;
-  CHUNK_FORMAT_TYPE: ChunkFormat;
-
-  get chunkFormat(): this["CHUNK_FORMAT_TYPE"] {
-    return this.source.chunkFormat;
-  }
+  data: TypedArray | null;
+  texture: WebGLTexture | null = null;
+  textureLayout: TextureLayout | null = null;
 
   constructor(source: VolumeChunkSource, x: any) {
     super(source, x);
     this.chunkDataSize = x.chunkDataSize || source.spec.chunkDataSize;
+    this.data = x.data;
+  }
+
+  copyToGPU(gl: GL) {
+    super.copyToGPU(gl);
+    if (this.data === null) return;
+    const { chunkFormat, textureLayout } = this.source;
+    const texture = (this.texture = gl.createTexture());
+    gl.bindTexture(chunkFormat.textureTarget, texture);
+    this.textureLayout = textureLayout;
+    chunkFormat.setTextureData(gl, textureLayout, this.data);
+    gl.bindTexture(chunkFormat.textureTarget, null);
+  }
+
+  freeGPUMemory(gl: GL) {
+    super.freeGPUMemory(gl);
+    if (this.data === null) return;
+    gl.deleteTexture(this.texture);
+    this.texture = null;
+    this.textureLayout = null;
   }
 }
 

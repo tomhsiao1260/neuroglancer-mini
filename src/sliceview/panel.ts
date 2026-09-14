@@ -18,42 +18,78 @@ import type { ChunkManager } from "#src/chunk_manager/frontend.js";
 import type { DisplayContext } from "#src/layer/display_context.js";
 import { RenderViewport } from "#src/layer/display_context.js";
 import type { ImageUserLayer } from "#src/layer/index.js";
-import { SliceView, SliceViewRenderHelper } from "#src/sliceview/frontend.js";
+import { SliceView } from "#src/sliceview/frontend.js";
 import { RefCounted } from "#src/util/disposable.js";
-import { identityMat4, vec3, vec4 } from "#src/util/geom.js";
-import type { WatchableVisibilityPriority } from "#src/visibility_priority/frontend.js";
+import { vec3 } from "#src/util/geom.js";
+import { Buffer } from "#src/webgl/buffer.js";
 import type { GL } from "#src/webgl/context.js";
-import {
-  FramebufferConfiguration,
-  OffscreenCopyHelper,
-  TextureBuffer,
-} from "#src/webgl/offscreen.js";
-import type { ShaderBuilder } from "#src/webgl/shader.js";
+import type { ShaderProgram } from "#src/webgl/shader.js";
+import { ShaderBuilder } from "#src/webgl/shader.js";
 
 export interface SliceViewerState {
   display: DisplayContext;
   chunkManager: ChunkManager;
   layerManager: ImageUserLayer;
-  visibility: WatchableVisibilityPriority;
 }
 
-export enum OffscreenTextures {
-  COLOR = 0,
-  PICK = 1,
-  NUM_TEXTURES = 2,
-}
+/**
+ * Draws the texture a `SliceView` rendered into over the current viewport.  Pixels where no chunk
+ * was drawn (alpha 0) are shown gray.
+ */
+class SliceViewTextureRenderer extends RefCounted {
+  private shader: ShaderProgram;
+  private vertexBuffer: Buffer;
 
-function sliceViewPanelEmitColor(builder: ShaderBuilder) {
-  builder.addOutputBuffer("vec4", "out_fragColor", null);
-  builder.addFragmentCode(`
-void emit(vec4 color, highp uint pickId) {
-  out_fragColor = color;
-}
+  constructor(public gl: GL) {
+    super();
+    const builder = new ShaderBuilder(gl);
+    builder.addAttribute("vec4", "aVertexPosition");
+    builder.addVarying("vec2", "vTexCoord");
+    builder.addUniform("sampler2D", "uSampler");
+    builder.addInitializer((shader) => {
+      gl.uniform1i(shader.uniform("uSampler"), 0);
+    });
+    builder.addOutputBuffer("vec4", "out_fragColor", null);
+    builder.setVertexMain(`
+vTexCoord = 0.5 * (aVertexPosition.xy + 1.0);
+gl_Position = aVertexPosition;
 `);
+    builder.setFragmentMain(`
+vec4 sampledColor = texture(uSampler, vTexCoord);
+if (sampledColor.a == 0.0) {
+  sampledColor = vec4(0.5, 0.5, 0.5, 1.0);
+}
+out_fragColor = sampledColor;
+`);
+    this.shader = this.registerDisposer(builder.build());
+    // Corners of the square covering the viewport, in clip coordinates.
+    this.vertexBuffer = this.registerDisposer(
+      Buffer.fromData(gl, new Float32Array([-1, -1, -1, 1, 1, 1, 1, -1])),
+    );
+  }
+
+  draw(texture: WebGLTexture | null) {
+    const { gl, shader } = this;
+    shader.bind();
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, texture);
+    gl.disable(WebGL2RenderingContext.BLEND);
+    const aVertexPosition = shader.attribute("aVertexPosition");
+    this.vertexBuffer.bindToVertexAttrib(aVertexPosition, /*components=*/ 2);
+    gl.drawArrays(gl.TRIANGLE_FAN, 0, 4);
+    gl.disableVertexAttribArray(aVertexPosition);
+    gl.bindTexture(gl.TEXTURE_2D, null);
+  }
+
+  static get(gl: GL) {
+    return gl.memoize.get(
+      "SliceViewTextureRenderer",
+      () => new SliceViewTextureRenderer(gl),
+    );
+  }
 }
 
 const tempVec3 = vec3.create();
-const tempVec4 = vec4.create();
 
 function hasNoModifiers(event: MouseEvent) {
   return !event.ctrlKey && !event.altKey && !event.metaKey && !event.shiftKey;
@@ -81,8 +117,8 @@ function getWheelZoomAmount(event: WheelEvent) {
 }
 
 /**
- * One cross-section view.  Renders its `SliceView` into the part of the shared canvas covered by
- * `element`, and turns mouse input on `element` into navigation:
+ * One cross-section view.  Its `SliceView` renders into a texture, which is drawn into the part of
+ * the shared canvas covered by `element`.  Mouse input on `element` becomes navigation:
  *
  *   - left drag: pan
  *   - wheel: move one voxel along the viewing direction
@@ -102,32 +138,8 @@ export class SliceViewPanel extends RefCounted {
 
   renderViewport = new RenderViewport();
 
-  private sliceViewRenderHelper = this.registerDisposer(
-    SliceViewRenderHelper.get(this.gl, sliceViewPanelEmitColor),
-  );
-  private colorFactor = vec4.fromValues(1, 1, 1, 1);
-
-  private offscreenFramebuffer = this.registerDisposer(
-    new FramebufferConfiguration(this.gl, {
-      colorBuffers: [
-        new TextureBuffer(
-          this.gl,
-          WebGL2RenderingContext.RGBA8,
-          WebGL2RenderingContext.RGBA,
-          WebGL2RenderingContext.UNSIGNED_BYTE,
-        ),
-        new TextureBuffer(
-          this.gl,
-          WebGL2RenderingContext.R32F,
-          WebGL2RenderingContext.RED,
-          WebGL2RenderingContext.FLOAT,
-        ),
-      ],
-    }),
-  );
-
-  private offscreenCopyHelper = this.registerDisposer(
-    OffscreenCopyHelper.get(this.gl),
+  private textureRenderer = this.registerDisposer(
+    SliceViewTextureRenderer.get(this.gl),
   );
 
   sliceView: any;
@@ -142,8 +154,6 @@ export class SliceViewPanel extends RefCounted {
     display.addPanel(this);
 
     this.sliceView = new SliceView(chunkManager, layerManager, navigationState);
-
-    this.registerDisposer(this.sliceView.visibility.add(viewer.visibility));
 
     this.registerDisposer(
       this.sliceView.viewChanged.add(() => display.scheduleRedraw()),
@@ -223,42 +233,9 @@ export class SliceViewPanel extends RefCounted {
     if (!sliceView.valid) {
       return false;
     }
-
     sliceView.updateRendering();
-    const { width, height } = sliceView.projectionParameters.value;
-    const { gl } = this;
-
-    this.offscreenFramebuffer.bind(width, height);
-    gl.disable(WebGL2RenderingContext.SCISSOR_TEST);
-    this.gl.clearColor(0.0, 0.0, 0.0, 0.0);
-    gl.clear(WebGL2RenderingContext.COLOR_BUFFER_BIT);
-
-    const backgroundColor = tempVec4;
-    backgroundColor[0] = 0.5;
-    backgroundColor[1] = 0.5;
-    backgroundColor[2] = 0.5;
-    backgroundColor[3] = 1;
-
-    this.offscreenFramebuffer.bindSingle(OffscreenTextures.COLOR);
-    this.sliceViewRenderHelper.draw(
-      sliceView.offscreenFramebuffer.colorBuffers[0].texture,
-      identityMat4,
-      this.colorFactor,
-      backgroundColor,
-      0,
-      0,
-      1,
-      1,
-    );
-
-    gl.disable(WebGL2RenderingContext.BLEND);
-    this.offscreenFramebuffer.unbind();
-
-    // Draw the texture over the whole viewport.
     this.setGLClippedViewport();
-    this.offscreenCopyHelper.draw(
-      this.offscreenFramebuffer.colorBuffers[OffscreenTextures.COLOR].texture,
-    );
+    this.textureRenderer.draw(sliceView.offscreenFramebuffer.colorTexture);
     return true;
   }
 

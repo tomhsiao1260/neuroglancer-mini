@@ -16,48 +16,6 @@
 
 import type { TypedArray } from "#src/util/array.js";
 
-export function add<
-  Out extends TypedArray,
-  A extends TypedArray,
-  B extends TypedArray,
->(out: Out, a: A, b: B) {
-  const rank = out.length;
-  for (let i = 0; i < rank; ++i) {
-    out[i] = a[i] + b[i];
-  }
-  return out;
-}
-export function multiply<
-  Out extends TypedArray,
-  A extends TypedArray,
-  B extends TypedArray,
->(out: Out, a: A, b: B) {
-  const rank = out.length;
-  for (let i = 0; i < rank; ++i) {
-    out[i] = a[i] * b[i];
-  }
-  return out;
-}
-
-export function prod(array: ArrayLike<number>) {
-  let result = 1;
-  for (let i = 0, length = array.length; i < length; ++i) {
-    result *= array[i];
-  }
-  return result;
-}
-
-export function min<
-  Out extends TypedArray,
-  A extends TypedArray,
-  B extends TypedArray,
->(out: Out, a: A, b: B) {
-  const rank = out.length;
-  for (let i = 0; i < rank; ++i) {
-    out[i] = Math.min(a[i], b[i]);
-  }
-  return out;
-}
 
 export const kEmptyFloat32Vec = new Float32Array(0);
 export const kEmptyFloat64Vec = new Float64Array(0);

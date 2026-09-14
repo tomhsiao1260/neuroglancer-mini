@@ -81,13 +81,6 @@ export class SharedWatchableValue<T>
     return obj;
   }
 
-  static make<T>(rpc: RPC, value: T) {
-    return SharedWatchableValue.makeFromExisting(
-      rpc,
-      new WatchableValue<T>(value),
-    );
-  }
-
   get value() {
     return this.base.value;
   }

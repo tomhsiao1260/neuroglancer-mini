@@ -255,14 +255,6 @@ function convertJsonHelper(
   return s;
 }
 
-export function urlSafeToJSON(x: string) {
-  return convertJsonHelper(x, ",", '"');
-}
-
-export function urlSafeParse(x: string) {
-  return JSON.parse(urlSafeToJSON(x));
-}
-
 // Checks that `x' is an array, maps each element by parseElement.
 export function parseArray<T>(
   x: any,
@@ -298,14 +290,6 @@ export function verifyObject(obj: any) {
     );
   }
   return obj;
-}
-
-export function verifyInt(obj: any) {
-  const result = parseInt(obj, 10);
-  if (!Number.isInteger(result)) {
-    throw new Error(`Expected integer, but received: ${JSON.stringify(obj)}.`);
-  }
-  return result;
 }
 
 export function verifyString(obj: any) {
@@ -358,49 +342,6 @@ export function verifyOptionalObjectProperty<T>(
   );
 }
 
-/**
- * The query string parameters may either be specified in the usual
- * 'name=value&otherName=otherValue' form or as (optionally urlSafe) JSON: '{"name":"value"}`.
- */
-export function parseQueryStringParameters(queryString: string) {
-  if (queryString === "") {
-    return {};
-  }
-  if (queryString.startsWith("{")) {
-    return urlSafeParse(queryString);
-  }
-  const result: any = {};
-  const parts = queryString.split(/[&;]/);
-  for (const part of parts) {
-    const m = part.match(/^([^=&;]+)=([^&;]*)$/);
-    if (m === null) {
-      throw new Error(`Invalid query string part: ${JSON.stringify(part)}.`);
-    }
-    result[m[1]] = decodeURIComponent(m[2]);
-  }
-  return result;
-}
-
-/**
- * Verifies that `obj' is a string that, when converted to uppercase, matches a string property of
- * `enumType`.
- *
- * @returns The corresponding numerical value.
- */
-export function verifyEnumString<T extends number>(
-  obj: any,
-  enumType: { [x: string]: T | string },
-  pattern: RegExp = /^[a-zA-Z]/,
-): T {
-  if (typeof obj === "string" && obj.match(pattern) !== null) {
-    const objUpperCase = obj.toUpperCase();
-    if (Object.prototype.hasOwnProperty.call(enumType, objUpperCase)) {
-      return enumType[objUpperCase] as T;
-    }
-  }
-  throw new Error(`Invalid enum value: ${JSON.stringify(obj)}.`);
-}
-
 export function verifyConstant<T>(actual: unknown, expected: T) {
   if (actual !== expected) {
     throw new Error(
@@ -412,21 +353,3 @@ export function verifyConstant<T>(actual: unknown, expected: T) {
   return expected;
 }
 
-export function verifyOptionalFixedLengthArrayOfStringOrNull(
-  obj: unknown,
-  rank: number,
-) {
-  if (obj === undefined) {
-    const array = new Array<string | null>(rank);
-    array.fill(null);
-    return array;
-  }
-  return parseFixedLengthArray(new Array<string | null>(rank), obj, (value) => {
-    if (value !== null && typeof value !== "string") {
-      throw new Error(
-        `Expected string or null, but received: ${JSON.stringify(name)}`,
-      );
-    }
-    return value;
-  });
-}

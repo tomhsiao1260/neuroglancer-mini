@@ -15,7 +15,6 @@
  */
 
 import { ChunkState } from "#src/chunk_manager/base.js";
-import type { CoordinateSpace } from "#src/state/coordinate_transform.js";
 import {
   defineBoundingBoxCrossSectionShader,
   setBoundingBoxCrossSectionShaderViewportPlane,
@@ -30,20 +29,15 @@ import type {
   SliceViewRenderLayerOptions,
 } from "#src/sliceview/renderlayer.js";
 import { SliceViewRenderLayer } from "#src/sliceview/renderlayer.js";
+import type { ChunkFormat } from "#src/sliceview/volume/chunk_format.js";
 import type {
-  ChunkFormat,
   MultiscaleVolumeChunkSource,
   VolumeChunkSource,
 } from "#src/sliceview/volume/frontend.js";
-import { defineChunkDataShaderAccess } from "#src/sliceview/volume/frontend.js";
-import type { WatchableValueInterface } from "#src/state/trackable_value.js";
-import { makeCachedDerivedWatchableValue } from "#src/state/trackable_value.js";
 import { mat4, vec3 } from "#src/util/geom.js";
-import { getObjectId } from "#src/util/object_id.js";
 import type { GL } from "#src/webgl/context.js";
-import type { ParameterizedContextDependentShaderGetter } from "#src/webgl/dynamic_shader.js";
-import { parameterizedContextDependentShaderGetter } from "#src/webgl/dynamic_shader.js";
-import type { ShaderBuilder, ShaderProgram } from "#src/webgl/shader.js";
+import type { ShaderProgram } from "#src/webgl/shader.js";
+import { ShaderBuilder } from "#src/webgl/shader.js";
 import { defineVertexId, VertexIdHelper } from "#src/webgl/vertex_id.js";
 
 /**
@@ -89,6 +83,13 @@ gl_Position.z = 0.0;
 vChunkPosition = (position - uTranslation) +
     ${CHUNK_POSITION_EPSILON} * abs(uPlaneNormal);
 `);
+
+  builder.addOutputBuffer("vec4", "v4f_fragData0", 0);
+  builder.addFragmentCode(`
+void emit(vec4 color) {
+  v4f_fragData0 = color;
+}
+`);
 }
 
 function beginSource(
@@ -127,65 +128,26 @@ function beginSource(
   );
 }
 
-export interface RenderLayerBaseOptions extends SliceViewRenderLayerOptions {
-  channelCoordinateSpace: WatchableValueInterface<CoordinateSpace>;
-}
-
-interface ShaderParameters {
-  numChannelDimensions: number;
-}
-
+/**
+ * Draws the visible chunks of a volume: for each chunk, the polygon where the slice plane cuts the
+ * chunk's box, textured with the chunk's data.  Subclasses turn the data value into a color.
+ */
 export abstract class SliceViewVolumeRenderLayer extends SliceViewRenderLayer<VolumeChunkSource> {
   multiscaleSource: MultiscaleVolumeChunkSource;
-  protected shaderGetter: ParameterizedContextDependentShaderGetter<{
-    chunkFormat: ChunkFormat;
-  }>;
   private vertexIdHelper: VertexIdHelper;
+  // Shader for each chunk format, built on first use; `null` if it failed to build.
+  private shaders = new Map<ChunkFormat, ShaderProgram | null>();
 
   constructor(
     multiscaleSource: MultiscaleVolumeChunkSource,
-    options: RenderLayerBaseOptions,
+    options: SliceViewRenderLayerOptions,
   ) {
     super(multiscaleSource.chunkManager, multiscaleSource, options);
-    const { gl } = this;
-    this.vertexIdHelper = this.registerDisposer(VertexIdHelper.get(gl));
-    this.channelCoordinateSpace = options.channelCoordinateSpace;
-    // The shader depends on the `ChunkFormat` (which is a property of the `VolumeChunkSource`) and
-    // on the number of channel dimensions.
-    const shaderParameters = this.registerDisposer(
-      makeCachedDerivedWatchableValue(
-        (space: CoordinateSpace) => ({ numChannelDimensions: space.rank }),
-        [this.channelCoordinateSpace],
-        (a, b) => a.numChannelDimensions === b.numChannelDimensions,
-      ),
-    );
-    this.registerDisposer(
-      shaderParameters.changed.add(this.redrawNeeded.dispatch),
-    );
-    this.shaderGetter = parameterizedContextDependentShaderGetter(this, gl, {
-      memoizeKey: `volume/RenderLayer:${getObjectId(this.constructor)}`,
-      parameters: shaderParameters,
-      defineShader: (
-        builder: ShaderBuilder,
-        context: { chunkFormat: ChunkFormat },
-        parameters: ShaderParameters,
-      ) => {
-        defineVolumeShader(builder);
-        builder.addOutputBuffer("vec4", "v4f_fragData0", 0);
-        builder.addFragmentCode(`
-void emit(vec4 color) {
-  v4f_fragData0 = color;
-}
-`);
-        defineChunkDataShaderAccess(
-          builder,
-          context.chunkFormat,
-          parameters.numChannelDimensions,
-          "vChunkPosition",
-        );
-        this.defineShader(builder, parameters.numChannelDimensions);
-      },
-      getContextKey: (context) => `${context.chunkFormat.shaderKey}`,
+    this.vertexIdHelper = this.registerDisposer(VertexIdHelper.get(this.gl));
+    this.registerDisposer(() => {
+      for (const shader of this.shaders.values()) {
+        shader?.dispose();
+      }
     });
     this.initializeCounterpart();
   }
@@ -194,21 +156,36 @@ void emit(vec4 color) {
     return this.multiscaleSource.dataType;
   }
 
-  // Adds the fragment shader code that turns the data value at `vChunkPosition` into a color.
-  abstract defineShader(
-    builder: ShaderBuilder,
-    numChannelDimensions: number,
-  ): void;
+  // Adds the fragment shader `main`, which turns `getDataValue()` into a color passed to `emit`.
+  abstract defineShader(builder: ShaderBuilder): void;
 
   // Sets the uniforms used by the code added in `defineShader`.
   abstract initializeShader(shader: ShaderProgram): void;
 
+  private getShader(chunkFormat: ChunkFormat) {
+    let shader = this.shaders.get(chunkFormat);
+    if (shader === undefined) {
+      shader = null;
+      try {
+        const builder = new ShaderBuilder(this.gl);
+        defineVolumeShader(builder);
+        chunkFormat.defineShader(builder);
+        this.defineShader(builder);
+        shader = builder.build();
+      } catch {
+        // Leave the shader unset; nothing is drawn with it.
+      }
+      this.shaders.set(chunkFormat, shader);
+    }
+    return shader;
+  }
+
   private beginChunkFormat(chunkFormat: ChunkFormat) {
-    const shader = this.shaderGetter({ chunkFormat });
+    const shader = this.getShader(chunkFormat);
     if (shader !== null) {
       shader.bind();
       this.initializeShader(shader);
-      chunkFormat.beginDrawing(this.gl, shader);
+      chunkFormat.beginDrawing(this.gl);
     }
     return shader;
   }
@@ -234,14 +211,11 @@ void emit(vec4 color) {
 
     const endShader = () => {
       if (shader === null) return;
-      prevChunkFormat!.endDrawing(gl, shader);
+      prevChunkFormat!.endDrawing(gl);
     };
     let newSource = true;
     for (const transformedSource of visibleSources) {
       const { chunkLayout } = transformedSource;
-      const {
-        chunkTransform: { channelToChunkDimensionIndices },
-      } = transformedSource;
       const source = transformedSource.source as VolumeChunkSource;
       const { fixedPositionWithinChunk, chunkDisplayDimensionIndices } =
         transformedSource;
@@ -272,7 +246,6 @@ void emit(vec4 color) {
         transformedSource,
         chunkLayout,
       );
-      chunkFormat.beginSource(gl, shader);
       newSource = true;
       sliceView.forEachVisibleChunk(transformedSource, chunkLayout, (key) => {
         const chunk = chunks.get(key);
@@ -303,7 +276,6 @@ void emit(vec4 color) {
             chunk,
             fixedPositionWithinChunk,
             chunkDisplayDimensionIndices,
-            channelToChunkDimensionIndices,
             newSource,
           );
           newSource = false;

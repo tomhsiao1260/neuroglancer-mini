@@ -53,30 +53,7 @@ export interface CancellationToken {
   remove(handler: () => void): void;
 }
 
-export class CancellationError extends Error {
-  name = "CancellationError";
-  message = "CANCELED";
-  toString() {
-    return "CANCELED";
-  }
-}
-
-/**
- * Singleton instance of CancellationError thrown to indicate cancellation.
- */
-export const CANCELED = new CancellationError();
-
 const noopFunction = () => {};
-
-/**
- * CancellationToken that cannot be canceled.  This can be passed to operations that require a
- * CancellationToken but will not need to be canceled.
- */
-export const uncancelableToken: CancellationToken = {
-  isCanceled: false,
-  add: () => noopFunction,
-  remove: noopFunction,
-};
 
 /**
  * Class that can be used to trigger cancellation.
@@ -127,48 +104,4 @@ export class CancellationTokenSource implements CancellationToken {
       handlers.delete(handler);
     }
   }
-}
-
-/**
- * Creates a promise and a dependent cancellation token.
- *
- * The dependent cancellation token will be canceled if the specified `cancellationToken` is
- * canceled while the promise is pending.
- *
- * @param cancellationToken The token that provides notification of cancellation.
- * @param executor The executor passed the resolve and reject functions for the promise, as well as
- * the dependent cancellation token.  If cancellation occurs after either resolve or reject is
- * called, then the dependent token is not cancelled.
- *
- * @returns A new Promise.
- */
-export function makeCancelablePromise<T>(
-  cancellationToken: CancellationToken,
-  executor: (
-    resolve: (value: T | Promise<T>) => void,
-    reject: (error: any) => void,
-    token: CancellationToken,
-  ) => void,
-) {
-  return new Promise<T>((resolve, reject) => {
-    if (cancellationToken === uncancelableToken) {
-      executor(resolve, reject, uncancelableToken);
-      return;
-    }
-    const scopedToken = new CancellationTokenSource();
-    const unregister = cancellationToken.add(() => {
-      scopedToken.cancel();
-    });
-    executor(
-      (value) => {
-        unregister();
-        resolve(value);
-      },
-      (error) => {
-        unregister();
-        reject(error);
-      },
-      scopedToken,
-    );
-  });
 }

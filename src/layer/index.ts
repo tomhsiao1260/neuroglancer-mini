@@ -44,7 +44,6 @@ export class ImageUserLayer extends RefCounted {
   localPosition = this.registerDisposer(
     new Position(this.localCoordinateSpace),
   );
-  channelCoordinateSpace = new TrackableCoordinateSpace();
   sliceViewRenderScaleTarget = new WatchableValue(1);
 
   layersChanged = new NullarySignal();
@@ -71,11 +70,10 @@ export class ImageUserLayer extends RefCounted {
     const volume = await loadZarrVolume(chunkManager, DATA_URL);
     if (this.wasDisposed) return;
 
-    // The global (navigation), local and channel coordinate spaces all span the volume.
+    // The global (navigation) and local coordinate spaces both span the volume.
     const { modelSpace } = volume;
     coordinateSpace.value = makeCombinedCoordinateSpace(modelSpace);
     this.localCoordinateSpace.value = makeCombinedCoordinateSpace(modelSpace);
-    this.channelCoordinateSpace.value = makeCombinedCoordinateSpace(modelSpace);
 
     this.addRenderLayer(
       new ImageRenderLayer(volume, {
@@ -84,7 +82,6 @@ export class ImageUserLayer extends RefCounted {
         ),
         renderScaleTarget: this.sliceViewRenderScaleTarget,
         localPosition: this.localPosition,
-        channelCoordinateSpace: this.channelCoordinateSpace,
       }),
     );
   }

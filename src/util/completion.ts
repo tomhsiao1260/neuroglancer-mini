@@ -16,33 +16,3 @@
 
 import { defaultStringCompare } from "#src/util/string.js";
 
-export interface Completion {
-  value: string;
-}
-
-export interface CompletionWithDescription extends Completion {
-  description?: string;
-}
-
-export interface BasicCompletionResult<C extends Completion = Completion> {
-  completions: C[];
-  offset: number;
-}
-
-export function getPrefixMatchesWithDescriptions<T>(
-  prefix: string,
-  options: Iterable<T>,
-  getValue: (x: T) => string,
-  getDescription: (x: T) => string | undefined,
-) {
-  const result: CompletionWithDescription[] = [];
-  for (const option of options) {
-    const key = getValue(option);
-    if (key.startsWith(prefix)) {
-      result.push({ value: key, description: getDescription(option) });
-    }
-  }
-  result.sort((a, b) => defaultStringCompare(a.value, b.value));
-  return result;
-}
-

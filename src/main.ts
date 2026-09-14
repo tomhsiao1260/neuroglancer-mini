@@ -21,11 +21,9 @@ import {
   ChunkManager,
   ChunkQueueManager,
 } from "#src/chunk_manager/frontend.js";
-import "#src/sliceview/uncompressed_chunk_format.js";
 import { TrackableCoordinateSpace } from "#src/state/coordinate_transform.js";
 import { DisplayContext } from "#src/layer/display_context.js";
 import { ImageUserLayer } from "#src/layer/index.js";
-import { WatchableVisibilityPriority } from "#src/visibility_priority/frontend.js";
 import type { GL } from "#src/webgl/context.js";
 import { RPC, READY_ID } from "#src/worker/worker_rpc.js";
 import {
@@ -104,7 +102,6 @@ function loading(worker: Worker) {
  */
 export interface ViewerUIState {
   display: DisplayContext;
-  visibility: WatchableVisibilityPriority;
   coordinateSpace: TrackableCoordinateSpace;
   chunkManager: ChunkManager;
   navigationState: NavigationState;
@@ -179,7 +176,6 @@ class DataManagementContext extends RefCounted {
  */
 class Viewer extends RefCounted {
   coordinateSpace = new TrackableCoordinateSpace();
-  visibility: WatchableVisibilityPriority;
   chunkManager: ChunkManager;
   dataContext: DataManagementContext;
   navigationState = new NavigationState(
@@ -192,7 +188,6 @@ class Viewer extends RefCounted {
     super();
 
     this.dataContext = new DataManagementContext(display.gl);
-    this.visibility = new WatchableVisibilityPriority(Infinity);
     const layerManager = new ImageUserLayer({
       chunkManager: this.dataContext.chunkManager,
       coordinateSpace: this.coordinateSpace,
@@ -205,7 +200,6 @@ class Viewer extends RefCounted {
         coordinateSpace: this.coordinateSpace,
         chunkManager: this.dataContext.chunkManager,
         navigationState: this.navigationState,
-        visibility: this.visibility,
         display: this.display,
       }),
     );
@@ -248,7 +242,6 @@ class PanelLayout extends RefCounted {
       display: viewer.display,
       chunkManager: viewer.chunkManager,
       layerManager: viewer.layerManager,
-      visibility: viewer.visibility,
     }
 
     // Create XY plane panel (top view)

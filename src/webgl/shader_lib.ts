@@ -14,475 +14,51 @@
  * limitations under the License.
  */
 
-import {
-  DATA_TYPE_BYTES,
-  DATA_TYPE_SIGNED,
-  DataType,
-} from "#src/util/data_type.js";
-import type {
-  ShaderCodePart,
-} from "#src/webgl/shader.js";
+/**
+ * @file GLSL types for voxel values.  Integer values are wrapped in a struct named after the data
+ * type (e.g. `uint8_t`) so functions can be overloaded per data type; `toRaw` unwraps the value.
+ * A 64-bit value is two 32-bit words, low word first.
+ */
 
-export const glsl_mixLinear = `
-float mixLinear(float x, float y, float a) { return mix(x, y, a); }
+import { DataType } from "#src/util/data_type.js";
+
+const shaderTypes: Record<DataType, string> = {
+  [DataType.UINT8]: "uint8_t",
+  [DataType.INT8]: "int8_t",
+  [DataType.UINT16]: "uint16_t",
+  [DataType.INT16]: "int16_t",
+  [DataType.UINT32]: "uint32_t",
+  [DataType.INT32]: "int32_t",
+  [DataType.UINT64]: "uint64_t",
+  [DataType.FLOAT32]: "float",
+};
+
+export function getShaderType(dataType: DataType) {
+  return shaderTypes[dataType];
+}
+
+function defineIntegerType(name: string, valueType: "uint" | "int") {
+  return `
+struct ${name} {
+  highp ${valueType} value;
+};
+highp ${valueType} toRaw(${name} x) { return x.value; }
 `;
+}
 
-export const glsl_uint64 = `
+export const dataTypeShaderDefinition: Record<DataType, string> = {
+  [DataType.UINT8]: defineIntegerType("uint8_t", "uint"),
+  [DataType.INT8]: defineIntegerType("int8_t", "int"),
+  [DataType.UINT16]: defineIntegerType("uint16_t", "uint"),
+  [DataType.INT16]: defineIntegerType("int16_t", "int"),
+  [DataType.UINT32]: defineIntegerType("uint32_t", "uint"),
+  [DataType.INT32]: defineIntegerType("int32_t", "int"),
+  [DataType.UINT64]: `
 struct uint64_t {
   highp uvec2 value;
 };
-struct uint64x2_t {
-  highp uvec4 value;
-};
-uint64_t mixLinear(uint64_t x, uint64_t y, float a) {
-  return x;
-}
-uint64_t toUint64(uint64_t x) { return x; }
-`;
-
-export const glsl_unpackUint64leFromUint32 = [
-  glsl_uint64,
-  `
-uint64_t unpackUint64leFromUint32(highp uvec2 x) {
-  uint64_t result;
-  result.value = x;
-  return result;
-}
-uint64x2_t unpackUint64leFromUint32(highp uvec4 x) {
-  uint64x2_t result;
-  result.value = x;
-  return result;
-}
 `,
-];
-
-export const glsl_equalUint64 = [
-  glsl_uint64,
-  `
-bool equals(uint64_t a, uint64_t b) {
-  return a.value == b.value;
-}
-`,
-];
-
-export const glsl_compareLessThanUint64 = [
-  glsl_uint64,
-  `
-bool compareLessThan(uint64_t a, uint64_t b) {
-  return (a.value[1] < b.value[1])||
-         (a.value[1] == b.value[1] && a.value[0] < b.value[0]);
-}
-`,
-];
-
-export const glsl_subtractUint64 = [
-  glsl_uint64,
-  `
-uint64_t subtract(uint64_t a, uint64_t b) {
-  if (a.value[0] < b.value[0]) {
-    --a.value[1];
-  }
-  a.value -= b.value;
-  return a;
-}
-`,
-];
-
-export const glsl_addUint64 = [
-  glsl_uint64,
-  `
-uint64_t add(uint64_t a, uint64_t b) {
-  a.value[0] += b.value[0];
-  if (a.value[0] < b.value[0]) {
-    ++a.value[1];
-  }
-  a.value[1] += b.value[1];
-  return a;
-}
-`,
-];
-
-export const glsl_addSaturateUint64 = [
-  glsl_addUint64,
-  glsl_compareLessThanUint64,
-  `
-uint64_t addSaturate(uint64_t a, uint64_t b) {
-  a = add(a, b);
-  if (compareLessThan(a, b)) {
-    a.value = uvec2(0xffffffffu, 0xffffffffu);
-  }
-  return a;
-}
-`,
-];
-
-export const glsl_subtractSaturateUint64 = [
-  glsl_subtractUint64,
-  glsl_compareLessThanUint64,
-  `
-uint64_t subtractSaturate(uint64_t a, uint64_t b) {
-  b = subtract(a, b);
-  if (compareLessThan(a, b)) {
-    b.value = uvec2(0u, 0u);
-  }
-  return b;
-}
-`,
-];
-
-export const glsl_shiftRightUint64 = [
-  glsl_uint64,
-  `
-uint64_t shiftRight(uint64_t a, int shift) {
-  if (shift >= 32) {
-    return uint64_t(uvec2(a.value[1] >> (shift - 32), 0u));
-  } else if (shift == 0) {
-    return a;
-  } else {
-    return uint64_t(uvec2((a.value[0] >> shift) | (a.value[1] << (32 - shift)), a.value[1] >> shift));
-  }
-}
-`,
-];
-
-export const glsl_shiftLeftUint64 = [
-  glsl_uint64,
-  `
-uint64_t shiftLeft(uint64_t a, int shift) {
-  if (shift >= 32) {
-    return uint64_t(uvec2(0u, a.value[0] << (shift - 32)));
-  } else if (shift == 0) {
-    return a;
-  } else {
-    return uint64_t(uvec2(a.value[0] << shift, (a.value[1] << shift) | (a.value[0] >> (32 - shift))));
-  }
-}
-`,
-];
-
-export const glsl_uint8 = [
-  glsl_uint64,
-  `
-struct uint8_t {
-  highp uint value;
-};
-struct uint8x2_t {
-  highp uvec2 value;
-};
-struct uint8x3_t {
-  highp uvec3 value;
-};
-struct uint8x4_t {
-  highp uvec4 value;
-};
-uint8_t mixLinear(uint8_t x, uint8_t y, highp float a) {
-  return uint8_t(uint(round(mix(float(x.value), float(y.value), a))));
-}
-highp uint toRaw(uint8_t x) { return x.value; }
-highp float toNormalized(uint8_t x) { return float(x.value) / 255.0; }
-highp uvec2 toRaw(uint8x2_t x) { return x.value; }
-highp vec2 toNormalized(uint8x2_t x) { return vec2(x.value) / 255.0; }
-highp uvec3 toRaw(uint8x3_t x) { return x.value; }
-vec3 toNormalized(uint8x3_t x) { return vec3(x.value) / 255.0; }
-highp uvec4 toRaw(uint8x4_t x) { return x.value; }
-vec4 toNormalized(uint8x4_t x) { return vec4(x.value) / 255.0; }
-uint64_t toUint64(uint8_t x) {
-  uint64_t result;
-  result.value[0] = x.value;
-  result.value[1] = 0u;
-  return result;
-}
-uint8_t uint8FromFloat(highp float x) {
-  return uint8_t(uint(clamp(x, 0.0, 255.0)));
-}
-`,
-];
-
-export const glsl_int8 = [
-  glsl_uint64,
-  `
-struct int8_t {
-  highp int value;
-};
-struct int8x2_t {
-  highp ivec2 value;
-};
-struct int8x3_t {
-  highp ivec3 value;
-};
-struct int8x4_t {
-  highp ivec4 value;
-};
-int8_t mixLinear(int8_t x, int8_t y, highp float a) {
-  return int8_t(int(round(mix(float(x.value), float(y.value), a))));
-}
-highp int toRaw(int8_t x) { return x.value; }
-highp ivec2 toRaw(int8x2_t x) { return x.value; }
-highp ivec3 toRaw(int8x3_t x) { return x.value; }
-highp ivec4 toRaw(int8x4_t x) { return x.value; }
-uint64_t toUint64(int8_t x) {
-  uint64_t result;
-  result.value[0] = uint(x.value);
-  result.value[1] = uint(x.value >> 31);
-  return result;
-}
-int8_t int8FromFloat(highp float x) {
-  return int8_t(int(clamp(x, -128.0, 127.0)));
-}
-`,
-];
-
-export const glsl_float = `
+  [DataType.FLOAT32]: `
 highp float toRaw(highp float x) { return x; }
-highp float toNormalized(highp float x) { return x; }
-vec2 toRaw(vec2 x) { return x; }
-vec2 toNormalized(vec2 x) { return x; }
-vec3 toRaw(vec3 x) { return x; }
-vec3 toNormalized(vec3 x) { return x; }
-vec4 toRaw(vec4 x) { return x; }
-vec4 toNormalized(vec4 x) { return x; }
-`;
-
-export const glsl_uint16 = [
-  glsl_uint64,
-  `
-struct uint16_t {
-  highp uint value;
-};
-struct uint16x2_t {
-  highp uvec2 value;
-};
-uint16_t mixLinear(uint16_t x, uint16_t y, highp float a) {
-  return uint16_t(uint(round(mix(float(x.value), float(y.value), a))));
-}
-highp uint toRaw(uint16_t x) { return x.value; }
-highp float toNormalized(uint16_t x) { return float(toRaw(x)) / 65535.0; }
-highp uvec2 toRaw(uint16x2_t x) { return x.value; }
-highp vec2 toNormalized(uint16x2_t x) { return vec2(toRaw(x)) / 65535.0; }
-uint64_t toUint64(uint16_t x) {
-  uint64_t result;
-  result.value[0] = x.value;
-  result.value[1] = 0u;
-  return result;
-}
-uint16_t uint16FromFloat(highp float x) {
-  return uint16_t(uint(clamp(x, 0.0, 65535.0)));
-}
 `,
-];
-
-export const glsl_int16 = [
-  glsl_uint64,
-  `
-struct int16_t {
-  highp int value;
 };
-struct int16x2_t {
-  highp ivec2 value;
-};
-int16_t mixLinear(int16_t x, int16_t y, highp float a) {
-  return int16_t(int(round(mix(float(x.value), float(y.value), a))));
-}
-highp int toRaw(int16_t x) { return x.value; }
-highp ivec2 toRaw(int16x2_t x) { return x.value; }
-uint64_t toUint64(int16_t x) {
-  uint64_t result;
-  result.value[0] = uint(x.value);
-  result.value[1] = uint(x.value >> 31);
-  return result;
-}
-int16_t int16FromFloat(highp float x) {
-  return int16_t(int(clamp(x, -32768.0, 32767.0)));
-}
-`,
-];
-
-export const glsl_uint32 = [
-  glsl_uint64,
-  `
-struct uint32_t {
-  highp uint value;
-};
-uint32_t mixLinear(uint32_t x, uint32_t y, highp float a) {
-  return uint32_t(uint(round(mix(float(x.value), float(y.value), a))));
-}
-highp float toNormalized(uint32_t x) { return float(x.value) / 4294967295.0; }
-highp uint toRaw(uint32_t x) { return x.value; }
-uint64_t toUint64(uint32_t x) {
-  uint64_t result;
-  result.value[0] = x.value;
-  result.value[1] = 0u;
-  return result;
-}
-uint32_t uint32FromFloat(highp float x) {
-  return uint32_t(uint(clamp(x, 0.0, 4294967295.0)));
-}
-`,
-];
-
-export const glsl_int32 = [
-  glsl_uint64,
-  `
-struct int32_t {
-  highp int value;
-};
-int32_t mixLinear(int32_t x, int32_t y, highp float a) {
-  return int32_t(int(round(mix(float(x.value), float(y.value), a))));
-}
-highp int toRaw(int32_t x) { return x.value; }
-uint64_t toUint64(int32_t x) {
-  uint64_t result;
-  result.value[0] = uint(x.value);
-  result.value[1] = uint(x.value >> 31);
-  return result;
-}
-int32_t int32FromFloat(highp float x) {
-  return int32_t(int(clamp(x, 2147483648.0, 2147483647.0)));
-}
-`,
-];
-
-export const glsl_log2Exact = `
-highp uint log2Exact(highp uint i) {
-  highp uint r;
-  r = uint((i & 0xAAAAAAAAu) != 0u);
-  r |= uint((i & 0xFFFF0000u) != 0u) << 4;
-  r |= uint((i & 0xFF00FF00u) != 0u) << 3;
-  r |= uint((i & 0xF0F0F0F0u) != 0u) << 2;
-  r |= uint((i & 0xCCCCCCCCu) != 0u) << 1;
-  return r;
-}
-`;
-
-// Clip line endpoints to the OpenGL viewing volume depth range.
-// https://www.khronos.org/opengl/wiki/Vertex_Post-Processing#Clipping
-//
-// This is similar to the clipping that the OpenGL implementation itself would do for lines, except
-// that we only clip based on `z`.
-export const glsl_clipLineToDepthRange = `
-bool clipLineToDepthRange(inout highp vec4 a, inout highp vec4 b) {
-  highp float tmin = 0.0, tmax = 1.0;
-  highp float k1 = b.w - a.w + a.z - b.z;
-  highp float k2 = a.w - b.w + a.z - b.z;
-  highp float q1 = (a.z - a.w) / k1;
-  highp float q2 = (a.z + a.w) / k2;
-  if (k1 > 0.0) tmin = max(tmin, q1);
-  else if (k1 < 0.0) tmax = min(tmax, q1);
-  if (k2 > 0.0) tmax = min(tmax, q2);
-  else if (k2 < 0.0) tmin = max(tmin, q2);
-  if (tmin <= tmax) {
-    highp vec4 tempA = a;
-    highp vec4 tempB = b;
-    a = mix(tempA, tempB, tmin);
-    b = mix(tempA, tempB, tmax);
-    return true;
-  }
-  return false;
-}
-`;
-
-// https://stackoverflow.com/questions/4200224/random-noise-functions-for-glsl
-export const glsl_simpleFloatHash = `
-highp float simpleFloatHash(highp vec2 co) {
-    return fract(sin(dot(co.xy ,vec2(12.9898,78.233))) * 43758.5453);
-}
-`;
-
-export const glsl_shiftLeftSaturateUint32 = `
-highp uint shiftLeftSaturate(highp uint x, int shiftAmount) {
-  highp uint result = x << shiftAmount;
-  if ((result >> shiftAmount) != x) return 0xffffffffu;
-  return result;
-}
-`;
-
-export const glsl_addSaturateUint32 = `
-highp uint addSaturate(highp uint x, highp uint y) {
-  highp uint result = x + y;
-  if (result < x) return 0xffffffffu;
-  return result;
-}
-`;
-
-export const glsl_subtractSaturateUint32 = `
-highp uint subtractSaturate(highp uint x, highp uint y) {
-  highp uint result = x - y;
-  if (result > x) return 0u;
-  return result;
-}
-`;
-
-export const glsl_addSaturateInt32 = [
-  glsl_addSaturateUint32,
-  `
-highp int addSaturate(highp int x, highp uint y) {
-  if (x >= 0) {
-    return int(min(addSaturate(y, uint(x)), 0x7fffffffu));
-  } else if (y >= uint(-x)) {
-    return int(min(y - uint(-x), 0x7fffffffu));
-  } else {
-    return -int(min(uint(-x) - y, 0x80000000u));
-  }
-}
-`,
-];
-
-export const glsl_subtractSaturateInt32 = [
-  glsl_addSaturateUint32,
-  `
-highp int subtractSaturate(highp int x, highp uint y) {
-  if (x < 0) {
-    return -int(min(addSaturate(uint(-x), uint(y)), 0x80000000u));
-  } else if (uint(x) >= y) {
-    return x - int(y);
-  } else {
-    return -int(min(y - uint(x), 0x80000000u));
-  }
-}
-`,
-];
-
-export function getShaderType(dataType: DataType, numComponents = 1) {
-  switch (dataType) {
-    case DataType.FLOAT32:
-      if (numComponents === 1) {
-        return "float";
-      }
-      if (numComponents > 1 && numComponents <= 4) {
-        return `vec${numComponents}`;
-      }
-      break;
-    case DataType.UINT8:
-    case DataType.INT8:
-    case DataType.UINT16:
-    case DataType.INT16:
-    case DataType.UINT32:
-    case DataType.INT32:
-    case DataType.UINT64: {
-      const prefix = DATA_TYPE_SIGNED[dataType] ? "" : "u";
-      const bits = DATA_TYPE_BYTES[dataType] * 8;
-      if (numComponents === 1) {
-        return `${prefix}int${bits}_t`;
-      }
-      if (numComponents > 1 && numComponents * bits <= 32) {
-        return `${prefix}int${bits}x${numComponents}_t`;
-      }
-      break;
-    }
-  }
-  throw new Error(
-    `No shader type for ${DataType[dataType]}[${numComponents}].`,
-  );
-}
-
-export const dataTypeShaderDefinition: Record<DataType, ShaderCodePart> = {
-  [DataType.UINT8]: glsl_uint8,
-  [DataType.INT8]: glsl_int8,
-  [DataType.UINT16]: glsl_uint16,
-  [DataType.INT16]: glsl_int16,
-  [DataType.UINT32]: glsl_uint32,
-  [DataType.INT32]: glsl_int32,
-  [DataType.UINT64]: glsl_uint64,
-  [DataType.FLOAT32]: glsl_float,
-};
-

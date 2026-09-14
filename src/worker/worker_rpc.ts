@@ -14,13 +14,20 @@
  * limitations under the License.
  */
 
-import type { CancellationToken } from "#src/util/cancellation.js";
-import {
-  CANCELED,
-  CancellationTokenSource,
-  makeCancelablePromise,
-  uncancelableToken,
-} from "#src/util/cancellation.js";
+/**
+ * @file Messaging between the main thread and the chunk worker.
+ *
+ * `RPC.invoke(name, message)` posts `message` to the other side, where the handler registered with
+ * `registerRPC(name, ...)` runs.
+ *
+ * A `SharedObject` exists on both sides under the same id: the owner (usually on the main thread)
+ * calls `initializeCounterpart`, which creates the counterpart class registered with
+ * `registerSharedObject` on the other side.  Either side can then look the object up with
+ * `rpc.get(id)`.  The owner is disposed only once neither side holds a reference, which is tracked
+ * with reference generations so that references sent while a release message is in flight are not
+ * lost.
+ */
+
 import { RefCounted } from "#src/util/disposable.js";
 
 export type RPCHandler = (this: RPC, x: any) => void;
@@ -29,12 +36,6 @@ export type RpcId = number;
 
 const IS_WORKER = !(typeof Window !== "undefined" && self instanceof Window);
 
-const DEBUG = false;
-
-const DEBUG_MESSAGES = false;
-
-const PROMISE_RESPONSE_ID = "rpc.promise.response";
-const PROMISE_CANCEL_ID = "rpc.promise.cancel";
 export const READY_ID = "rpc.ready";
 
 const handlers = new Map<string, RPCHandler>();
@@ -42,72 +43,6 @@ const handlers = new Map<string, RPCHandler>();
 export function registerRPC(key: string, handler: RPCHandler) {
   handlers.set(key, handler);
 }
-
-export type RPCPromise<T> = Promise<{ value: T; transfers?: any[] }>;
-
-export class RPCError extends Error {
-  constructor(
-    public name: string,
-    public message: string,
-  ) {
-    super(message);
-  }
-}
-
-export function registerPromiseRPC<T>(
-  key: string,
-  handler: (
-    this: RPC,
-    x: any,
-    cancellationToken: CancellationToken,
-  ) => RPCPromise<T>,
-) {
-  registerRPC(key, function (this: RPC, x: any) {
-    const id = <number>x.id;
-    const cancellationToken = new CancellationTokenSource();
-    const promise = handler.call(this, x, cancellationToken) as RPCPromise<T>;
-    this.set(id, { promise, cancellationToken });
-    promise.then(
-      ({ value, transfers }) => {
-        this.delete(id);
-        this.invoke(PROMISE_RESPONSE_ID, { id: id, value: value }, transfers);
-      },
-      (error) => {
-        this.delete(id);
-        this.invoke(PROMISE_RESPONSE_ID, {
-          id: id,
-          error: error.message,
-          errorName: error.name,
-        });
-      },
-    );
-  });
-}
-
-registerRPC(PROMISE_CANCEL_ID, function (this: RPC, x: any) {
-  const id = <number>x.id;
-  const request = this.get(id);
-  if (request !== undefined) {
-    const { cancellationToken } = request;
-    cancellationToken.cancel();
-  }
-});
-
-registerRPC(PROMISE_RESPONSE_ID, function (this: RPC, x: any) {
-  const id = <number>x.id;
-  const { resolve, reject } = this.get(id);
-  this.delete(id);
-  if (Object.prototype.hasOwnProperty.call(x, "value")) {
-    resolve(x.value);
-  } else {
-    const errorName = x.errorName;
-    if (errorName === CANCELED.name) {
-      reject(CANCELED);
-    } else {
-      reject(new RPCError(x.errorName, x.error));
-    }
-  }
-});
 
 registerRPC(READY_ID, function (this: RPC, x: any) {
   x;
@@ -119,11 +54,13 @@ interface RPCTarget {
   onmessage: ((ev: MessageEvent) => any) | null;
 }
 
+// Ids are allocated upward on the main thread and downward in the worker, so they never collide.
 const INITIAL_RPC_ID = IS_WORKER ? -1 : 0;
 
 export class RPC {
   private objects = new Map<RpcId, any>();
   private nextId: RpcId = INITIAL_RPC_ID;
+  // Messages posted before the other side is ready, if waiting for it.
   private queue: { data: any; transfers?: any[] }[] | undefined;
   constructor(
     public target: RPCTarget,
@@ -135,11 +72,9 @@ export class RPC {
     target.onmessage = (e) => {
       const data = e.data;
       if (data.fileTree) {
+        // The main thread sends the files of the picked folder once the worker is ready.
         self.fileTree = data.fileTree;
         return;
-      }
-      if (DEBUG_MESSAGES) {
-        console.log("Received message", data);
       }
       handlers.get(data.functionName)!.call(this, data);
     };
@@ -158,10 +93,6 @@ export class RPC {
     }
   }
 
-  get numObjects() {
-    return this.objects.size;
-  }
-
   set(id: RpcId, value: any) {
     this.objects.set(id, value);
   }
@@ -172,6 +103,9 @@ export class RPC {
   get(id: RpcId) {
     return this.objects.get(id);
   }
+
+  // Returns the object referenced by `x` (from `SharedObject.addCounterpartRef`) and adds a
+  // reference to it.
   getRef<T extends SharedObject>(x: { id: RpcId; gen: number }): T {
     const rpcId = x.id;
     const obj = <T>this.get(rpcId);
@@ -180,23 +114,8 @@ export class RPC {
     return obj;
   }
 
-  getOptionalRef<T extends SharedObject>(x: {
-    id: RpcId;
-    gen: number;
-  }): T | undefined {
-    if (x === undefined) return undefined;
-    const rpcId = x.id;
-    const obj = this.get(rpcId) as T;
-    obj.referencedGeneration = x.gen;
-    obj.addRef();
-    return obj;
-  }
-
   invoke(name: string, x: any, transfers?: any[]) {
     x.functionName = name;
-    if (DEBUG_MESSAGES) {
-      console.trace("Sending message", x);
-    }
     const { queue } = this;
     if (queue !== undefined) {
       queue.push({ data: x, transfers });
@@ -205,24 +124,6 @@ export class RPC {
     this.target.postMessage(x, transfers);
   }
 
-  promiseInvoke<T>(
-    name: string,
-    x: any,
-    cancellationToken = uncancelableToken,
-    transfers?: any[],
-  ): Promise<T> {
-    return makeCancelablePromise<T>(
-      cancellationToken,
-      (resolve, reject, token) => {
-        const id = (x.id = this.newId());
-        this.set(id, { resolve, reject });
-        this.invoke(name, x, transfers);
-        token.add(() => {
-          this.invoke(PROMISE_CANCEL_ID, { id: id });
-        });
-      },
-    );
-  }
   newId() {
     return IS_WORKER ? this.nextId-- : this.nextId++;
   }
@@ -242,6 +143,10 @@ export class SharedObject extends RefCounted {
     rpc.set(rpcId, this);
   }
 
+  /**
+   * Makes this object the owner of a new shared object, and creates the counterpart registered for
+   * `RPC_TYPE_ID` on the other side with `options`.
+   */
   initializeCounterpart(rpc: RPC, options: any = {}) {
     this.initializeSharedObject(rpc);
     this.unreferencedGeneration = 0;
@@ -250,10 +155,6 @@ export class SharedObject extends RefCounted {
     options.id = this.rpcId;
     options.type = this.RPC_TYPE_ID;
     rpc.invoke("SharedObject.new", options);
-  }
-
-  dispose() {
-    super.dispose();
   }
 
   /**
@@ -282,9 +183,6 @@ export class SharedObject extends RefCounted {
    * Precondition: this.isOwner === true.
    */
   protected ownerDispose() {
-    if (DEBUG) {
-      console.log(`[${IS_WORKER}] #rpc object = ${this.rpc!.numObjects}`);
-    }
     const { rpc, rpcId } = this;
     super.refCountReachedZero();
     rpc!.delete(rpcId!);
@@ -340,9 +238,6 @@ registerRPC("SharedObject.dispose", function (x) {
     throw new Error(
       "Attempted to dispose object with non-zero reference count.",
     );
-  }
-  if (DEBUG) {
-    console.log(`[${IS_WORKER}] #rpc objects: ${this.numObjects}`);
   }
   obj.disposed();
   this.delete(obj.rpcId!);

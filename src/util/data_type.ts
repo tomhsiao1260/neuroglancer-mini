@@ -30,17 +30,6 @@ export enum DataType {
   FLOAT32 = 7,
 }
 
-export const DATA_TYPE_SIGNED: Record<DataType, boolean | undefined> = {
-  [DataType.UINT8]: false,
-  [DataType.INT8]: true,
-  [DataType.UINT16]: false,
-  [DataType.INT16]: true,
-  [DataType.UINT32]: false,
-  [DataType.INT32]: true,
-  [DataType.UINT64]: false,
-  [DataType.FLOAT32]: undefined,
-};
-
 export const DATA_TYPE_BYTES: Record<DataType, number> = {
   [DataType.UINT8]: 1,
   [DataType.INT8]: 1,

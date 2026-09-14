@@ -15,7 +15,6 @@
  */
 
 import type { ChunkManager } from "#src/chunk_manager/frontend.js";
-import type { CoordinateSpace } from "#src/state/coordinate_transform.js";
 import type { RenderLayerTransform } from "#src/render/render_coordinate_transform.js";
 import { RenderLayer } from "#src/render/renderlayer.js";
 import { SharedWatchableValue } from "#src/worker/shared_watchable_value.js";
@@ -62,7 +61,6 @@ export abstract class SliceViewRenderLayer<
   rpcId: RpcId | null = null;
 
   localPosition: WatchableValueInterface<Float32Array>;
-  channelCoordinateSpace: WatchableValueInterface<CoordinateSpace>;
   transform: WatchableValueInterface<RenderLayerTransform>;
 
   renderScaleTarget: WatchableValueInterface<number>;

@@ -46,11 +46,6 @@ import type { WatchableValueInterface } from "#src/state/trackable_value.js";
 import { erf } from "#src/util/erf.js";
 import { vec3, vec3Key } from "#src/util/geom.js";
 import { VelocityEstimator } from "#src/util/velocity_estimation.js";
-import {
-  getBasePriority,
-  getPriorityTier,
-  withSharedVisibility,
-} from "#src/visibility_priority/backend.js";
 import type { RPC } from "#src/worker/worker_rpc.js";
 import {
   registerRPC,
@@ -89,9 +84,7 @@ function disposeTransformedSources(
   }
 }
 
-const SliceViewIntermediateBase = withSharedVisibility(
-  withChunkManager(SliceViewCounterpartBase),
-);
+const SliceViewIntermediateBase = withChunkManager(SliceViewCounterpartBase);
 @registerSharedObject(SLICEVIEW_RPC_ID)
 export class SliceViewBackend extends SliceViewIntermediateBase {
   velocityEstimator = new VelocityEstimator();
@@ -123,15 +116,12 @@ export class SliceViewBackend extends SliceViewIntermediateBase {
   updateVisibleChunks() {
     const projectionParameters = this.projectionParameters.value;
     const chunkManager = this.chunkManager;
-    const visibility = this.visibility.value;
-    if (visibility === Number.NEGATIVE_INFINITY) {
-      return;
-    }
     this.updateVisibleSources();
     const { centerDataPosition } = projectionParameters;
-    const priorityTier = getPriorityTier(visibility);
-    let basePriority = getBasePriority(visibility);
-    basePriority += BASE_PRIORITY;
+    // Chunks on the cross-section plane are requested as VISIBLE; chunks predicted from the motion
+    // of the view are requested as PREFETCH.
+    const priorityTier = ChunkPriorityTier.VISIBLE;
+    const basePriority = BASE_PRIORITY;
 
     const localCenter = tempCenter;
 

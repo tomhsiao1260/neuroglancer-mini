@@ -61,8 +61,6 @@ export enum ChunkPriorityTier {
   LAST_TIER = 2,
 }
 
-export const PREFETCH_PRIORITY_MULTIPLIER = 1e13;
-
 export const CHUNK_QUEUE_MANAGER_RPC_ID = "ChunkQueueManager";
 export const CHUNK_MANAGER_RPC_ID = "ChunkManager";
 

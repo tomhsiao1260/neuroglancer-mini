@@ -118,14 +118,6 @@ export const emptyInvalidCoordinateSpace = makeCoordinateSpace({
   boundingBoxes: [],
 });
 
-export const emptyValidCoordinateSpace = makeCoordinateSpace({
-  valid: true,
-  names: [],
-  units: [],
-  scales: vector.kEmptyFloat64Vec,
-  boundingBoxes: [],
-});
-
 export class TrackableCoordinateSpace extends WatchableValue<CoordinateSpace> {
   constructor() {
     super(emptyInvalidCoordinateSpace);

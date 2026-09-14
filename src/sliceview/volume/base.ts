@@ -20,15 +20,12 @@ import type {
 } from "#src/sliceview/base.js";
 import { makeSliceViewChunkSpecification } from "#src/sliceview/base.js";
 import { DATA_TYPE_BYTES, DataType } from "#src/util/data_type.js";
-import { Uint64 } from "#src/util/uint64.js";
 
 export { DATA_TYPE_BYTES, DataType };
 
 export interface VolumeChunkSpecification
   extends SliceViewChunkSpecification<Uint32Array> {
   dataType: DataType;
-  // Value of voxels in chunks missing from the store.
-  fillValue: number | Uint64;
 }
 
 /**
@@ -37,18 +34,13 @@ export interface VolumeChunkSpecification
 export function makeDefaultVolumeChunkSpecifications(options: {
   rank: number;
   dataType: DataType;
-  fillValue?: number | Uint64;
   upperVoxelBound: Float32Array;
   chunkDataSizes: Uint32Array[];
 }): VolumeChunkSpecification[] {
-  const {
-    dataType,
-    fillValue = dataType === DataType.UINT64 ? Uint64.ZERO : 0,
-  } = options;
+  const { dataType } = options;
   return options.chunkDataSizes.map((chunkDataSize) => ({
     ...makeSliceViewChunkSpecification({ ...options, chunkDataSize }),
     dataType,
-    fillValue,
   }));
 }
 
