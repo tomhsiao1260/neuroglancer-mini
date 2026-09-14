@@ -18,11 +18,20 @@
  * @file The viewer: one zarr volume shown in any number of cross-section views.
  *
  *   const viewer = new Viewer({ container, store });
- *   viewer.addView(element, "xy");
+ *   const view = viewer.addView(element, "xy");
+ *   await viewer.loaded;
+ *   viewer.setPosition({ x: 100, y: 200, z: 300 });
+ *   viewer.onViewChanged(() => console.log(viewer.position, viewer.zoom));
+ *   viewer.onPointerMove((point) => console.log(point));
+ *   view.dispose();
  *
  * The viewer draws on a canvas that fills `container`.  Each view draws into the part of the canvas
  * under its element, so views can be laid out with any CSS, as long as their elements lie inside
  * `container`.  All views share one position and zoom.
+ *
+ * Points are in voxels of the full-resolution scale, with `x`, `y` and `z` along the last, middle and
+ * first dimensions of the zarr array.  Voxel `(i, j, k)` is centered on `{ x: i, y: j, z: k }` and
+ * extends half a voxel around it, so rounding a point gives the voxel that contains it.
  */
 
 import {
@@ -46,7 +55,14 @@ import {
 import { WatchableValue } from "#src/state/trackable_value.js";
 import { RefCounted } from "#src/util/disposable.js";
 import { quat } from "#src/util/geom.js";
+import { Signal } from "#src/util/signal.js";
 import { RPC } from "#src/worker/worker_rpc.js";
+
+export interface Point {
+  x: number;
+  y: number;
+  z: number;
+}
 
 /**
  * The plane a view shows, named by the two volume axes on screen.
@@ -63,6 +79,11 @@ const viewRotations: Record<ViewOrientation, () => quat> = {
   yz: () => quat.create(),
 };
 
+// Converts the viewer's (z, y, x) coordinates to a point.
+function toPoint(coordinates: ArrayLike<number>): Point {
+  return { x: coordinates[2], y: coordinates[1], z: coordinates[0] };
+}
+
 export interface ViewerOptions {
   // Element the viewer draws in.  View elements must lie inside it.
   container: HTMLElement;
@@ -72,22 +93,20 @@ export interface ViewerOptions {
 
 export class Viewer extends RefCounted {
   display: DisplayContext;
-  // Decides which chunks to load, and reads and decodes them.
-  worker: Worker;
   chunkManager: ChunkManager;
-
-  // Coordinate space of the volume, set once the volume has loaded.
-  coordinateSpace = new TrackableCoordinateSpace();
-  // Position and zoom shared by all views.
-  position = this.registerDisposer(new Position(this.coordinateSpace));
-  zoom = this.registerDisposer(new TrackableZoom());
-
   // The render layer that draws the volume; `undefined` until the volume has loaded.
   renderLayer = new WatchableValue<ImageRenderLayer | undefined>(undefined);
-
   // Resolves once the volume has loaded; rejects if it could not be loaded.
   loaded: Promise<void>;
 
+  // Decides which chunks to load, and reads and decodes them.
+  private worker: Worker;
+  private coordinateSpace = new TrackableCoordinateSpace();
+  // Position, in the viewer's (z, y, x) coordinates, and zoom shared by all views.
+  private sharedPosition = this.registerDisposer(
+    new Position(this.coordinateSpace),
+  );
+  private sharedZoom = this.registerDisposer(new TrackableZoom());
   // Position in the image's local coordinate space, which spans the volume like the global
   // coordinate space.  It is shared with the worker by the render layer.
   private localCoordinateSpace = new TrackableCoordinateSpace();
@@ -95,6 +114,11 @@ export class Viewer extends RefCounted {
     new Position(this.localCoordinateSpace),
   );
   private renderScaleTarget = new WatchableValue(1);
+  // The pointer's last position over a view, if it is over one.
+  private pointer:
+    | { view: SliceViewPanel; clientX: number; clientY: number }
+    | undefined;
+  private pointerMoved = new Signal<(point: Point | undefined) => void>();
 
   constructor({ container, store }: ViewerOptions) {
     super();
@@ -126,7 +150,53 @@ export class Viewer extends RefCounted {
       new ChunkManager(chunkQueueManager),
     );
 
+    // When the view moves under a still pointer, the point under the pointer changes.
+    this.registerDisposer(
+      this.onViewChanged(() => {
+        if (this.pointer !== undefined) this.reportPointer();
+      }),
+    );
+
     this.loaded = this.loadVolume(store);
+  }
+
+  // Center of the views, or `undefined` until the volume has loaded.
+  get position(): Point | undefined {
+    if (!this.sharedPosition.valid) return undefined;
+    return toPoint(this.sharedPosition.value);
+  }
+
+  // Centers the views on `point`.  Before the volume has loaded, the position is replaced by the
+  // center of the volume once it loads.
+  setPosition({ x, y, z }: Point) {
+    this.sharedPosition.value.set([z, y, x]);
+    this.sharedPosition.changed.dispatch();
+  }
+
+  // Size of a screen pixel, in voxels; larger values show more of the volume.
+  get zoom() {
+    return this.sharedZoom.value;
+  }
+
+  setZoom(zoom: number) {
+    this.sharedZoom.value = zoom;
+  }
+
+  // Calls `callback` whenever the position or zoom changes.  Returns a function that stops the calls.
+  onViewChanged(callback: () => void) {
+    const removePositionListener = this.sharedPosition.changed.add(callback);
+    const removeZoomListener = this.sharedZoom.changed.add(callback);
+    return () => {
+      removePositionListener();
+      removeZoomListener();
+    };
+  }
+
+  // Calls `callback` with the point under the pointer whenever it changes: when the pointer moves
+  // over a view, or the view moves under it.  The point is `undefined` when the pointer leaves the
+  // views.  Returns a function that stops the calls.
+  onPointerMove(callback: (point: Point | undefined) => void) {
+    return this.pointerMoved.add(callback);
   }
 
   /**
@@ -136,11 +206,37 @@ export class Viewer extends RefCounted {
    */
   addView(element: HTMLElement, orientation: ViewOrientation) {
     const navigationState = new NavigationState(
-      this.position.addRef(),
-      this.zoom.addRef(),
+      this.sharedPosition.addRef(),
+      this.sharedZoom.addRef(),
       { orientation: viewRotations[orientation]() },
     );
-    return new SliceViewPanel(element, navigationState, this);
+    const view = new SliceViewPanel(element, navigationState, this);
+
+    const onPointerMove = (event: PointerEvent) => {
+      this.pointer = { view, clientX: event.clientX, clientY: event.clientY };
+      this.reportPointer();
+    };
+    const onPointerLeave = () => {
+      if (this.pointer?.view !== view) return;
+      this.pointer = undefined;
+      this.pointerMoved.dispatch(undefined);
+    };
+    element.addEventListener("pointermove", onPointerMove);
+    element.addEventListener("pointerleave", onPointerLeave);
+    view.registerDisposer(() => {
+      element.removeEventListener("pointermove", onPointerMove);
+      element.removeEventListener("pointerleave", onPointerLeave);
+      onPointerLeave();
+    });
+    return view;
+  }
+
+  private reportPointer() {
+    const { view, clientX, clientY } = this.pointer!;
+    const coordinates = view.pointAt(clientX, clientY);
+    this.pointerMoved.dispatch(
+      coordinates === undefined ? undefined : toPoint(coordinates),
+    );
   }
 
   // Loads the zarr volume, sets the coordinate spaces from the volume bounds and creates the render

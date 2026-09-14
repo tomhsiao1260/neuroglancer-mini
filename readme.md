@@ -162,8 +162,13 @@ The code is split between two threads. The **main thread** owns the WebGL canvas
 #### Entry
 
 - `index.html`, `src/style.css`: page and styles.
-- `src/main.ts`: the app. Chooses the store (`?zarr=<url>` or the folder picker), creates the viewer and lays out three views side by side. Start here to change what the page shows.
-- `src/viewer.ts`: `Viewer`, the interface to the rest of the code. `new Viewer({ container, store })` creates the canvas, the worker and the chunk manager and loads the volume; `viewer.addView(element, "xy" | "xz" | "yz")` shows a cross-section in `element`, which can be placed anywhere inside the container with CSS, and returns the view; `view.dispose()` removes it. All views share one position and zoom.
+- `src/main.ts`: the app. Chooses the store (`?zarr=<url>` or the folder picker), creates the viewer, lays out three views side by side and adds the features in `src/app/`. Start here to change what the page shows.
+- `src/viewer.ts`: `Viewer`, the interface to the rest of the code.
+  - `new Viewer({ container, store })` creates the canvas, the worker and the chunk manager and loads the volume; `viewer.loaded` resolves once it has loaded.
+  - `viewer.addView(element, "xy" | "xz" | "yz")` shows a cross-section in `element`, which can be placed anywhere inside the container with CSS, and returns the view; `view.dispose()` removes it. All views share one position and zoom.
+  - `viewer.position` / `viewer.setPosition({ x, y, z })` and `viewer.zoom` / `viewer.setZoom(voxelsPerPixel)` read and change the view; `viewer.onViewChanged(callback)` and `viewer.onPointerMove(callback)` report changes of the view and of the point under the pointer. Points are in full-resolution voxels, with `x`, `y`, `z` along the last, middle and first zarr dimensions; voxel `(i, j, k)` is centered on `{ x: i, y: j, z: k }`.
+- `src/app/position_display.ts`: shows the voxel under the pointer (yellow) and at the center of the views (white) in the bottom-right corner.
+- `src/app/url_position.ts`: keeps `x`, `y`, `z` and `zoom` in the page URL, and moves there when the page is opened with them.
 
 #### `src/render/`: cross-section views
 

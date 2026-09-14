@@ -21,7 +21,7 @@ import type { ImageRenderLayer } from "#src/render/renderlayer.js";
 import type { WatchableValueInterface } from "#src/state/trackable_value.js";
 import { animationFrameDebounce } from "#src/util/animation_frame_debounce.js";
 import { RefCounted } from "#src/util/disposable.js";
-import { vec3 } from "#src/util/geom.js";
+import { mat4, vec3 } from "#src/util/geom.js";
 import { Buffer } from "#src/webgl/buffer.js";
 import type { GL } from "#src/webgl/context.js";
 import { initializeWebGL } from "#src/webgl/context.js";
@@ -368,6 +368,26 @@ export class SliceViewPanel extends RefCounted {
     viewport.visibleHeightFraction = 1;
 
     this.sliceView.projectionParameters.setViewport(this.renderViewport);
+  }
+
+  /**
+   * Returns the point, in the viewer's (z, y, x) coordinates, shown at `clientX`, `clientY` on the
+   * page, or `undefined` before the volume has loaded.  Computed from the navigation state rather than
+   * the projection parameters, which are updated after a delay.
+   */
+  pointAt(clientX: number, clientY: number) {
+    const { navigationState, element, renderViewport } = this;
+    if (!navigationState.valid) return undefined;
+    const invViewMatrix = mat4.create();
+    navigationState.toMat4(invViewMatrix);
+    const bounds = element.getBoundingClientRect();
+    const x = clientX - (bounds.left + element.clientLeft) - renderViewport.width / 2;
+    const y = clientY - (bounds.top + element.clientTop) - renderViewport.height / 2;
+    const point = new Float32Array(3);
+    for (let i = 0; i < 3; ++i) {
+      point[i] = invViewMatrix[i] * x + invViewMatrix[4 + i] * y + invViewMatrix[12 + i];
+    }
+    return point;
   }
 
   /**

@@ -22,6 +22,8 @@
  */
 
 import "#src/style.css";
+import { showPosition } from "#src/app/position_display.js";
+import { syncPositionWithUrl } from "#src/app/url_position.js";
 import type { ZarrStoreSpec } from "#src/datasource/zarr/store.js";
 import type { ViewOrientation } from "#src/viewer.js";
 import { Viewer } from "#src/viewer.js";
@@ -78,4 +80,7 @@ function openViewer(store: ZarrStoreSpec) {
     views.append(element);
     viewer.addView(element, orientation);
   }
+
+  showPosition(viewer, container);
+  syncPositionWithUrl(viewer);
 }
