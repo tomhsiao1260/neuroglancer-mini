@@ -105,20 +105,6 @@ export function srgbGammaExpand(value: number) {
   return value <= 0.03928 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
 }
 
-// Computes the relative luminance according to Web Content Accessibility Guidelines (WCAG) 2.0
-//
-// https://www.w3.org/TR/WCAG20/#relativeluminancedef
-//
-// @param color sRGB color
-export function getRelativeLuminance(color: vec3 | vec4) {
-  const [r, g, b] = color;
-  return (
-    0.2126 * srgbGammaExpand(r) +
-    0.7152 * srgbGammaExpand(g) +
-    0.0722 * srgbGammaExpand(b)
-  );
-}
-
 export class TrackableRGB extends WatchableValue<vec3> {
   constructor(public defaultValue: vec3) {
     super(vec3.clone(defaultValue));

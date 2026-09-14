@@ -41,42 +41,6 @@ window.addEventListener("keyup", (event) => {
   globalModifiers.value = getEventModifierMask(event);
 });
 
-const globalKeys = new Set([
-  "f1",
-  "f2",
-  "f3",
-  "f4",
-  "f5",
-  "f6",
-  "f7",
-  "f8",
-  "f9",
-  "f10",
-  "f11",
-  "f12",
-  "escape",
-  "pause",
-]);
-const DEFAULT_TEXT_INPUTS = new Set([
-  "color",
-  "date",
-  "datetime",
-  "datetime-local",
-  "email",
-  "month",
-  "number",
-  "password",
-  "search",
-  "tel",
-  "text",
-  "time",
-  "url",
-  "week",
-]);
-
-export function getEventKeyName(event: KeyboardEvent): string {
-  return event.code.toLowerCase();
-}
 
 export { EventActionMap, registerActionListener };
 export type { EventActionMapInterface, ActionEvent };

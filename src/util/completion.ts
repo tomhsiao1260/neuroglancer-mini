@@ -29,11 +29,6 @@ export interface BasicCompletionResult<C extends Completion = Completion> {
   offset: number;
 }
 
-export const emptyCompletionResult = {
-  offset: 0,
-  completions: [],
-};
-
 export function getPrefixMatchesWithDescriptions<T>(
   prefix: string,
   options: Iterable<T>,
@@ -57,7 +52,4 @@ export interface QueryStringCompletionTableEntry<
   readonly key: C;
   readonly values: readonly C[];
 }
-
-export type QueryStringCompletionTable<C extends Completion = Completion> =
-  readonly QueryStringCompletionTableEntry<C>[];
 

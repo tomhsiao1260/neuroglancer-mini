@@ -143,9 +143,3 @@ export function transposeNestedArrays<T>(x: T[][]) {
   return result;
 }
 
-export interface ArraySpliceOp {
-  retainCount: number;
-  deleteCount: number;
-  insertCount: number;
-}
-

@@ -67,8 +67,6 @@ export class HttpError extends Error {
   }
 }
 
-const minDelayMilliseconds = 500;
-const maxDelayMilliseconds = 10000;
 
 /**
  * Issues a `fetch` request.

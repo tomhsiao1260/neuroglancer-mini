@@ -488,22 +488,3 @@ export const dataTypeShaderDefinition: Record<DataType, ShaderCodePart> = {
   [DataType.FLOAT32]: glsl_float,
 };
 
-export function getShaderVectorType(
-  typeName: "float" | "int" | "uint",
-  n: number,
-) {
-  if (n === 1) return typeName;
-  if (typeName === "float") return `vec${n}`;
-  return `${typeName[0]}vec${n}`;
-}
-
-export const webglTypeSizeInBytes: { [webglType: number]: number } = {
-  [WebGL2RenderingContext.UNSIGNED_BYTE]: 1,
-  [WebGL2RenderingContext.BYTE]: 1,
-  [WebGL2RenderingContext.UNSIGNED_SHORT]: 2,
-  [WebGL2RenderingContext.SHORT]: 2,
-  [WebGL2RenderingContext.FLOAT]: 4,
-  [WebGL2RenderingContext.INT]: 4,
-  [WebGL2RenderingContext.UNSIGNED_INT]: 4,
-};
-

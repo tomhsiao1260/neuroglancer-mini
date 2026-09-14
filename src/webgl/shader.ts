@@ -332,13 +332,6 @@ export const textureTargetForSamplerType = {
 
 export type DebugOutputType = "float" | "vec2" | "vec3" | "vec4";
 
-const DEBUG_OUTPUT_TYPE_TO_BYTES: Record<DebugOutputType, number> = {
-  float: 4,
-  vec2: 8,
-  vec3: 12,
-  vec4: 16,
-};
-
 interface VertexDebugOutput {
   typeName: DebugOutputType;
   name: string;

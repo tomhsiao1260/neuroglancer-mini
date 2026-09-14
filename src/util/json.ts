@@ -272,39 +272,6 @@ export function urlSafeParse(x: string) {
   return JSON.parse(urlSafeToJSON(x));
 }
 
-// Converts a string containing a Python literal into a string containing an equivalent JSON
-// literal.
-export function pythonLiteralToJSON(x: string) {
-  let s = "";
-  while (x.length > 0) {
-    const m = x.match(SINGLE_OR_DOUBLE_QUOTE_STRING_PATTERN);
-    let before: string;
-    let replacement: string;
-    if (m === null) {
-      before = x;
-      x = "";
-      replacement = "";
-    } else {
-      before = x.substr(0, m.index);
-      x = x.substr(m.index! + m[0].length);
-      const singleQuoteString = m[1];
-      if (singleQuoteString !== undefined) {
-        replacement = normalizeStringLiteral(singleQuoteString);
-      } else {
-        replacement = m[2];
-      }
-    }
-    s += before
-      .replace(/\(/g, "[")
-      .replace(/\)/g, "]")
-      .replace("True", "true")
-      .replace("False", "false")
-      .replace(/,\s*([}\]])/g, "$1");
-    s += replacement;
-  }
-  return s;
-}
-
 // Checks that `x' is an array, maps each element by parseElement.
 export function parseArray<T>(
   x: any,
@@ -346,14 +313,6 @@ export function verifyInt(obj: any) {
   const result = parseInt(obj, 10);
   if (!Number.isInteger(result)) {
     throw new Error(`Expected integer, but received: ${JSON.stringify(obj)}.`);
-  }
-  return result;
-}
-
-export function verifyPositiveInt(obj: any) {
-  const result = verifyInt(obj);
-  if (result <= 0) {
-    throw new Error(`Expected positive integer, but received: ${result}.`);
   }
   return result;
 }

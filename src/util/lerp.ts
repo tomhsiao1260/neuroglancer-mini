@@ -34,16 +34,6 @@ export const defaultDataTypeRange: Record<DataType, DataTypeInterval> = {
   [DataType.FLOAT32]: [0, 1],
 };
 
-export function clampToInterval(
-  range: DataTypeInterval,
-  value: number | Uint64,
-): number | Uint64 {
-  if (typeof value === "number") {
-    return Math.min(Math.max(range[0] as number, value), range[1] as number);
-  }
-  return Uint64.min(Uint64.max(range[0] as Uint64, value), range[1] as Uint64);
-}
-
 // Validates that the lower bound is <= the upper bound.
 export function validateDataTypeInterval(
   interval: DataTypeInterval,
@@ -67,8 +57,6 @@ export function dataTypeCompare(a: number | Uint64, b: number | Uint64) {
   return Uint64.compare(a as Uint64, b as Uint64);
 }
 
-const tempUint64 = new Uint64();
-const temp2Uint64 = new Uint64();
 
 export function parseDataTypeValue(
   dataType: DataType,

@@ -207,41 +207,6 @@ ${shaderDataType} computeLerp(float inputValue, ${pType} p) {
   ];
 }
 
-export const glsl_dataTypeComputeLerp: Record<DataType, ShaderCodePart> = {
-  [DataType.UINT8]: getFloatLerpImpl(DataType.UINT8),
-  [DataType.INT8]: getFloatLerpImpl(DataType.INT8),
-  [DataType.UINT16]: getFloatLerpImpl(DataType.UINT16),
-  [DataType.INT16]: getFloatLerpImpl(DataType.INT16),
-  [DataType.FLOAT32]: getFloatLerpImpl(DataType.FLOAT32),
-  [DataType.UINT32]: getInt32LerpImpl(DataType.UINT32),
-  [DataType.INT32]: getInt32LerpImpl(DataType.INT32),
-  [DataType.UINT64]: [
-    glsl_uint64,
-    glsl_compareLessThanUint64,
-    glsl_equalUint64,
-    glsl_addSaturateUint64,
-    glsl_subtractSaturateUint64,
-    glsl_shiftRightUint64,
-    glsl_shiftLeftUint64,
-    glsl_dataTypeLerpParameters[DataType.UINT64],
-    `
-uint64_t computeLerp(float inputValue, Uint64LerpParameters p) {
-  inputValue = inputValue / p.multiplier;
-  uint64_t x = uint64_t(uvec2(uint(clamp(round(abs(inputValue)), 0.0, 4294967295.0)), 0u));
-  uint64_t shifted = shiftLeft(x, p.shift);
-  if (!equals(shiftRight(shifted, p.shift), x)) {
-    return uint64_t(uvec2(0xffffffffu, 0xffffffffu));
-  }
-  if (inputValue >= 0.0) {
-    return addSaturate(p.offset, shifted);
-  } else {
-    return subtractSaturate(p.offset, shifted);
-  }
-}
-`,
-  ],
-};
-
 function defineLerpUniforms(
   builder: ShaderBuilder,
   name: string,

@@ -124,47 +124,6 @@ export function parseDimensionUnit(obj: unknown): {
   return { unit: unitInfo.unit, scale: scale * unitInfo.scale };
 }
 
-function parseFillValue(dataType: DataType, value: unknown) {
-  switch (dataType) {
-    case DataType.UINT8:
-    case DataType.INT8:
-    case DataType.UINT16:
-    case DataType.INT16:
-    case DataType.UINT32:
-    case DataType.INT32:
-    case DataType.UINT64:
-      if (typeof value !== "number" || !Number.isInteger(value)) {
-        throw new Error(
-          `Expected integer but received: ${JSON.stringify(value)}`,
-        );
-      }
-      return value;
-    case DataType.FLOAT32:
-      if (typeof value === "number") {
-        return value;
-      }
-      if (typeof value === "string") {
-        if (value === "Infinity") {
-          return Number.POSITIVE_INFINITY;
-        }
-        if (value === "-Infinity") {
-          return Number.NEGATIVE_INFINITY;
-        }
-        if (value === "NaN") {
-          return new Float32Array(Uint32Array.of(0x7fc00000).buffer)[0];
-        }
-        if (value.match(/^0x[a-fA-F0-9]+$/)) {
-          return new Float32Array(Uint32Array.of(Number(value)).buffer)[0];
-        }
-      }
-      throw new Error(
-        `Expected number, "Infinity", "-Infinity", "NaN", or hex string but received: ${JSON.stringify(
-          value,
-        )}`,
-      );
-  }
-}
-
 export function parseV2Metadata(obj: unknown): any {
   try {
     verifyObject(obj);

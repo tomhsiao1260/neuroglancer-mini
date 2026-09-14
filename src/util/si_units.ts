@@ -84,57 +84,6 @@ interface FormatScaleWithUnitOptions {
   elide1?: boolean;
 }
 
-export function formatScaleWithUnit(
-  scale: number,
-  unit: string,
-  options: FormatScaleWithUnitOptions = {},
-): { scale: string; prefix: string; unit: string } {
-  const { precision = 6, elide1 = true } = options;
-  let adjustedScale = scale;
-  let prefix = "";
-  if (unit !== "") {
-    const result = pickSiPrefix(scale);
-    prefix = result.prefix;
-    adjustedScale = scaleByExp10(scale, -result.exponent);
-  }
-  if (elide1 && adjustedScale === 1) {
-    return { scale: "", unit, prefix };
-  }
-  let scaleString: string;
-  if (precision !== 0) {
-    if (adjustedScale < 1 || adjustedScale >= 1000) {
-      scaleString = adjustedScale.toPrecision(precision);
-    } else {
-      scaleString = adjustedScale.toFixed(precision);
-    }
-    const eIndex = scaleString.indexOf("e");
-    let numString: string;
-    let exponentString: string;
-    if (eIndex !== -1) {
-      numString = scaleString.substring(0, eIndex);
-      exponentString = scaleString.substring(eIndex);
-    } else {
-      numString = scaleString;
-      exponentString = "";
-    }
-    const m = numString.match(/.*\.(?:[0-9]*[1-9])?(0+)$/);
-    if (m !== null) {
-      numString = numString.substring(0, numString.length - m[1].length);
-      if (numString.endsWith(".")) {
-        numString = numString.substring(0, numString.length - 1);
-      }
-      scaleString = numString + exponentString;
-    }
-  } else {
-    scaleString = adjustedScale.toString();
-  }
-  return {
-    scale: scaleString,
-    unit,
-    prefix,
-  };
-}
-
 /**
  * Returns `scale * 10**exponent`, but uses division for negative exponents to reduce loss of
  * precision.

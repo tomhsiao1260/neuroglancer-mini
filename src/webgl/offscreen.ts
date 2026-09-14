@@ -101,12 +101,6 @@ export class DepthRenderbuffer extends Renderbuffer {
   }
 }
 
-export class DepthStencilRenderbuffer extends DepthRenderbuffer {
-  constructor(gl: GL) {
-    super(gl, /*includeStencilBuffer=*/ true);
-  }
-}
-
 export class Framebuffer extends RefCounted {
   framebuffer = this.gl.createFramebuffer();
   constructor(public gl: GL) {

@@ -38,16 +38,6 @@ export interface RenderedViewBackend {
   projectionParameters: WatchableValueInterface<ProjectionParameters>;
 }
 
-export class RenderLayerBackendAttachment<
-  ViewBackend extends RenderedViewBackend = RenderedViewBackend,
-  AttachmentState = unknown,
-> extends RefCounted {
-  state: AttachmentState | undefined = undefined;
-  constructor(public view: ViewBackend) {
-    super();
-  }
-}
-
 @registerSharedObject(PROJECTION_PARAMETERS_RPC_ID)
 export class SharedProjectionParametersBackend<
     T extends ProjectionParameters = ProjectionParameters,

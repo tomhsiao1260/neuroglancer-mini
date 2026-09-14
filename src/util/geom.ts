@@ -62,29 +62,6 @@ export function transformVectorByMat4Transpose(out: vec3, a: vec3, m: mat4) {
 }
 
 /**
- * Returns the value of `t` that minimizes `(p - (a + t * (b - a)))`.
- */
-export function findClosestParameterizedLinePosition(
-  a: Float32Array,
-  b: Float32Array,
-  p: Float32Array,
-) {
-  // http://mathworld.wolfram.com/Point-LineDistance3-Dimensional.html
-  // Compute t: -dot(a-p, b-a) / |b - a|^2
-  const rank = p.length;
-  let denominator = 0;
-  for (let i = 0; i < rank; ++i) {
-    denominator += (a[i] - b[i]) ** 2;
-  }
-  let numerator = 0;
-  for (let i = 0; i < rank; ++i) {
-    const aValue = a[i];
-    numerator -= (aValue - p[i]) * (b[i] - aValue);
-  }
-  return numerator / Math.max(denominator, 1e-6);
-}
-
-/**
  * Extracts the left, right, bottom, top, near, far clipping planes from `projectionMat`.
  * @param out Row-major array of shape `(6, 4)` specifying for each of the left, right, bottom, top,
  *     near, far clipping planes the `a`, `b`, `c`, `d` coefficients such that
@@ -249,6 +226,4 @@ export function getViewFrustrumDepthRange(projectionMat: mat4) {
   const depth = Math.abs(far - near);
   return depth;
 }
-
-const tempVec3 = vec3.create();
 

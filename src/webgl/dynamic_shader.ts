@@ -220,26 +220,6 @@ export function parameterizedContextDependentShaderGetter<
   return getter;
 }
 
-export interface ParameterizedEmitterDependentShaderOptions<
-  Parameters = any,
-  ExtraParameters = any,
-> extends ParameterizedShaderOptions<Parameters, ExtraParameters> {
-  defineShader: (
-    builder: ShaderBuilder,
-    parameters: Parameters,
-    extraParameters: ExtraParameters,
-  ) => void;
-}
-
-export type ParameterizedEmitterDependentShaderGetter<
-  Parameters = any,
-  ExtraParameters = any,
-> = ParameterizedContextDependentShaderGetter<
-  ShaderModule,
-  Parameters,
-  ExtraParameters
->;
-
 export function shaderCodeWithLineDirective(
   code: string,
   sourceStringNumber = 1,
