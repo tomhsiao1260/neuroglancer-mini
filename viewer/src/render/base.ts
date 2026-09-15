@@ -7,7 +7,6 @@
  * cross-section plane (`forEachPlaneIntersectingVolumetricChunk`).
  */
 
-import type { DisplayDimensionRenderInfo } from "#src/state/navigation_state.js";
 import type {
   WatchableValueChangeInterface,
   WatchableValueInterface,
@@ -75,8 +74,6 @@ export function renderViewportsEqual(a: RenderViewport, b: RenderViewport) {
  * `projectionMat` maps it to clip coordinates.  The worker receives a copy to choose chunks.
  */
 export class ProjectionParameters extends RenderViewport {
-  displayDimensionRenderInfo: DisplayDimensionRenderInfo;
-
   /**
    * Global position.
    */
@@ -114,7 +111,6 @@ export function projectionParametersEqual(
   b: ProjectionParameters,
 ) {
   return (
-    a.displayDimensionRenderInfo === b.displayDimensionRenderInfo &&
     renderViewportsEqual(a, b) &&
     arraysEqual(a.globalPosition, b.globalPosition) &&
     arraysEqual(a.projectionMat, b.projectionMat) &&
@@ -185,19 +181,12 @@ export class ChunkLayout {
   }
 }
 
-export interface MultiscaleVolumetricDataRenderLayer {
-  renderScaleTarget: WatchableValueInterface<number>;
-}
-
 /**
  * One scale of a volume, together with how its chunk grid sits in the view.
  */
 export interface TransformedSource<
-  RLayer extends MultiscaleVolumetricDataRenderLayer = SliceViewRenderLayer,
   Source extends SliceViewChunkSource = SliceViewChunkSource,
 > {
-  renderLayer: RLayer;
-
   source: Source;
 
   /**
@@ -217,39 +206,9 @@ export interface TransformedSource<
   // Upper bound (in chunks) within the "display" subspace of the chunk coordinate space.
   upperChunkDisplayBound: vec3;
 
-  /**
-   * Dimensions of the chunk corresponding to the 3 display dimensions of the slice view.
-   */
-  chunkDisplayDimensionIndices: number[];
-
-  /**
-   * When `computeVisibleChunks` invokes the `addChunk` callback, this is set to the position of the
-   * chunk.
-   */
+  // While `forEachPlaneIntersectingVolumetricChunk` calls its callback, the position of the chunk in
+  // the chunk grid.
   curPositionInChunks: Float32Array;
-
-  fixedPositionWithinChunk: Uint32Array;
-}
-
-export interface SliceViewRenderLayer {
-  renderScaleTarget: WatchableValueInterface<number>;
-
-  filterVisibleSources(
-    sliceView: any,
-    sources: readonly TransformedSource[],
-  ): Iterable<TransformedSource>;
-}
-
-export interface VisibleLayerSources<
-  RLayer extends MultiscaleVolumetricDataRenderLayer,
-  Source extends SliceViewChunkSource,
-  Transformed extends TransformedSource<RLayer, Source>,
-> {
-  // Transformed sources of the layer, indexed by chunk layout and then by scale (finest first).
-  allSources: Transformed[][];
-  // Scales currently shown, ordered from finest to coarsest.
-  visibleSources: Transformed[];
-  displayDimensionRenderInfo: DisplayDimensionRenderInfo;
 }
 
 export class SliceViewProjectionParameters extends ProjectionParameters {
@@ -268,10 +227,6 @@ function visibleSourcesInvalidated(
   oldValue: SliceViewProjectionParameters,
   newValue: SliceViewProjectionParameters,
 ) {
-  if (
-    oldValue.displayDimensionRenderInfo !== newValue.displayDimensionRenderInfo
-  )
-    return true;
   if (oldValue.pixelSize !== newValue.pixelSize) return true;
   const { viewMatrix: oldViewMatrix } = oldValue;
   const { viewMatrix: newViewMatrix } = newValue;
@@ -281,18 +236,19 @@ function visibleSourcesInvalidated(
   return false;
 }
 
+/**
+ * What both sides of a cross-section view keep: the scales of the volume placed in the view, and
+ * the scales currently shown.
+ */
 export class SliceViewBase<
   Source extends SliceViewChunkSource = SliceViewChunkSource,
-  RLayer extends SliceViewRenderLayer = SliceViewRenderLayer,
-  Transformed extends TransformedSource<RLayer, Source> = TransformedSource<
-    RLayer,
-    Source
-  >,
 > extends SharedObject {
-  visibleLayers = new Map<
-    RLayer,
-    VisibleLayerSources<RLayer, Source, Transformed>
-  >();
+  // One transformed source per scale, finest first; empty until the volume has loaded.
+  sources: TransformedSource<Source>[] = [];
+  // Scales to draw and to load, ordered from finest to coarsest.
+  visibleSources: TransformedSource<Source>[] = [];
+  // Preferred voxel size of the shown scales, in screen pixels; set together with `sources`.
+  renderScaleTarget: WatchableValueInterface<number> | undefined;
   visibleSourcesStale = true;
 
   constructor(
@@ -315,40 +271,26 @@ export class SliceViewBase<
 
   invalidateVisibleChunks() {}
 
-  /**
-   * Computes the list of sources to use for each visible layer, based on the
-   * current pixelSize.
-   */
+  // Chooses the scales to show for the current pixel size (see `filterVisibleSources`).
   updateVisibleSources() {
     if (!this.visibleSourcesStale) {
       return;
     }
     this.visibleSourcesStale = false;
-    const curDisplayDimensionRenderInfo =
-      this.projectionParameters.value.displayDimensionRenderInfo;
-
-    const { visibleLayers } = this;
-    for (const [
-      renderLayer,
-      { allSources, visibleSources, displayDimensionRenderInfo },
-    ] of visibleLayers) {
-      visibleSources.length = 0;
-      if (
-        displayDimensionRenderInfo !== curDisplayDimensionRenderInfo ||
-        allSources.length === 0
-      ) {
-        continue;
-      }
-      // A zarr volume has a single chunk layout per scale.
-      const sources = allSources[0];
-
-      for (const source of renderLayer.filterVisibleSources(this, sources)) {
-        visibleSources.push(source as Transformed);
-      }
-      // Reverse visibleSources list since we added sources from coarsest to finest resolution, but
-      // we want them ordered from finest to coarsest.
-      visibleSources.reverse();
+    const { sources, visibleSources, renderScaleTarget } = this;
+    visibleSources.length = 0;
+    if (sources.length === 0 || renderScaleTarget === undefined) {
+      return;
     }
+    for (const source of filterVisibleSources(
+      this.projectionParameters.value.pixelSize,
+      renderScaleTarget.value,
+      sources,
+    )) {
+      visibleSources.push(source);
+    }
+    // `filterVisibleSources` yields the coarsest scale first; list the finest first.
+    visibleSources.reverse();
   }
 }
 
@@ -428,18 +370,15 @@ export function makeDefaultVolumeChunkSpecifications(options: {
  * finer scales while they get closer to the on-screen pixel size.  Finer scales are drawn on top,
  * and coarser ones fill in wherever finer chunks are not loaded yet.
  */
-export function* filterVisibleSources(
-  sliceView: any,
-  renderLayer: SliceViewRenderLayer,
-  sources: readonly TransformedSource[],
-): Iterable<TransformedSource> {
+export function* filterVisibleSources<T extends TransformedSource<any>>(
+  pixelSize: number,
+  renderScaleTarget: number,
+  sources: readonly T[],
+): Iterable<T> {
   // Increase pixel size by a small margin.
-  const pixelSize = sliceView.projectionParameters.value.pixelSize * 1.1;
-  // At the smallest scale, all alternative sources must have the same voxel size, which is
-  // considered to be the base voxel size.
+  pixelSize *= 1.1;
+  // The voxel size of the finest scale is the base voxel size.
   const smallestVoxelSize = sources[0].effectiveVoxelSize;
-
-  const renderScaleTarget = renderLayer.renderScaleTarget.value;
 
   /**
    * Determines whether we should continue to look for a finer-resolution source *after* one
@@ -530,9 +469,8 @@ export interface SliceViewChunkSource<
 
 export const SLICEVIEW_RPC_ID = "SliceView";
 export const SLICEVIEW_RENDERLAYER_RPC_ID = "sliceview/RenderLayer";
-export const SLICEVIEW_ADD_VISIBLE_LAYER_RPC_ID = "SliceView.addVisibleLayer";
-export const SLICEVIEW_REMOVE_VISIBLE_LAYER_RPC_ID =
-  "SliceView.removeVisibleLayer";
+// Sends the render layer and its sources from a view to the view's worker counterpart.
+export const SLICEVIEW_SET_LAYER_RPC_ID = "SliceView.setLayer";
 
 const tempVisibleVolumetricChunkLower = new Float32Array(3);
 const tempVisibleVolumetricChunkUpper = new Float32Array(3);
@@ -541,11 +479,9 @@ const tempVisibleVolumetricClippingPlanes = new Float32Array(24);
 
 // Recursively splits the chunk range `[lower, upper)` in half along its longest dimension, pruning
 // halves that `predicate` rejects, and calls `callback` for each single chunk that remains.
-function forEachVolumetricChunkWithinFrustrum<
-  RLayer extends MultiscaleVolumetricDataRenderLayer,
->(
+function forEachVolumetricChunkWithinFrustrum(
   clippingPlanes: Float32Array,
-  transformedSource: TransformedSource<RLayer>,
+  transformedSource: TransformedSource<any>,
   callback: (positionInChunks: vec3, clippingPlanes: Float32Array) => void,
   predicate: (
     xLower: number,
@@ -564,8 +500,7 @@ function forEachVolumetricChunkWithinFrustrum<
     lower[i] = Math.max(lower[i], lowerChunkDisplayBound[i]);
     upper[i] = Math.min(upper[i], upperChunkDisplayBound[i]);
   }
-  const { curPositionInChunks, chunkDisplayDimensionIndices } =
-    transformedSource;
+  const { curPositionInChunks } = transformedSource;
 
   function recurse() {
     if (
@@ -595,9 +530,7 @@ function forEachVolumetricChunkWithinFrustrum<
     }
     if (volume === 0) return;
     if (volume === 1) {
-      curPositionInChunks[chunkDisplayDimensionIndices[0]] = lower[0];
-      curPositionInChunks[chunkDisplayDimensionIndices[1]] = lower[1];
-      curPositionInChunks[chunkDisplayDimensionIndices[2]] = lower[2];
+      curPositionInChunks.set(lower);
       callback(lower as vec3, clippingPlanes);
       return;
     }
@@ -619,11 +552,9 @@ function forEachVolumetricChunkWithinFrustrum<
  * within the viewport.  `transformedSource.curPositionInChunks` holds the chunk position during the
  * call.
  */
-export function forEachPlaneIntersectingVolumetricChunk<
-  RLayer extends MultiscaleVolumetricDataRenderLayer,
->(
+export function forEachPlaneIntersectingVolumetricChunk(
   projectionParameters: ProjectionParameters,
-  transformedSource: TransformedSource<RLayer>,
+  transformedSource: TransformedSource<any>,
   chunkLayout: ChunkLayout,
   callback: (positionInChunks: vec3) => void,
 ) {

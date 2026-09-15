@@ -18,7 +18,6 @@ import {
   MultiscaleVolumeChunkSource as GenericMultiscaleVolumeChunkSource,
   VolumeChunkSource,
 } from "#src/render/frontend.js";
-import { transposeNestedArrays } from "#src/util/array.js";
 import { DataType } from "#src/util/data_type.js";
 import type { Borrowed } from "#src/util/disposable.js";
 import { verifyObject } from "#src/util/json.js";
@@ -87,11 +86,12 @@ export class MultiscaleVolumeChunkSource extends GenericMultiscaleVolumeChunkSou
     super(chunkManager);
   }
 
-  // Returns, for each scale, the chunk sources that load it (one per chunk size).  The chunk
-  // sources run their `download` in the worker (see `datasource/zarr/backend.ts`).
+  // Returns the chunk source of each scale, finest first, with the transform from its chunk grid to
+  // the viewer's coordinates.  The chunk sources run their `download` in the worker (see
+  // `datasource/zarr/backend.ts`).
   getSources() {
-    return transposeNestedArrays(
-      this.multiscale.scales.map((scale) => {
+    return this.multiscale.scales.map(
+      (scale): SliceViewSingleResolutionSource<VolumeChunkSource> => {
         const { metadata } = scale;
         const { rank, chunkShape, shape } = metadata;
         // Zarr lists dimensions in (z, y, x) order; chunk space uses the reverse order, (x, y, z),
@@ -118,27 +118,26 @@ export class MultiscaleVolumeChunkSource extends GenericMultiscaleVolumeChunkSou
           rank + 1,
           rank + 1,
         );
-        return makeDefaultVolumeChunkSpecifications({
+        const [spec] = makeDefaultVolumeChunkSpecifications({
           rank,
           dataType: metadata.dataType,
           upperVoxelBound: permutedDataShape,
           chunkDataSizes: [permutedChunkShape],
-        }).map((spec): SliceViewSingleResolutionSource<VolumeChunkSource> => {
-          // Every call (one per view) returns the same chunk source for a scale.  A viewer's chunk
-          // manager holds a single volume, so the scale's path identifies the source.
-          const options = {
-            spec,
-            parameters: { store: this.multiscale.store, path: scale.path, metadata },
-          };
-          const chunkSource = this.chunkManager.getChunkSource(
-            `zarr:${scale.path}`,
-            () => new ZarrVolumeChunkSource(this.chunkManager, options),
-          );
-          // Adding a listener that is already added has no effect.
-          chunkSource.missingChunk.add(this.missingChunk.dispatch);
-          return { chunkSource, chunkToMultiscaleTransform: transform };
         });
-      }),
+        // Every call (one per view) returns the same chunk source for a scale.  A viewer's chunk
+        // manager holds a single volume, so the scale's path identifies the source.
+        const options = {
+          spec,
+          parameters: { store: this.multiscale.store, path: scale.path, metadata },
+        };
+        const chunkSource = this.chunkManager.getChunkSource(
+          `zarr:${scale.path}`,
+          () => new ZarrVolumeChunkSource(this.chunkManager, options),
+        );
+        // Adding a listener that is already added has no effect.
+        chunkSource.missingChunk.add(this.missingChunk.dispatch);
+        return { chunkSource, chunkToMultiscaleTransform: transform };
+      },
     );
   }
 }

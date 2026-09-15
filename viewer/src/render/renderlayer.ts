@@ -13,10 +13,7 @@ import type {
   SliceViewProjectionParameters,
   TransformedSource,
 } from "#src/render/base.js";
-import {
-  filterVisibleSources,
-  SLICEVIEW_RENDERLAYER_RPC_ID,
-} from "#src/render/base.js";
+import { SLICEVIEW_RENDERLAYER_RPC_ID } from "#src/render/base.js";
 import type { ChunkFormat } from "#src/render/chunk_format.js";
 import type {
   MultiscaleVolumeChunkSource,
@@ -410,13 +407,6 @@ export class ImageRenderLayer extends RefCounted {
     this.rpcId = sharedObject.rpcId;
   }
 
-  filterVisibleSources(
-    sliceView: any,
-    sources: readonly TransformedSource[],
-  ): Iterable<TransformedSource> {
-    return filterVisibleSources(sliceView, this, sources);
-  }
-
   private getShader(chunkFormat: ChunkFormat) {
     let shader = this.shaders.get(chunkFormat);
     if (shader === undefined) {
@@ -451,8 +441,7 @@ export class ImageRenderLayer extends RefCounted {
 
   draw(renderContext: SliceViewRenderContext) {
     const { sliceView, projectionParameters } = renderContext;
-    const layerInfo = sliceView.visibleLayers.get(this)!;
-    const { visibleSources } = layerInfo;
+    const { visibleSources } = sliceView;
     if (visibleSources.length === 0) {
       return;
     }
@@ -465,8 +454,8 @@ export class ImageRenderLayer extends RefCounted {
 
     let shader: ShaderProgram | null = null;
     let prevChunkFormat: ChunkFormat | undefined;
-    // Size of chunk (in voxels) in the "display" subspace of the chunk coordinate space.
-    const chunkDataDisplaySize = vec3.create();
+    // Size of the chunk being drawn, in voxels.
+    const chunkDataSizeUniform = new Float32Array(3);
 
     const endShader = () => {
       if (shader === null) return;
@@ -476,11 +465,6 @@ export class ImageRenderLayer extends RefCounted {
     for (const transformedSource of visibleSources) {
       const { chunkLayout } = transformedSource;
       const source = transformedSource.source as VolumeChunkSource;
-      const { fixedPositionWithinChunk, chunkDisplayDimensionIndices } =
-        transformedSource;
-      for (const chunkDim of chunkDisplayDimensionIndices) {
-        fixedPositionWithinChunk[chunkDim] = 0;
-      }
       const { chunkFormat } = source;
       if (chunkFormat !== prevChunkFormat) {
         endShader();
@@ -489,13 +473,8 @@ export class ImageRenderLayer extends RefCounted {
       }
       if (shader === null) continue;
       const chunks = source.chunks;
-
-      chunkDataDisplaySize.fill(1);
-
-      const originalChunkSize = chunkLayout.size;
-
+      const chunkSize = chunkLayout.size;
       let chunkDataSize: Uint32Array | undefined;
-      const chunkRank = source.spec.rank;
 
       beginSource(
         gl,
@@ -509,34 +488,16 @@ export class ImageRenderLayer extends RefCounted {
       sliceView.forEachVisibleChunk(transformedSource, chunkLayout, (key) => {
         const chunk = chunks.get(key);
         if (chunk && chunk.state === ChunkState.GPU_MEMORY) {
-          const newChunkDataSize = chunk.chunkDataSize;
-          if (newChunkDataSize !== chunkDataSize) {
-            chunkDataSize = newChunkDataSize;
-            for (let i = 0; i < 3; ++i) {
-              const chunkDim = chunkDisplayDimensionIndices[i];
-              chunkDataDisplaySize[i] =
-                chunkDim === -1 || chunkDim >= chunkRank
-                  ? 1
-                  : chunkDataSize[chunkDim];
-            }
-            gl.uniform3fv(shader!.uniform("uChunkDataSize"), chunkDataDisplaySize);
+          if (chunk.chunkDataSize !== chunkDataSize) {
+            chunkDataSize = chunk.chunkDataSize;
+            chunkDataSizeUniform.set(chunkDataSize);
+            gl.uniform3fv(shader!.uniform("uChunkDataSize"), chunkDataSizeUniform);
           }
           const { chunkGridPosition } = chunk;
           for (let i = 0; i < 3; ++i) {
-            const chunkDim = chunkDisplayDimensionIndices[i];
-            chunkPosition[i] =
-              chunkDim === -1 || chunkDim >= chunkRank
-                ? 0
-                : originalChunkSize[i] * chunkGridPosition[chunkDim];
+            chunkPosition[i] = chunkSize[i] * chunkGridPosition[i];
           }
-          chunkFormat.bindChunk(
-            gl,
-            shader!,
-            chunk,
-            fixedPositionWithinChunk,
-            chunkDisplayDimensionIndices,
-            newSource,
-          );
+          chunkFormat.bindChunk(gl, shader!, chunk, newSource);
           newSource = false;
           gl.uniform3fv(shader!.uniform("uTranslation"), chunkPosition);
           gl.drawArrays(gl.TRIANGLE_FAN, 0, 6);

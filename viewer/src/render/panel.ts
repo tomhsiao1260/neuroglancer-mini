@@ -386,12 +386,8 @@ export class SliceViewPanel extends RefCounted {
       return;
     }
     const { element, sliceView } = this;
-    const {
-      width,
-      height,
-      invViewMatrix,
-      displayDimensionRenderInfo: { displayDimensionIndices, displayRank },
-    } = sliceView.projectionParameters.value;
+    const { width, height, invViewMatrix } =
+      sliceView.projectionParameters.value;
     const bounds = element.getBoundingClientRect();
     const mouseX =
       event.clientX - (bounds.left + element.clientLeft) - width / 2;
@@ -403,10 +399,9 @@ export class SliceViewPanel extends RefCounted {
     // invViewMatrixLinear * factor * [mouseX, mouseY, 0]^T + [newX, newY, newZ]^T
 
     const position = navigationState.position.value;
-    for (let i = 0; i < displayRank; ++i) {
-      const dim = displayDimensionIndices[i];
+    for (let i = 0; i < 3; ++i) {
       const f = invViewMatrix[i] * mouseX + invViewMatrix[4 + i] * mouseY;
-      position[dim] += f * (1 - factor);
+      position[i] += f * (1 - factor);
     }
     navigationState.position.changed.dispatch();
     navigationState.zoomBy(factor);

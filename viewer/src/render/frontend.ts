@@ -4,10 +4,7 @@ import { debounce } from "es-toolkit";
 import { ChunkState } from "#src/chunk_manager/base.js";
 import type { ChunkManager } from "#src/chunk_manager/frontend.js";
 import { Chunk, ChunkSource } from "#src/chunk_manager/frontend.js";
-import type {
-  DisplayDimensionRenderInfo,
-  NavigationState,
-} from "#src/state/navigation_state.js";
+import type { NavigationState } from "#src/state/navigation_state.js";
 import type {
   WatchableValueChangeInterface,
   WatchableValueInterface,
@@ -16,7 +13,6 @@ import type {
   SliceViewChunkSource as SliceViewChunkSourceInterface,
   SliceViewChunkSpecification,
   TransformedSource,
-  VisibleLayerSources,
   VolumeChunkSpecification,
 } from "#src/render/base.js";
 import {
@@ -28,8 +24,8 @@ import {
   projectionParametersEqual,
   RenderViewport,
   renderViewportsEqual,
-  SLICEVIEW_ADD_VISIBLE_LAYER_RPC_ID,
   SLICEVIEW_RPC_ID,
+  SLICEVIEW_SET_LAYER_RPC_ID,
   SliceViewBase,
   SliceViewProjectionParameters,
   updateProjectionParametersFromInverseViewAndProjection,
@@ -86,7 +82,6 @@ export class DerivedProjectionParameters<
     this.value_ = new parametersConstructor();
     const performUpdate = () => {
       const { oldValue_, value_ } = this;
-      oldValue_.displayDimensionRenderInfo = navigationState.displayDimensionRenderInfo;
       Object.assign(oldValue_, this.renderViewport);
       let { globalPosition } = oldValue_;
       const newGlobalPosition = navigationState.position.value;
@@ -130,9 +125,6 @@ export class DerivedProjectionParameters<
 export class SharedProjectionParameters<
   T extends ProjectionParameters = ProjectionParameters,
 > extends SharedObject {
-  private prevDisplayDimensionRenderInfo:
-    | undefined
-    | DisplayDimensionRenderInfo = undefined;
   constructor(
     rpc: RPC,
     public base: WatchableValueChangeInterface<T>,
@@ -149,70 +141,46 @@ export class SharedProjectionParameters<
 
   private update = this.registerCancellable(
     debounce((_oldValue: T, newValue: T) => {
-      // Note: Because we are using debouce, we cannot rely on `_oldValue`, since
-      // `DerivedProjectionParameters` reuses the objects.
-      let valueUpdate: any;
-      if (
-        newValue.displayDimensionRenderInfo !==
-        this.prevDisplayDimensionRenderInfo
-      ) {
-        valueUpdate = newValue;
-        this.prevDisplayDimensionRenderInfo =
-          newValue.displayDimensionRenderInfo;
-      } else {
-        const { displayDimensionRenderInfo, ...remainder } = newValue;
-        valueUpdate = remainder;
-      }
+      // Note: Because we are using debounce, we cannot rely on `_oldValue`, since
+      // `DerivedProjectionParameters` reuses the objects.  A copy is sent, in case the message is
+      // queued until the worker is ready.
       this.rpc!.invoke(PROJECTION_PARAMETERS_CHANGED_RPC_METHOD_ID, {
         id: this.rpcId,
-        value: valueUpdate,
+        value: { ...newValue },
       });
     }, this.updateInterval),
   );
 }
 
-interface FrontendVisibleLayerSources
-  extends VisibleLayerSources<
-    ImageRenderLayer,
-    SliceViewChunkSource,
-    TransformedSource<ImageRenderLayer, SliceViewChunkSource>
-  > {
-  disposers: Disposer[];
-}
-
+// The message for `deserializeTransformedSource` in `backend.ts`; adds a worker reference to the
+// chunk source.
 function serializeTransformedSource(
-  tsource: TransformedSource<ImageRenderLayer, SliceViewChunkSource>,
+  tsource: TransformedSource<SliceViewChunkSource>,
 ) {
   return {
     source: tsource.source.addCounterpartRef(),
     effectiveVoxelSize: tsource.effectiveVoxelSize,
     lowerClipDisplayBound: tsource.lowerClipDisplayBound,
     upperClipDisplayBound: tsource.upperClipDisplayBound,
-    chunkDisplayDimensionIndices: tsource.chunkDisplayDimensionIndices,
     lowerChunkDisplayBound: tsource.lowerChunkDisplayBound,
     upperChunkDisplayBound: tsource.upperChunkDisplayBound,
     chunkLayout: tsource.chunkLayout.toObject(),
   };
 }
 
-export function serializeAllTransformedSources(
-  allSources: TransformedSource<ImageRenderLayer, SliceViewChunkSource>[][],
-) {
-  return allSources.map((scales) => scales.map(serializeTransformedSource));
-}
-
 /**
- * Main-thread side of one cross-section view.  Sends its layers' sources and the projection
+ * Main-thread side of one cross-section view.  Sends the volume's sources and the projection
  * parameters to its worker counterpart (`SliceViewBackend`), which requests the visible chunks,
  * and draws the chunks that have reached the GPU into `offscreenFramebuffer`.
  */
 @registerSharedObjectOwner(SLICEVIEW_RPC_ID)
-export class SliceView extends SliceViewBase {
+export class SliceView extends SliceViewBase<SliceViewChunkSource> {
   gl = this.chunkManager.gl;
   viewChanged = new NullarySignal();
   renderingStale = true;
-  visibleLayerList = new Array<ImageRenderLayer>();
-  visibleLayers: Map<ImageRenderLayer, FrontendVisibleLayerSources>;
+  // The render layer being drawn, once `renderLayer` has a value.
+  layer: ImageRenderLayer | undefined;
+  private layerDisposers: Disposer[] = [];
 
   offscreenFramebuffer = this.registerDisposer(
     new OffscreenFramebuffer(this.gl),
@@ -289,7 +257,7 @@ export class SliceView extends SliceViewBase {
     });
     this.registerDisposer(
       renderLayer.changed.add(() => {
-        this.updateVisibleLayers();
+        this.updateLayer();
       }),
     );
 
@@ -302,17 +270,17 @@ export class SliceView extends SliceViewBase {
       ),
     );
     this.registerDisposer(navigationState);
-    this.updateVisibleLayers();
+    this.updateLayer();
   }
 
   // Releases the render layer and the projection parameters, and stops listening to them.
   disposed() {
-    for (const [renderLayer, layerInfo] of this.visibleLayers) {
-      invokeDisposers(layerInfo.disposers);
-      renderLayer.dispose();
+    const { layer } = this;
+    if (layer !== undefined) {
+      invokeDisposers(this.layerDisposers);
+      layer.dispose();
+      this.layer = undefined;
     }
-    this.visibleLayers.clear();
-    this.visibleLayerList.length = 0;
     this.projectionParameters.dispose();
     super.disposed();
   }
@@ -332,9 +300,9 @@ export class SliceView extends SliceViewBase {
     );
   }
 
-  private updateVisibleLayers = this.registerCancellable(
+  private updateLayer = this.registerCancellable(
     debounce(() => {
-      this.updateVisibleLayersNow();
+      this.updateLayerNow();
     }, 0),
   );
 
@@ -343,60 +311,32 @@ export class SliceView extends SliceViewBase {
     this.viewChanged.dispatch();
   }
 
-  private bindVisibleRenderLayer(
-    renderLayer: ImageRenderLayer,
-    disposers: Disposer[],
-  ) {
-    disposers.push(
-      renderLayer.renderScaleTarget.changed.add(() =>
-        this.invalidateVisibleSources(),
-      ),
-    );
-  }
-
-  // Registers the render layer once it exists, and sends its sources to the worker.
-  private updateVisibleLayersNow() {
+  // Once the render layer exists, places the volume's scales in the view and sends them to the
+  // worker.
+  private updateLayerNow() {
     if (this.wasDisposed) {
-      return false;
+      return;
     }
-    const { visibleLayers, visibleLayerList } = this;
-    const { displayDimensionRenderInfo } = this.projectionParameters.value;
-    const rpc = this.rpc!;
-    const rpcMessage: any = { id: this.rpcId };
-    let changed = false;
-    visibleLayerList.length = 0;
     const renderLayer = this.renderLayer.value;
-    if (renderLayer !== undefined) {
-      visibleLayerList.push(renderLayer);
-      if (!visibleLayers.has(renderLayer)) {
-        const disposers: Disposer[] = [];
-        const layerInfo: FrontendVisibleLayerSources = {
-          allSources: getVolumetricTransformedSources(
-            renderLayer.getSources(),
-            renderLayer,
-          ),
-          visibleSources: [],
-          disposers,
-          displayDimensionRenderInfo,
-        };
-        visibleLayers.set(renderLayer.addRef(), layerInfo);
-        this.bindVisibleRenderLayer(renderLayer, disposers);
-        rpcMessage.layerId = renderLayer.rpcId;
-        rpcMessage.sources = serializeAllTransformedSources(
-          layerInfo.allSources,
-        );
-        this.flushBackendProjectionParameters();
-        rpc.invoke(SLICEVIEW_ADD_VISIBLE_LAYER_RPC_ID, rpcMessage);
-        changed = true;
-      }
-    }
-    if (changed) {
+    if (renderLayer !== undefined && this.layer === undefined) {
+      this.sources = getVolumetricTransformedSources(renderLayer.getSources());
+      this.layer = renderLayer.addRef();
+      this.renderScaleTarget = renderLayer.renderScaleTarget;
+      this.layerDisposers.push(
+        renderLayer.renderScaleTarget.changed.add(() =>
+          this.invalidateVisibleSources(),
+        ),
+      );
+      const sources = this.sources.map(serializeTransformedSource);
+      this.flushBackendProjectionParameters();
+      this.rpc!.invoke(SLICEVIEW_SET_LAYER_RPC_ID, {
+        id: this.rpcId,
+        layerId: renderLayer.rpcId,
+        sources,
+      });
       this.visibleSourcesStale = true;
     }
-    // Unconditionally call viewChanged, because layers may have been reordered even if the set of
-    // sources is the same.
     this.viewChanged.dispatch();
-    return changed;
   }
 
   invalidateVisibleChunks() {
@@ -415,7 +355,7 @@ export class SliceView extends SliceViewBase {
       return;
     }
     this.renderingStale = false;
-    this.updateVisibleLayers.flush();
+    this.updateLayer.flush();
     this.updateVisibleSources();
 
     const { gl, offscreenFramebuffer } = this;
@@ -431,13 +371,14 @@ export class SliceView extends SliceViewBase {
       projectionParameters,
     };
     // The viewer has a single render layer, so nothing is blended over another layer.
-    for (const renderLayer of this.visibleLayerList) {
+    const { layer } = this;
+    if (layer !== undefined) {
       gl.enable(WebGL2RenderingContext.DEPTH_TEST);
       gl.depthFunc(WebGL2RenderingContext.LESS);
       gl.clearDepth(1);
       gl.clear(WebGL2RenderingContext.DEPTH_BUFFER_BIT);
       gl.disable(WebGL2RenderingContext.BLEND);
-      renderLayer.draw(renderContext);
+      layer.draw(renderContext);
     }
     gl.disable(WebGL2RenderingContext.BLEND);
     gl.disable(WebGL2RenderingContext.DEPTH_TEST);
@@ -512,13 +453,8 @@ export abstract class MultiscaleSliceViewChunkSource<
 > {
   abstract get rank(): number;
 
-  /**
-   * @return Chunk sources for each scale, ordered by increasing minVoxelSize.  Outer array indexes
-   * over alternative chunk orientations.  The inner array indexes over scale.
-   *
-   * Every chunk source must have rank equal to `this.rank`.
-   */
-  abstract getSources(): SliceViewSingleResolutionSource<Source>[][];
+  // Returns the chunk source of each scale, finest first.
+  abstract getSources(): SliceViewSingleResolutionSource<Source>[];
 
   constructor(public chunkManager: Borrowed<ChunkManager>) {}
 }
@@ -529,14 +465,13 @@ export abstract class MultiscaleSliceViewChunkSource<
  * choose which scales to show.  Chunk dimension `i` is shown along view dimension `i`.
  */
 export function getVolumetricTransformedSources(
-  allSources: SliceViewSingleResolutionSource<SliceViewChunkSource>[][],
-  layer: ImageRenderLayer,
-): TransformedSource<ImageRenderLayer, SliceViewChunkSource>[][] {
+  scales: SliceViewSingleResolutionSource<SliceViewChunkSource>[],
+): TransformedSource<SliceViewChunkSource>[] {
   const rank = 3;
 
   const getTransformedSource = (
     singleResolutionSource: SliceViewSingleResolutionSource,
-  ): TransformedSource<ImageRenderLayer, SliceViewChunkSource> => {
+  ): TransformedSource<SliceViewChunkSource> => {
     const { chunkSource: source, chunkToMultiscaleTransform } =
       singleResolutionSource;
     const { spec } = source;
@@ -573,7 +508,6 @@ export function getVolumetricTransformedSources(
       /*baseVoxelSize=*/ kOneVec,
     );
     return {
-      renderLayer: layer,
       source,
       lowerChunkDisplayBound,
       upperChunkDisplayBound,
@@ -581,12 +515,10 @@ export function getVolumetricTransformedSources(
       upperClipDisplayBound,
       effectiveVoxelSize,
       chunkLayout,
-      chunkDisplayDimensionIndices: [0, 1, 2],
       curPositionInChunks: new Float32Array(rank),
-      fixedPositionWithinChunk: new Uint32Array(rank),
     };
   };
-  return allSources.map((scales) => scales.map(getTransformedSource));
+  return scales.map(getTransformedSource);
 }
 
 export class VolumeChunkSource extends SliceViewChunkSource<

@@ -1,6 +1,6 @@
 # Neuroglancer Mini
 
-This is a trimmed-down version of the original Neuroglancer source code, designed to make its core logic more accessible and easier to understand. This is not a new implementation, but rather a carefully curated subset of the original codebase (~115,510 lines) that has been reduced to about 8,000 lines by retaining only the minimal core functionality needed for the program to run, reducing npm dependencies, and simplifying the build process. This lightweight version serves as a learning demo, allowing developers to grasp the core concepts and architecture of Neuroglancer without being overwhelmed by the complexity of the original implementation.
+This is a trimmed-down version of the original Neuroglancer source code, designed to make its core logic more accessible and easier to understand. This is not a new implementation, but rather a carefully curated subset of the original codebase (~115,510 lines) that has been reduced to about 7,700 lines by retaining only the minimal core functionality needed for the program to run, reducing npm dependencies, and simplifying the build process. This lightweight version serves as a learning demo, allowing developers to grasp the core concepts and architecture of Neuroglancer without being overwhelmed by the complexity of the original implementation.
 
 <img width="1193" alt="img2" src="https://github.com/user-attachments/assets/c69a9014-3250-4d05-8350-abb96975b64c" />
 
@@ -129,7 +129,7 @@ The code is split between two threads. The **main thread** owns the WebGL canvas
 
 #### `viewer/src/render/`: cross-section views
 
-- `base.ts` (main thread and worker): `ProjectionParameters` (a view's viewport plus view and projection matrices), `ChunkLayout` (the chunk grid in view coordinates), chunk specifications, `filterVisibleSources` (which scales to draw) and `forEachPlaneIntersectingVolumetricChunk` (which chunks the plane cuts through).
+- `base.ts` (main thread and worker): `ProjectionParameters` (a view's viewport plus view and projection matrices), `ChunkLayout` (the chunk grid in view coordinates), chunk specifications, `SliceViewBase` (a view's scales and the scales it shows), `filterVisibleSources` (which scales to draw and load for the current pixel size) and `forEachPlaneIntersectingVolumetricChunk` (which chunks the plane cuts through).
 - `frontend.ts` (main thread): `SliceView` sends its layer and projection to the worker and draws the visible GPU chunks into an offscreen framebuffer. `DerivedProjectionParameters` recomputes a view's projection from its navigation state and viewport, and `SharedProjectionParameters` sends it to the worker. `getVolumetricTransformedSources` places each scale's chunk grid in the view. `VolumeChunkSource` and `VolumeChunk` upload chunk data to textures and free them again.
 - `backend.ts` (worker): `SliceViewBackend` requests the visible chunks, using the projection received by `SharedProjectionParametersBackend`. The worker-side `VolumeChunk` holds downloaded data until it is sent to the main thread.
 - `chunk_format.ts`: how a chunk is stored as a texture (one texel per voxel) and read in the fragment shader. Missing chunks share one texture filled with 0.

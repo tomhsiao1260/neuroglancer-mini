@@ -51,24 +51,6 @@ export class Position extends RefCounted {
   }
 }
 
-export interface DisplayDimensionRenderInfo {
-  // Number of global dimensions.
-  globalRank: number;
-  globalDimensionNames: readonly string[];
-  // Number of displayed dimensions.
-  displayRank: number;
-  // The global dimension shown along each view axis.
-  displayDimensionIndices: Int32Array;
-}
-
-// The viewer shows its three dimensions, (z, y, x), along the three view axes.
-const displayInfo: DisplayDimensionRenderInfo = {
-  globalRank: 3,
-  displayRank: 3,
-  globalDimensionNames: ["z", "y", "x"],
-  displayDimensionIndices: new Int32Array([0, 1, 2]),
-};
-
 // Size of a screen pixel, in voxels.
 export class TrackableZoom extends RefCounted {
   readonly changed = new NullarySignal();
@@ -89,8 +71,6 @@ export class TrackableZoom extends RefCounted {
 
 export class NavigationState extends RefCounted {
   changed = new NullarySignal();
-
-  displayDimensionRenderInfo = displayInfo;
 
   constructor(
     public position: Owned<Position>,

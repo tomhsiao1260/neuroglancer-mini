@@ -187,20 +187,12 @@ ${shaderType} getDataValue() {
     gl: GL,
     shader: ShaderProgram,
     chunk: VolumeChunk,
-    fixedChunkPosition: Uint32Array,
-    chunkDisplaySubspaceDimensions: readonly number[],
     newSource: boolean,
   ) {
     const textureLayout = chunk.textureLayout!;
     if (this.boundTextureLayout !== textureLayout || newSource) {
       this.boundTextureLayout = textureLayout;
-      this.setupTextureLayout(
-        gl,
-        shader,
-        textureLayout,
-        fixedChunkPosition,
-        chunkDisplaySubspaceDimensions,
-      );
+      this.setupTextureLayout(gl, shader, textureLayout);
     }
     gl.bindTexture(this.textureTarget, chunk.texture);
   }
@@ -209,27 +201,17 @@ ${shaderType} getDataValue() {
     gl: GL,
     shader: ShaderProgram,
     textureLayout: TextureLayout,
-    fixedChunkPosition: Uint32Array,
-    chunkDisplaySubspaceDimensions: readonly number[],
   ) {
     const stridesUniform = tempStrides;
     const { strides } = textureLayout;
-    const rank = fixedChunkPosition.length;
     const { textureDims } = this;
-    for (let i = 0; i < textureDims; ++i) {
-      let sum = 0;
-      for (let chunkDim = 0; chunkDim < rank; ++chunkDim) {
-        sum +=
-          fixedChunkPosition[chunkDim] * strides[chunkDim * textureDims + i];
-      }
-      stridesUniform[i] = sum;
-    }
+    // Voxel (0, 0, 0) is at texel 0.
+    stridesUniform.fill(0, 0, textureDims);
+    // Texel offset per voxel along x, y and z.
     for (let i = 0; i < 3; ++i) {
-      const chunkDim = chunkDisplaySubspaceDimensions[i];
-      if (chunkDim >= rank) continue;
       for (let j = 0; j < textureDims; ++j) {
         stridesUniform[(i + 1) * textureDims + j] =
-          strides[chunkDim * textureDims + j];
+          strides[i * textureDims + j];
       }
     }
     const location = shader.uniform("uVolumeChunkStrides");
