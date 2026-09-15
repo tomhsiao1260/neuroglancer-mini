@@ -3,7 +3,7 @@
  *
  * When the page is opened with `?zarr=<url>`, the volume is read over HTTP from `<url>`. Otherwise
  * the start screen in `index.html` lets the user pick a local `.zarr` folder (File System Access
- * API) or enter a URL.
+ * API).
  */
 
 import { Viewer } from "viewer";
@@ -22,14 +22,16 @@ const start = document.querySelector<HTMLElement>("#start")!;
 const status = document.querySelector<HTMLElement>("#status")!;
 const hint = document.querySelector<HTMLElement>("#hint")!;
 
-const zarrUrl = new URLSearchParams(window.location.search).get("zarr");
+let zarrUrl = new URLSearchParams(window.location.search).get("zarr");
+// For testing: uncomment to open Scroll 1 from the Vesuvius Challenge without choosing a folder.
+// zarrUrl = "https://dl.ash2txt.org/full-scrolls/Scroll1/PHercParis4.volpkg/volumes_zarr_standardized/54keV_7.91um_Scroll1A.zarr";
+
 if (zarrUrl) {
   openViewer({ kind: "http", url: zarrUrl });
 } else {
   showStartScreen();
 }
 
-// The URL form needs no script: submitting it reloads the page with `?zarr=<url>`.
 function showStartScreen() {
   start.hidden = false;
   const button = document.querySelector<HTMLButtonElement>("#open-folder")!;

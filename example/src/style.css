@@ -131,58 +131,6 @@ button.primary:hover:enabled {
   background: #fff;
 }
 
-.divider {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  margin: 20px 0;
-  color: #6c6e76;
-  font-size: 12px;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-}
-
-.divider::before,
-.divider::after {
-  content: "";
-  flex: 1;
-  height: 1px;
-  background: #26272e;
-}
-
-.url-form {
-  display: flex;
-  gap: 8px;
-}
-
-.url-form input {
-  flex: 1;
-  min-width: 0;
-  padding: 9px 12px;
-  border: 1px solid #2c2d35;
-  border-radius: 8px;
-  background: #07080a;
-  color: inherit;
-  font: inherit;
-  font-size: 14px;
-}
-
-.url-form input:focus {
-  outline: none;
-  border-color: #5b8def;
-}
-
-.url-form button {
-  padding: 9px 16px;
-  border: 1px solid #2c2d35;
-  background: #1a1b21;
-  color: inherit;
-}
-
-.url-form button:hover {
-  background: #23242b;
-}
-
 .note {
   margin: 12px 0 0;
   color: #9a9ca5;

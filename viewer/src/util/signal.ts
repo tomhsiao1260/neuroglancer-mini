@@ -1,18 +1,4 @@
-/**
- * @license
- * Copyright 2016 Google Inc.
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
+/** @license Copyright 2016 Google Inc. SPDX-License-Identifier: Apache-2.0 */
 
 /**
  * @file Simple signal dispatch mechanism.
@@ -29,16 +15,9 @@
 export class Signal<Callable extends Function = () => void> {
   private handlers = new Set<Callable>();
 
-  /**
-   * Count of number of times this signal has been dispatched.  This is incremented each time
-   * `dispatch` is called prior to invoking the handlers.
-   */
-  count = 0;
-
   constructor() {
     const obj = this;
     this.dispatch = <Callable>(<Function>function (this: any) {
-      ++obj.count;
       obj.handlers.forEach((handler) => {
         // eslint-disable-next-line prefer-rest-params
         handler.apply(this, arguments);
@@ -90,26 +69,3 @@ export class Signal<Callable extends Function = () => void> {
  * Simple specialization of Signal for the common case of a nullary handler signature.
  */
 export class NullarySignal extends Signal<() => void> {}
-
-/**
- * Interface for a signal excluding the dispatch method.
- *
- * Unlike Signal, this interface is covariant in the type of Callable.
- */
-export interface ReadonlySignal<Callable extends Function> {
-  readonly count: number;
-  add(handler: Callable): () => void;
-  remove(handler: Callable): boolean;
-}
-
-export type NullaryReadonlySignal = ReadonlySignal<() => void>;
-
-export const neverSignal: NullaryReadonlySignal = {
-  count: 0,
-  add(_handler: any) {
-    return () => {};
-  },
-  remove(_handler: any) {
-    return false;
-  },
-};

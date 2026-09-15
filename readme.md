@@ -1,6 +1,6 @@
 # Neuroglancer Mini
 
-This is a trimmed-down version of the original Neuroglancer source code, designed to make its core logic more accessible and easier to understand. This is not a new implementation, but rather a carefully curated subset of the original codebase (~115,510 lines) that has been reduced to about 10,100 lines by retaining only the minimal core functionality needed for the program to run, reducing npm dependencies, and simplifying the build process. This lightweight version serves as a learning demo, allowing developers to grasp the core concepts and architecture of Neuroglancer without being overwhelmed by the complexity of the original implementation.
+This is a trimmed-down version of the original Neuroglancer source code, designed to make its core logic more accessible and easier to understand. This is not a new implementation, but rather a carefully curated subset of the original codebase (~115,510 lines) that has been reduced to about 9,100 lines by retaining only the minimal core functionality needed for the program to run, reducing npm dependencies, and simplifying the build process. This lightweight version serves as a learning demo, allowing developers to grasp the core concepts and architecture of Neuroglancer without being overwhelmed by the complexity of the original implementation.
 
 <img width="1193" alt="img2" src="https://github.com/user-attachments/assets/c69a9014-3250-4d05-8350-abb96975b64c" />
 
@@ -36,7 +36,7 @@ Please use Chrome or Edge.
 
 ### Option 1: Online Demo
 
-Visit [neuroglancer-mini.vercel.app](https://neuroglancer-mini.vercel.app) and click "Open local folder" to open a local `.zarr` folder, enter the URL of a `.zarr` folder, or open a scroll straight from the Vesuvius Challenge data server:
+Visit [neuroglancer-mini.vercel.app](https://neuroglancer-mini.vercel.app) and click "Open local folder" to open a local `.zarr` folder, or open a scroll straight from the Vesuvius Challenge data server:
 
 [neuroglancer-mini.vercel.app/?zarr=https://dl.ash2txt.org/full-scrolls/Scroll1/PHercParis4.volpkg/volumes_zarr_standardized/54keV_7.91um_Scroll1A.zarr](https://neuroglancer-mini.vercel.app/?zarr=https://dl.ash2txt.org/full-scrolls/Scroll1/PHercParis4.volpkg/volumes_zarr_standardized/54keV_7.91um_Scroll1A.zarr)
 
@@ -59,7 +59,7 @@ Then open `http://localhost:3000`.
 
 The viewer opens one OME-Zarr multiscale volume stored as Zarr v2. The example page's URL parameters choose where it comes from:
 
-- No parameters: the start screen. Click "Open local folder" and pick the `.zarr` folder itself (the one containing `.zattrs`); this uses the File System Access API. Or enter a URL, which opens the page with `?zarr=<url>`.
+- No parameters: the start screen. Click "Open local folder" and pick the `.zarr` folder itself (the one containing `.zattrs`); this uses the File System Access API.
 - `?zarr=<url>`: read the files over HTTP, where `<url>` is the URL of the `.zarr` folder. Any server that returns the files (and 404 for missing ones) works if it allows cross-origin requests (CORS): the Vesuvius Challenge data server, a static server such as `npx http-server <folder containing scroll.zarr> -p 9000 --cors`, or the server of the forward branch.
 
 What is supported:
@@ -113,8 +113,8 @@ The code is split between two threads. The **main thread** owns the WebGL canvas
 
 #### `example/`
 
-- `index.html`, `src/style.css`: the start screen (folder button and URL form), loading status and styles.
-- `src/main.ts`: chooses the store (`?zarr=<url>` or the folder picker), creates the viewer and lays out three views side by side. Start here to try the viewer API.
+- `index.html`, `src/style.css`: the start screen (folder button), loading status and styles.
+- `src/main.ts`: chooses the store (`?zarr=<url>` or the folder picker), creates the viewer and lays out three views side by side. It also has a commented-out line that opens Scroll 1 from the Vesuvius Challenge for testing. Start here to try the viewer API.
 - `vite.config.ts`, `tsconfig.json`, `package.json`: build configuration (dev server on port 3000) and the `viewer` import described in [Using the Viewer](#using-the-viewer).
 
 `vercel.json` at the top level builds this folder for the online demo.
@@ -125,6 +125,7 @@ The code is split between two threads. The **main thread** owns the WebGL canvas
 - `src/viewer.ts`: `Viewer`, which connects the rest of the code (see [Using the Viewer](#using-the-viewer)).
 - `package.json`: dependencies (`gl-matrix`, `numcodecs` for blosc, `es-toolkit`) and the `#src/...` import paths used inside the library.
 - `tsconfig.json`: TypeScript configuration. The library needs `experimentalDecorators` and `useDefineForClassFields: false`.
+- `LICENSE`, `NOTICE`: the Apache License 2.0 of Neuroglancer, and a note on how this code derives from it (see [License](#license)).
 
 #### `viewer/src/render/`: cross-section views
 
@@ -151,8 +152,6 @@ The code is split between two threads. The **main thread** owns the WebGL canvas
 - `decode.ts`: blosc or raw decoding, size check and endianness conversion.
 - `store.ts`: `ZarrStore`, where the store's files are read from: `HttpStore` (any HTTP server) or `DirectoryStore` (a local folder through the File System Access API). A `ZarrStoreSpec` describes the store so that the worker can create its own.
 - `base.ts`: chunk source parameters sent to the worker (store, path of the scale's array, and metadata).
-
-`viewer/src/datasource/file_protocols.md` and `viewer/src/datasource/zarr/README.md` are notes from the original Neuroglancer and describe more protocols and formats than this version supports.
 
 #### `viewer/src/worker/`: threads
 
@@ -186,3 +185,7 @@ The code is split between two threads. The **main thread** owns the WebGL canvas
 - Math: `geom.ts` (gl-matrix plus helpers), `matrix.ts` (n-dimensional matrices), `vector.ts`, `erf.ts`, `velocity_estimation.ts` (motion estimate used for prefetching).
 - Lifetime and events: `disposable.ts` (`RefCounted`), `signal.ts`, `memoize.ts`, `object_id.ts`, `cancellation.ts`, `animation_frame_debounce.ts`.
 - `si_units.ts`: unit prefixes for OME units.
+
+## License
+
+The code in `viewer/` is derived from [Neuroglancer](https://github.com/google/neuroglancer) and is licensed under the Apache License 2.0 (`viewer/LICENSE`). Each file derived from Neuroglancer keeps its copyright line in a one-line header; `viewer/NOTICE` describes the changes.

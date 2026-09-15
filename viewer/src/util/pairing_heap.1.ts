@@ -1,19 +1,4 @@
-// DO NOT EDIT.  Generated from templates/neuroglancer/util/pairing_heap.template.ts.
-/**
- * @license
- * Copyright 2016 Google Inc.
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
+/** @license Copyright 2016 Google Inc. SPDX-License-Identifier: Apache-2.0 */
 
 import type { PairingHeapOperations } from "#src/util/pairing_heap.js";
 
@@ -129,42 +114,5 @@ export default class Implementation<T extends Node<T>>
     node.prev1 = null;
     node.child1 = null;
     return newRoot;
-  }
-
-  /**
-   * Returns a new iterator over the entries in the heap.
-   */
-  *entries(root: T): IterableIterator<T> {
-    if (root !== null) {
-      let child = root.child1;
-      yield root;
-      while (child !== null) {
-        const next: T | null = child.next1;
-        yield* this.entries(child);
-        child = next;
-      }
-    }
-  }
-
-  /**
-   * Returns a new iterator over the entries in the heap.  The entries
-   * will be removed as they are iterated.
-   */
-  *removedEntries(root: T): IterableIterator<T> {
-    if (root !== null) {
-      let child = root.child1;
-      root.child1 = null;
-      root.next1 = null;
-      root.prev1 = null;
-      yield root;
-      while (child !== null) {
-        const next: T | null = child.next1;
-        child.child1 = null;
-        child.next1 = null;
-        child.prev1 = null;
-        yield* this.entries(child);
-        child = next;
-      }
-    }
   }
 }
