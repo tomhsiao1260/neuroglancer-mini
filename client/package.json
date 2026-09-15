@@ -1,32 +1,21 @@
 {
-  "name": "neuroglancer-learn",
+  "name": "client",
   "private": true,
   "version": "0.0.0",
   "type": "module",
   "scripts": {
+    "postinstall": "npm install --prefix ../viewer",
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview"
   },
+  "dependencies": {
+    "es-toolkit": "^1.36.0"
+  },
   "devDependencies": {
-    "autoprefixer": "^10.4.21",
-    "postcss": "^8.5.3",
+    "@tailwindcss/vite": "^4.1.4",
     "tailwindcss": "^4.1.4",
     "typescript": "~5.7.2",
     "vite": "^6.3.1"
-  },
-  "dependencies": {
-    "@tailwindcss/vite": "^4.1.4",
-    "es-toolkit": "^1.36.0",
-    "gl-matrix": "^3.4.3",
-    "neuroglancer-learn": "file:",
-    "numcodecs": "^0.3.2"
-  },
-  "imports": {
-    "#src/*.js": "./src/*.ts",
-    "#src/*": "./src/*",
-    "#datasource/zarr/backend": {
-      "default": "./src/datasource/zarr/backend.ts"
-    }
   }
 }

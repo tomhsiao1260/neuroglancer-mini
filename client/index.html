@@ -34,34 +34,19 @@
             </li>
             <li class="flex items-center space-x-4 whitespace-nowrap">
               <i class="fas fa-mouse w-5 text-center"></i>
-              <span>Mouse wheel: Zoom in/out</span>
+              <span>Mouse wheel: Move through slices</span>
             </li>
             <li class="flex items-center space-x-4 whitespace-nowrap">
               <i class="fas fa-arrows-alt-v w-5 text-center"></i>
-              <span>Ctrl + Mouse wheel: Adjust Z position</span>
+              <span>Ctrl + Mouse wheel: Zoom in/out</span>
             </li>
           </ul>
         </div>
         <div class="space-y-4 w-full max-w-sm -mt-10">
-          <!-- account -->
-          <input
-            id="account-input"
-            type="password"
-            placeholder="Username"
-            class="w-full h-10 px-3 border border-gray-700 rounded-md focus:outline-none"
-          />
-
-          <!-- password -->
-          <input
-            id="password-input"
-            type="password"
-            placeholder="Password"
-            class="w-full h-10 px-3 border border-gray-700 rounded-md focus:outline-none"
-          />
           <input
             id="scroll-url-input"
             type="text"
-            placeholder="Scroll URL"
+            placeholder="Scroll URL (optional)"
             class="w-full h-10 px-3 border border-gray-700 rounded-md focus:outline-none"
           />
 
@@ -93,7 +78,7 @@
           <div
             class="animate-spin rounded-full h-16 w-16 border-t-2 border-b-2 border-blue-500 mx-auto"
           ></div>
-          <p class="mt-4 text-xl">Loading...</p>
+          <p id="loading-message" class="mt-4 text-xl">Loading...</p>
         </div>
       </div>
       <main class="flex-1 relative hidden overflow-hidden">

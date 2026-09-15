@@ -6,6 +6,12 @@ import { fileURLToPath } from "url";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+const CLIENT_URL = "http://localhost:4173";
+const SERVER_URL = "http://localhost:3005";
+
+// The viewer reads the zarr store from the server.
+const VIEWER_URL = `${CLIENT_URL}/?zarr=${SERVER_URL}/api/data/zarr`;
+
 function runCommand(command, args, cwd) {
   return new Promise((resolve, reject) => {
     const proc = spawn(command, args, { cwd, stdio: "inherit", shell: true });
@@ -14,6 +20,18 @@ function runCommand(command, args, cwd) {
       else reject(new Error(`${command} exited with code ${code}`));
     });
   });
+}
+
+// Waits until `url` answers, since the server takes a few seconds to compile and start.
+async function waitUntilAnswering(url) {
+  while (true) {
+    try {
+      await fetch(url);
+      return;
+    } catch {
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+  }
 }
 
 async function main() {
@@ -40,10 +58,12 @@ async function main() {
       stdio: "inherit",
     });
 
-    // Open browser after 3 seconds
-    setTimeout(() => {
-      open("http://localhost:4173/");
-    }, 3000);
+    // Open the browser once both are running
+    await Promise.all([
+      waitUntilAnswering(CLIENT_URL),
+      waitUntilAnswering(SERVER_URL),
+    ]);
+    open(VIEWER_URL);
 
     // Wait for server and preview to end (usually won't end)
     await Promise.all([

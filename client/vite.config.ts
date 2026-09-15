@@ -1,40 +1,31 @@
-import { defineConfig } from 'vite';
-import { fileURLToPath } from 'url';
-import { dirname, resolve } from 'path';
-import type { PluginOption } from 'vite';
-import tailwindcss from '@tailwindcss/vite';
+import { defineConfig } from "vite";
+import tailwindcss from "@tailwindcss/vite";
+import { dirname, resolve } from "path";
+import { fileURLToPath } from "url";
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
+const __dirname = dirname(fileURLToPath(import.meta.url));
 
 export default defineConfig({
   build: {
-    target: 'esnext',
-    outDir: '../build/client/page',
-    rollupOptions: {
-      input: {
-        main: resolve(__dirname, 'index.html'),
-      },
-      output: {
-        entryFileNames: 'assets/[name]-[hash].js',
-        chunkFileNames: 'assets/[name]-[hash].js',
-        assetFileNames: 'assets/[name]-[hash].[ext]',
-      },
-    },
+    target: "esnext",
+    outDir: "../build/client/page",
+    emptyOutDir: true,
   },
   resolve: {
     alias: {
-      '#src': resolve(__dirname, 'src'),
+      // The viewer package, used from source.
+      viewer: resolve(__dirname, "../viewer/src/index.ts"),
     },
   },
-  plugins: [
-    tailwindcss(),
-  ],
+  plugins: [tailwindcss()],
   worker: {
-    format: 'es',
-    plugins: () => [] as PluginOption[],
+    format: "es",
   },
   server: {
     port: 3000,
+    fs: {
+      // The viewer package lies outside this folder.
+      allow: [".."],
+    },
   },
-}); 
+});

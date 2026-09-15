@@ -19,6 +19,11 @@
     "noFallthroughCasesInSwitch": true,
     "noUncheckedSideEffectImports": true,
     "allowJs": true,
+
+    /* The viewer package, used from source */
+    "paths": {
+      "viewer": ["../viewer/src/index.ts"]
+    }
   },
   "include": ["src"],
   "exclude": ["node_modules", "dist"]

@@ -1,7 +1,6 @@
 {
   "type": "module",
   "devDependencies": {
-    "concurrently": "^9.1.2",
     "cross-spawn": "^7.0.6",
     "open": "^10.1.2"
   }
