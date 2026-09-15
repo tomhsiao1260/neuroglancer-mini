@@ -46,7 +46,7 @@ export function renderViewportsEqual(a: RenderViewport, b: RenderViewport) {
  * a copy to choose chunks.
  */
 export class ProjectionParameters extends RenderViewport {
-  // Position of the center of the view, in voxels.
+  // Position of the center of the view, in voxels; empty until the volume has loaded.
   globalPosition: Float32Array = kEmptyFloat32Vec;
 
   // Transform from view coordinates to clip coordinates.

@@ -40,6 +40,14 @@ import {
   SharedObjectCounterpart,
 } from "#src/worker/worker_rpc.js";
 
+// Delay of the priority update that follows chunks moving to or from the GPU (see `ChunkManager`).
+const GPU_MEMORY_PRIORITY_UPDATE_INTERVAL_MS = 200;
+
+let nextMarkGeneration = 0;
+export function getNextMarkGeneration() {
+  return ++nextMarkGeneration;
+}
+
 export class Chunk implements Disposable {
   // Node properties used for eviction/promotion heaps and LRU linked lists.  A chunk can be in two
   // queues at once: one using the `0` fields and one using the `1` fields.
@@ -57,6 +65,10 @@ export class Chunk implements Disposable {
   state = ChunkState.NEW;
 
   error: any = null;
+
+  // Set to a value from `getNextMarkGeneration` by code that needs to mark chunks, e.g. to skip
+  // visible chunks when prefetching.
+  markGeneration = -1;
 
   /**
    * Specifies existing priority within priority tier.  Only meaningful if priorityTier in
@@ -493,6 +505,14 @@ export class ChunkQueueManager extends SharedObjectCounterpart {
   systemMemoryCapacity: AvailableCapacity;
   downloadCapacity: AvailableCapacity;
 
+  // Whether views request the chunks they are likely to need soon as PREFETCH.
+  enablePrefetch: SharedWatchableValue<boolean>;
+
+  // Dispatched after an update that copied chunks to the GPU or freed them from it.
+  gpuMemoryChanged = new NullarySignal();
+  // Incremented whenever a chunk is copied to the GPU or freed from it.
+  private gpuMemoryGeneration = 0;
+
   /**
    * Contains all chunks in QUEUED state pending download.
    */
@@ -543,6 +563,7 @@ export class ChunkQueueManager extends SharedObjectCounterpart {
     this.gpuMemoryCapacity = getCapacity(options.gpuMemoryCapacity);
     this.systemMemoryCapacity = getCapacity(options.systemMemoryCapacity);
     this.downloadCapacity = getCapacity(options.downloadCapacity);
+    this.enablePrefetch = rpc.get(options.enablePrefetch);
   }
 
   scheduleUpdate() {
@@ -698,6 +719,7 @@ export class ChunkQueueManager extends SharedObjectCounterpart {
   }
 
   freeChunkGPUMemory(chunk: Chunk) {
+    ++this.gpuMemoryGeneration;
     this.rpc!.invoke("Chunk.update", {
       id: chunk.key,
       state: ChunkState.SYSTEM_MEMORY,
@@ -718,6 +740,7 @@ export class ChunkQueueManager extends SharedObjectCounterpart {
   }
 
   copyChunkToGPU(chunk: Chunk) {
+    ++this.gpuMemoryGeneration;
     const rpc = this.rpc!;
     if (chunk.state === ChunkState.SYSTEM_MEMORY) {
       rpc.invoke("Chunk.update", {
@@ -809,8 +832,12 @@ export class ChunkQueueManager extends SharedObjectCounterpart {
       return;
     }
     this.updatePending = null;
+    const gpuMemoryGeneration = this.gpuMemoryGeneration;
     this.processGPUPromotions_();
     this.processQueuePromotions_();
+    if (this.gpuMemoryGeneration !== gpuMemoryGeneration) {
+      this.gpuMemoryChanged.dispatch();
+    }
   }
 }
 
@@ -836,11 +863,29 @@ export class ChunkManager extends SharedObjectCounterpart {
   // need.
   recomputeChunkPriorities = new NullarySignal();
 
+  // Pending priority update after chunks moved to or from the GPU, if any.
+  private gpuMemoryUpdateTimer: any = null;
+
   constructor(rpc: RPC, options: any) {
     super(rpc, options);
     this.queueManager = (<ChunkQueueManager>(
       rpc.get(options.chunkQueueManager)
     )).addRef();
+
+    // While chunks keep arriving, priorities are also recomputed every
+    // `GPU_MEMORY_PRIORITY_UPDATE_INTERVAL_MS`, not only when the view changes.  Each update gives
+    // the views' velocity estimators a new sample, so once the view stops, the estimated velocity
+    // decays and the chunks prefetched for the earlier motion are no longer requested.
+    this.registerDisposer(
+      this.queueManager.gpuMemoryChanged.add(() => {
+        if (this.gpuMemoryUpdateTimer !== null) return;
+        this.gpuMemoryUpdateTimer = setTimeout(() => {
+          this.gpuMemoryUpdateTimer = null;
+          this.scheduleUpdateChunkPriorities();
+        }, GPU_MEMORY_PRIORITY_UPDATE_INTERVAL_MS);
+      }),
+    );
+    this.registerDisposer(() => clearTimeout(this.gpuMemoryUpdateTimer));
 
     for (
       let tier = ChunkPriorityTier.FIRST_TIER;

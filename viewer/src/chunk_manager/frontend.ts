@@ -71,6 +71,8 @@ export class ChunkQueueManager extends SharedObject {
   // Singly linked list (through `nextUpdate`) of `Chunk.update` messages not yet applied.
   pendingChunkUpdates: any = null;
   pendingChunkUpdatesTail: any = null;
+  // Whether views also request the chunks they are likely to need soon (see `render/backend.ts`).
+  enablePrefetch = new WatchableValue(true);
 
   constructor(
     rpc: RPC,
@@ -98,6 +100,9 @@ export class ChunkQueueManager extends SharedObject {
       gpuMemoryCapacity: makeCapacityCounterparts(capacities.gpuMemory),
       systemMemoryCapacity: makeCapacityCounterparts(capacities.systemMemory),
       downloadCapacity: makeCapacityCounterparts(capacities.download),
+      enablePrefetch: this.registerDisposer(
+        SharedWatchableValue.makeFromExisting(rpc, this.enablePrefetch),
+      ).rpcId,
     });
   }
 

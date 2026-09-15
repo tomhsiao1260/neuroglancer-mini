@@ -3,6 +3,7 @@
 import {
   Chunk,
   ChunkSource,
+  getNextMarkGeneration,
   withChunkManager,
 } from "#src/chunk_manager/backend.js";
 import { ChunkPriorityTier } from "#src/chunk_manager/base.js";
@@ -23,8 +24,10 @@ import {
   SliceViewBase,
 } from "#src/render/base.js";
 import type { WatchableValueChangeInterface } from "#src/state/trackable_value.js";
+import { erf } from "#src/util/erf.js";
 import { vec3, vec3Key } from "#src/util/geom.js";
 import { Signal } from "#src/util/signal.js";
+import { VelocityEstimator } from "#src/util/velocity_estimation.js";
 import type { RPC } from "#src/worker/worker_rpc.js";
 import {
   registerRPC,
@@ -81,12 +84,21 @@ const SliceViewIntermediateBase = withChunkManager(SliceViewCounterpartBase);
 export class SliceViewBackend extends SliceViewIntermediateBase {
   // The render layer whose sources are shown, once the main thread has sent it.
   layer: SliceViewRenderLayerBackend | undefined;
+  // Estimates how the view position moves, to prefetch the chunks it is heading towards.
+  velocityEstimator = new VelocityEstimator();
 
   constructor(rpc: RPC, options: any) {
     super(rpc, options);
     this.registerDisposer(
       this.chunkManager.recomputeChunkPriorities.add(() => {
         this.updateVisibleChunks();
+      }),
+    );
+    this.registerDisposer(
+      this.projectionParameters.changed.add(() => {
+        this.velocityEstimator.addSample(
+          this.projectionParameters.value.globalPosition,
+        );
       }),
     );
   }
@@ -105,24 +117,34 @@ export class SliceViewBackend extends SliceViewIntermediateBase {
     const chunkManager = this.chunkManager;
     this.updateVisibleSources();
     const { centerDataPosition } = projectionParameters;
-    // Requests, as VISIBLE, every chunk the cross-section plane cuts through.  Finer scales get
-    // higher priority, and within a scale chunks closer to the center of the view come first.
-    const priorityTier = ChunkPriorityTier.VISIBLE;
+    // Requests every chunk the cross-section plane cuts through as VISIBLE, and the chunks next to
+    // them that the view is likely to reach soon, judging by how its position has been moving, as
+    // PREFETCH.  Within a tier, coarser scales (listed later) get higher priority, so that something
+    // is shown quickly, and within a scale chunks closer to the center of the view come first.
     const basePriority = BASE_PRIORITY;
 
     const localCenter = tempCenter;
 
     const chunkSize = tempChunkSize;
 
+    const curVisibleChunks: VolumeChunk[] = [];
+    this.velocityEstimator.addSample(
+      this.projectionParameters.value.globalPosition,
+    );
     const { visibleSources } = this;
     for (let i = 0, numVisibleSources = visibleSources.length; i < numVisibleSources; ++i) {
       const tsource = visibleSources[i];
+      const prefetchOffsets = chunkManager.queueManager.enablePrefetch.value
+        ? getPrefetchChunkOffsets(this.velocityEstimator, tsource)
+        : [];
       const { chunkLayout } = tsource;
       chunkLayout.globalToLocalSpatial(localCenter, centerDataPosition);
       vec3.copy(chunkSize, chunkLayout.size);
       const priorityIndex = i;
       const sourceBasePriority =
         basePriority + SCALE_PRIORITY_MULTIPLIER * priorityIndex;
+      curVisibleChunks.length = 0;
+      const curMarkGeneration = getNextMarkGeneration();
       forEachPlaneIntersectingVolumetricChunk(
         projectionParameters,
         tsource,
@@ -134,11 +156,47 @@ export class SliceViewBackend extends SliceViewIntermediateBase {
           const chunk = tsource.source.getChunk(curPositionInChunks);
           chunkManager.requestChunk(
             chunk,
-            priorityTier,
+            ChunkPriorityTier.VISIBLE,
             sourceBasePriority + priority,
           );
+          curVisibleChunks.push(chunk);
+          // Mark visible chunks to avoid duplicate work when prefetching.  Once we hit a
+          // visible chunk, we don't continue prefetching in the same direction.
+          chunk.markGeneration = curMarkGeneration;
         },
       );
+      if (prefetchOffsets.length !== 0) {
+        const { curPositionInChunks } = tsource;
+        for (const visibleChunk of curVisibleChunks) {
+          curPositionInChunks.set(visibleChunk.chunkGridPosition);
+          for (let j = 0, length = prefetchOffsets.length; j < length; ) {
+            const chunkDim = prefetchOffsets[j];
+            const minChunk = prefetchOffsets[j + 2];
+            const maxChunk = prefetchOffsets[j + 3];
+            const newPriority = prefetchOffsets[j + 4];
+            const jumpOffset = prefetchOffsets[j + 5];
+            const oldIndex = curPositionInChunks[chunkDim];
+            const newIndex = oldIndex + prefetchOffsets[j + 1];
+            if (newIndex < minChunk || newIndex > maxChunk) {
+              j = jumpOffset;
+              continue;
+            }
+            curPositionInChunks[chunkDim] = newIndex;
+            const chunk = tsource.source.getChunk(curPositionInChunks);
+            curPositionInChunks[chunkDim] = oldIndex;
+            if (chunk.markGeneration === curMarkGeneration) {
+              j = jumpOffset;
+              continue;
+            }
+            chunkManager.requestChunk(
+              chunk,
+              ChunkPriorityTier.PREFETCH,
+              sourceBasePriority + newPriority,
+            );
+            j += PREFETCH_ENTRY_SIZE;
+          }
+        }
+      }
     }
   }
 
@@ -289,4 +347,107 @@ export class SliceViewRenderLayerBackend extends SharedObjectCounterpart {
     super(rpc, options);
     this.renderScaleTarget = rpc.get(options.renderScaleTarget);
   }
+}
+
+// How far ahead to prefetch: chunks the view may reach within this time.
+const PREFETCH_MS = 2000;
+const MAX_PREFETCH_VELOCITY = 0.1; // voxels per millisecond
+const MAX_SINGLE_DIRECTION_PREFETCH_CHUNKS = 32; // Maximum number of chunks to prefetch in a single direction.
+
+// If the probability under the model of needing a chunk within `PREFETCH_MS` is less than this
+// probability, skip prefetching it.
+const PREFETCH_PROBABILITY_CUTOFF = 0.05;
+
+const PREFETCH_ENTRY_SIZE = 6;
+
+/**
+ * Returns the chunks of `tsource` to prefetch around each of its visible chunks, as a flat list of
+ * entries of `PREFETCH_ENTRY_SIZE` numbers: chunk dimension, offset (in chunks) along it, lowest and
+ * highest chunk index along it, priority, and the index of the entry that follows the entry's group.
+ *
+ * The velocity of the view position along each dimension is modeled as a normal distribution, whose
+ * mean and variance are estimated by `velocityEstimator` and converted to chunks of this scale.  The
+ * chunk `i` chunks away is prefetched if the probability of reaching it within `PREFETCH_MS` is at
+ * least `PREFETCH_PROBABILITY_CUTOFF`, and that probability is its priority.  Entries are grouped by
+ * dimension and direction, nearest first: once a chunk of a group is visible or out of bounds, the
+ * rest of the group, which lies beyond it, is skipped.
+ */
+function getPrefetchChunkOffsets(
+  velocityEstimator: VelocityEstimator,
+  tsource: TransformedSource<VolumeChunkSource>,
+): number[] {
+  const offsets: number[] = [];
+  const globalRank = velocityEstimator.rank;
+  // Maps a change of the global position (in viewer coordinates) to a change in chunk coordinates
+  // (voxels of this scale): `invTransform[globalDim * 4 + chunkDim]`.
+  const { invTransform } = tsource.chunkLayout;
+  const { lowerClipDisplayBound, upperClipDisplayBound } = tsource;
+
+  const { rank: chunkRank, chunkDataSize } = tsource.source.spec;
+  const { mean: meanVec, variance: varianceVec } = velocityEstimator;
+  for (let chunkDim = 0; chunkDim < chunkRank; ++chunkDim) {
+    let mean = 0;
+    let variance = 0;
+    for (let globalDim = 0; globalDim < globalRank; ++globalDim) {
+      const meanValue = meanVec[globalDim];
+      const varianceValue = varianceVec[globalDim];
+      const coeff = invTransform[globalDim * 4 + chunkDim];
+      mean += coeff * meanValue;
+      variance += coeff * coeff * varianceValue;
+    }
+    // Moving too fast for prefetching to keep up.  As in Neuroglancer, only a fast motion towards
+    // higher chunk coordinates is skipped.
+    if (mean > MAX_PREFETCH_VELOCITY) {
+      continue;
+    }
+    const chunkSize = chunkDataSize[chunkDim];
+    // Mean and standard deviation (times sqrt 2) of the distance travelled within `PREFETCH_MS`, in
+    // chunks.
+    const adjustedMean = (mean / chunkSize) * PREFETCH_MS;
+    let adjustedStddevTimesSqrt2 =
+      (Math.sqrt(2 * variance) / chunkSize) * PREFETCH_MS;
+    if (Math.abs(adjustedMean) < 1e-3 && adjustedStddevTimesSqrt2 < 1e-3) {
+      continue;
+    }
+    adjustedStddevTimesSqrt2 = Math.max(1e-6, adjustedStddevTimesSqrt2);
+    // Probability of travelling less than `x` chunks.
+    const cdf = (x: number) =>
+      0.5 * (1 + erf((x - adjustedMean) / adjustedStddevTimesSqrt2));
+
+    const minChunk = Math.floor(lowerClipDisplayBound[chunkDim] / chunkSize);
+    const maxChunk =
+      Math.ceil(upperClipDisplayBound[chunkDim] / chunkSize) - 1;
+    let groupStart = offsets.length;
+    for (let i = 1; i <= MAX_SINGLE_DIRECTION_PREFETCH_CHUNKS; ++i) {
+      const probability = 1 - cdf(i);
+      // Probability that chunk `curChunk + i` will be needed within `PREFETCH_MS`.
+      if (probability < PREFETCH_PROBABILITY_CUTOFF) break;
+      offsets.push(chunkDim, i, minChunk, maxChunk, probability, 0);
+    }
+    let newGroupStart = offsets.length;
+    for (
+      let i = groupStart, end = offsets.length;
+      i < end;
+      i += PREFETCH_ENTRY_SIZE
+    ) {
+      offsets[i + PREFETCH_ENTRY_SIZE - 1] = newGroupStart;
+    }
+    groupStart = newGroupStart;
+
+    for (let i = 1; i <= MAX_SINGLE_DIRECTION_PREFETCH_CHUNKS; ++i) {
+      const probability = cdf(-i + 1);
+      // Probability that chunk `curChunk - i` will be needed within `PREFETCH_MS`.
+      if (probability < PREFETCH_PROBABILITY_CUTOFF) break;
+      offsets.push(chunkDim, -i, minChunk, maxChunk, probability, 0);
+    }
+    newGroupStart = offsets.length;
+    for (
+      let i = groupStart, end = offsets.length;
+      i < end;
+      i += PREFETCH_ENTRY_SIZE
+    ) {
+      offsets[i + PREFETCH_ENTRY_SIZE - 1] = newGroupStart;
+    }
+  }
+  return offsets;
 }

@@ -37,6 +37,7 @@ import type { Borrowed, Disposer, Owned } from "#src/util/disposable.js";
 import { invokeDisposers, RefCounted } from "#src/util/disposable.js";
 import { kOneVec, mat4, vec3 } from "#src/util/geom.js";
 import { NullarySignal, Signal } from "#src/util/signal.js";
+import { kEmptyFloat32Vec } from "#src/util/vector.js";
 import type { GL } from "#src/webgl/context.js";
 import type { RPC } from "#src/worker/worker_rpc.js";
 import {
@@ -69,7 +70,12 @@ export class DerivedProjectionParameters
       const { oldValue_, value_ } = this;
       Object.assign(oldValue_, this.renderViewport);
       let { globalPosition } = oldValue_;
-      const newGlobalPosition = navigationState.position.value;
+      // Until the volume has loaded, there is no position yet.  The worker's velocity estimator then
+      // starts afresh at the first real position, instead of taking the jump from (0, 0, 0) to the
+      // center of the volume for a fast motion.
+      const newGlobalPosition = navigationState.position.valid
+        ? navigationState.position.value
+        : kEmptyFloat32Vec;
       const rank = newGlobalPosition.length;
       if (globalPosition.length !== rank) {
         oldValue_.globalPosition = globalPosition = new Float32Array(rank);
