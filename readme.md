@@ -6,105 +6,6 @@ This is a trimmed-down version of the original Neuroglancer source code, designe
 
 Note: This is not an officially maintained version of Neuroglancer. Neuroglancer and Neuroglancer Mini are two independently developed projects, but this project is based on a reduced version of the original Neuroglancer source code.
 
-# Project Structure
-
-This project has two main branches: the [forward branch](https://github.com/tomhsiao1260/neuroglancer-mini/tree/forward) and the [backward branch](https://github.com/tomhsiao1260/neuroglancer-mini/tree/backward). Both contain the same `viewer/` folder, the reduced Neuroglancer code packaged as a library.
-
-- The backward branch keeps only the library and a small example page that uses it. This is where the code is reduced and explained.
-- The forward branch builds an app on top of the same library: a Node server that downloads scroll data on demand, and features such as coordinate display.
-
-If you want to understand the core workings of the Neuroglancer code, you can jump to [here](#neuroglancer-mini-backward-branch). If you want to use the new features we've built on top of Neuroglancer Mini, you can jump to [here](#neuroglancer-mini-forward-branch).
-
-# Neuroglancer Mini (forward branch)
-
-You can use our additional features in the forward branch. Below we will introduce the related features and how to start the application.
-
-<img width="1193" alt="screen-shot" src="https://github.com/user-attachments/assets/6bcf96ff-48be-4b89-a791-43e8c669027e" />
-
-## Features
-
-- [Coordinate Information](#coordinate-information)
-- [Local First Design](#local-first-design)
-- [Missing Chunks](#missing-chunks)
-
-### Coordinate Information
-
-You can obtain current position information from the following sources:
-
-- Bottom-right panel: Displays the voxel under the mouse cursor (in yellow) and the voxel at the center of the views (in white)
-- URL query parameters: `x`, `y`, `z` (the center, in full-resolution voxels) and `zoom` (voxels per screen pixel). Opening a URL with them moves the views there.
-
-### Local First Design
-
-We believe that the coordination between local and remote data is important, which is why we developed this feature early in the project. In this feature, data is automatically downloaded from the remote server when browsing specific areas and automatically loaded from the local storage when reopening.
-
-Only the specific regions that have been viewed will be downloaded, and network transmission is only required the first time you view an area. This reduces dependency on network transmission. You can even write your own scripts to perform subsequent analysis on these local data.
-
-<img width="1193" alt="zarr-file" src="https://github.com/user-attachments/assets/61ce75de-bed4-49a3-bc44-c7b144888bcd" />
-
-### Missing Chunks
-
-Chunks that neither the local folder nor the remote store has (sparse scrolls have many) are shown as empty and listed in the top-right corner.
-
-## Installation & Startup
-
-1. Make sure you are on the forward branch
-
-```bash
-git checkout forward
-```
-
-2. Install packages in the scripts folder and run the app. This installs and builds the client, starts the server, and opens the page once both are running.
-
-```bash
-cd scripts
-npm install
-node start.js
-```
-
-3. Enter the information:
-
-- Scroll URL (optional): The remote scroll's zarr folder, for example the one below. The Vesuvius Challenge data is public, so no username or password is needed. Leave it empty to only read local files.
-
-```
-https://dl.ash2txt.org/full-scrolls/Scroll1/PHercParis4.volpkg/volumes_zarr_standardized/54keV_7.91um_Scroll1A.zarr/
-```
-
-- Zarr Data Path: The local path to store zarr data. For first-time use, you can create an empty folder with the `.zarr` extension and select that path, for example:
-
-```
-E:/PATH_TO_YOUR_ZARR_FOLDER/scroll.zarr/
-```
-
-4. Click the Confirm button. The settings are saved in `server/db/json/settings.json`.
-
-The first time, data will be loaded from the remote server, which may take some time. You can find these data files in the local zarr folder you selected earlier. On subsequent visits to the same coordinates, the data will be loaded directly from your local storage. To open a specific place, add the coordinates to the URL, for example:
-
-```
-http://localhost:4173/?x=2572&y=3073&z=6690&zoom=2
-```
-
-## Project Structure (forward branch)
-
-- `viewer/`: the viewer library, the same as in the backward branch (see [below](#project-structure-1)).
-- `client/`: the app page (Vite, Tailwind).
-  - `index.html`: the settings form, the loading overlay and the viewer container.
-  - `src/main.ts`: reads and saves the settings through the server, then creates the viewer, lays out three views and adds the features in `src/app/`.
-  - `src/app/position_display.ts`: the coordinate panel in the bottom-right corner.
-  - `src/app/url_position.ts`: keeps `x`, `y`, `z` and `zoom` in the URL.
-  - `src/app/missing_chunks.ts`: the `onMissingChunk` handler that lists missing chunks.
-  - `src/config.ts`: the server address.
-- `server/`: local-first zarr store (Node, Express), on port 3005.
-  - `src/routes/data.ts`: `GET /api/data/zarr/<key>` serves a file of the local store. A file the local store does not have is first downloaded from the remote store, if one is set; a file neither has answers 404.
-  - `src/routes/settings.ts`: `GET /api/settings` reads the settings and `POST /api/settings` changes them.
-  - `src/utils/download.ts`: downloads one file, writing it under a temporary name first so that a partly written file is never served.
-  - `src/utils/settings.ts`: the settings in `db/json/settings.json`: `zarr_data_path` (the local `.zarr` folder) and `scroll_url_path` (the remote store, optional).
-- `scripts/start.js`: installs and builds the client, starts the client preview (port 4173) and the server, and opens the page once both are running.
-
-# Neuroglancer Mini (backward branch)
-
-The reduced architecture in the backward branch. We will continue to update the documentation as we gain more understanding of the project.
-
 ## Motivation
 
 When I first tried to understand Neuroglancer's source code, I found it challenging due to its complexity and numerous abstract layers. I was particularly interested in understanding:
@@ -122,47 +23,53 @@ To address these challenges, I created Neuroglancer Mini by:
 
 This project serves as a learning resource for developers who want to understand Neuroglancer's fundamental codebase.
 
-## Installation & Startup
+## Branches
 
-The backward branch has two folders: `viewer/`, the library, and `example/`, a page that uses it. Please use Chrome or Edge.
+- **backward** (this README, merged into `main`): the reduced Neuroglancer code, packaged as the `viewer/` library, plus a small example page that uses it. This is where the code is reduced and explained.
+- **[forward](https://github.com/tomhsiao1260/neuroglancer-mini/tree/forward)**: an app built on the same `viewer/` folder, with a Node server that downloads only the parts of a scroll you look at and keeps them locally, coordinate display, positions in the URL and a list of missing chunks. See [its README](https://github.com/tomhsiao1260/neuroglancer-mini/tree/forward#readme) for its features and setup.
+
+## Getting Started
+
+Please use Chrome or Edge.
 
 <img width="1193" alt="img1" src="https://github.com/user-attachments/assets/42784acc-39cc-4585-948b-0b2d4a971ee1" />
 
-### Option 1: Local Development
+### Option 1: Online Demo
 
-1. Make sure you are on the backward branch
+Visit [neuroglancer-mini.vercel.app](https://neuroglancer-mini.vercel.app) and click "Open local folder" to open a local `.zarr` folder, enter the URL of a `.zarr` folder, or open a scroll straight from the Vesuvius Challenge data server:
+
+[neuroglancer-mini.vercel.app/?zarr=https://dl.ash2txt.org/full-scrolls/Scroll1/PHercParis4.volpkg/volumes_zarr_standardized/54keV_7.91um_Scroll1A.zarr](https://neuroglancer-mini.vercel.app/?zarr=https://dl.ash2txt.org/full-scrolls/Scroll1/PHercParis4.volpkg/volumes_zarr_standardized/54keV_7.91um_Scroll1A.zarr)
+
+The demo is built from `example/` (see `vercel.json`).
+
+### Option 2: Local Development
+
+Install and start the development server. `npm install` also installs the packages of `viewer/`.
 
 ```bash
 git checkout backward
-```
-
-2. Install and start the development server. `npm install` also installs the packages of `viewer/`.
-
-```bash
 cd example
 npm install
 npm run dev
 ```
 
-3. Open `http://localhost:3000` and click "choose .zarr folder" to read a local `.zarr` folder through the File System Access API.
-
-### Option 2: Online Demo
-
-Visit the deployed version at [neuroglancer-mini.vercel.app](https://neuroglancer-mini.vercel.app)
+Then open `http://localhost:3000`.
 
 ### Supported Data
 
 The viewer opens one OME-Zarr multiscale volume stored as Zarr v2. The example page's URL parameters choose where it comes from:
 
-- No parameters: click "choose .zarr folder" and pick the `.zarr` folder itself (the one containing `.zattrs`).
-- `?zarr=<url>`: read the files over HTTP, where `<url>` is the URL of the `.zarr` folder. Any server that returns the files (and 404 for missing ones) works if it allows cross-origin requests (CORS): a static server such as `npx http-server <folder containing scroll.zarr> -p 9000 --cors`, the Vesuvius Challenge data server itself, or the server of the forward branch.
+- No parameters: the start screen. Click "Open local folder" and pick the `.zarr` folder itself (the one containing `.zattrs`); this uses the File System Access API. Or enter a URL, which opens the page with `?zarr=<url>`.
+- `?zarr=<url>`: read the files over HTTP, where `<url>` is the URL of the `.zarr` folder. Any server that returns the files (and 404 for missing ones) works if it allows cross-origin requests (CORS): the Vesuvius Challenge data server, a static server such as `npx http-server <folder containing scroll.zarr> -p 9000 --cors`, or the server of the forward branch.
+
+What is supported:
 
 - Metadata: `.zattrs` with OME `multiscales`, and a `.zarray` for each scale (C order).
 - Compressors: blosc and null (raw).
 - Data types: uint8, int8, uint16, int16, uint32, int32, uint64 (8-byte integers are read as unsigned) and float32, little or big endian.
 - Chunk keys may use either `.` or `/` as the dimension separator. Chunks missing from the store are shown as 0.
 
-The volume is shown in three cross-section panels (XY, YZ and XZ) that share one position and zoom. Drag with the left mouse button to pan, use the wheel to step one voxel through the slice, and hold Ctrl while using the wheel to zoom around the cursor.
+The volume is shown in three cross-section views (XY, YZ and XZ) that share one position and zoom. Drag with the left mouse button to pan, use the wheel to step one voxel through the slice, and hold Ctrl while using the wheel to zoom around the cursor.
 
 ## Using the Viewer
 
@@ -180,7 +87,7 @@ viewer.addView(document.querySelector<HTMLDivElement>("#right")!, "yz");
 - `new Viewer({ container, store })` creates the canvas, the worker and the chunk manager and loads the volume; `viewer.loaded` resolves once it has loaded (and rejects if it could not). `store` is `{ kind: "http", url }` or `{ kind: "directory", handle }` (a `FileSystemDirectoryHandle`).
 - `viewer.addView(element, "xy" | "xz" | "yz")` shows a cross-section in `element`, which can be placed anywhere inside the container with CSS, and returns the view; `view.dispose()` removes it. All views share one position and zoom.
 - `viewer.position` / `viewer.setPosition({ x, y, z })` and `viewer.zoom` / `viewer.setZoom(voxelsPerPixel)` read and change the view; `viewer.onViewChanged(callback)` and `viewer.onPointerMove(callback)` report changes of the view and of the point under the pointer. Points are in full-resolution voxels, with `x`, `y`, `z` along the last, middle and first zarr dimensions; voxel `(i, j, k)` is centered on `{ x: i, y: j, z: k }`.
-- `new Viewer({ ..., onMissingChunk })` is called with `{ key }` (e.g. `0/52/24/18`) for each chunk whose file is not in the store, once per chunk while the viewer is open. If it returns (or resolves to) `true`, the file is assumed to have been added and the chunk is downloaded again; otherwise the chunk is shown as empty. A downloader can be plugged in here without changing the viewer.
+- `new Viewer({ ..., onMissingChunk })` is called with `{ key }` (e.g. `0/52/24/18`) for each chunk whose file is not in the store, once per chunk while the viewer is open. If it returns (or resolves to) `true`, the file is assumed to have been added and the chunk is downloaded again; otherwise the chunk is shown as empty. A downloader can be plugged in here without changing the viewer; the forward branch does this with its server.
 
 To use the viewer in another Vite app, place `viewer/` next to the app and copy the configuration of `example/`:
 
@@ -206,9 +113,11 @@ The code is split between two threads. The **main thread** owns the WebGL canvas
 
 #### `example/`
 
-- `index.html`, `src/style.css`: page and styles.
+- `index.html`, `src/style.css`: the start screen (folder button and URL form), loading status and styles.
 - `src/main.ts`: chooses the store (`?zarr=<url>` or the folder picker), creates the viewer and lays out three views side by side. Start here to try the viewer API.
 - `vite.config.ts`, `tsconfig.json`, `package.json`: build configuration (dev server on port 3000) and the `viewer` import described in [Using the Viewer](#using-the-viewer).
+
+`vercel.json` at the top level builds this folder for the online demo.
 
 #### `viewer/`
 

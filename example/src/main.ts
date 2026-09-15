@@ -1,8 +1,9 @@
 /**
  * @file Example use of the viewer package: shows a zarr volume in three cross-section views.
  *
- * The volume is read from the `.zarr` folder picked with the button (File System Access API), or,
- * when the page is opened with `?zarr=<url>`, over HTTP from `<url>`.
+ * When the page is opened with `?zarr=<url>`, the volume is read over HTTP from `<url>`. Otherwise
+ * the start screen in `index.html` lets the user pick a local `.zarr` folder (File System Access
+ * API) or enter a URL.
  */
 
 import { Viewer } from "viewer";
@@ -11,42 +12,61 @@ import "./style.css";
 
 declare global {
   interface Window {
-    // File System Access API (Chrome and Edge).
-    showDirectoryPicker(): Promise<FileSystemDirectoryHandle>;
+    // File System Access API (Chrome and Edge only).
+    showDirectoryPicker?(): Promise<FileSystemDirectoryHandle>;
   }
 }
 
 const app = document.querySelector<HTMLDivElement>("#app")!;
+const start = document.querySelector<HTMLElement>("#start")!;
+const status = document.querySelector<HTMLElement>("#status")!;
+const hint = document.querySelector<HTMLElement>("#hint")!;
 
 const zarrUrl = new URLSearchParams(window.location.search).get("zarr");
-if (zarrUrl !== null) {
+if (zarrUrl) {
   openViewer({ kind: "http", url: zarrUrl });
 } else {
-  const button = document.createElement("button");
-  button.id = "upload";
-  button.textContent = "choose .zarr folder";
+  showStartScreen();
+}
+
+// The URL form needs no script: submitting it reloads the page with `?zarr=<url>`.
+function showStartScreen() {
+  start.hidden = false;
+  const button = document.querySelector<HTMLButtonElement>("#open-folder")!;
+  if (!window.showDirectoryPicker) {
+    button.disabled = true;
+    document.querySelector<HTMLElement>("#folder-note")!.hidden = false;
+    return;
+  }
   button.onclick = async () => {
-    const handle = await window.showDirectoryPicker();
-    button.remove();
+    let handle: FileSystemDirectoryHandle;
+    try {
+      handle = await window.showDirectoryPicker!();
+    } catch {
+      return; // The picker was closed without choosing a folder.
+    }
     openViewer({ kind: "directory", handle });
   };
-  app.append(button);
 }
 
 function openViewer(store: ZarrStoreSpec) {
+  start.remove();
+  status.hidden = false;
   const container = document.createElement("div");
   container.id = "container";
-  const loading = document.createElement("div");
-  loading.id = "loading";
-  loading.textContent = "Loading ...";
-  app.append(container, loading);
+  app.append(container);
 
   const viewer = new Viewer({ container, store });
   viewer.loaded.then(
-    () => loading.remove(),
+    () => {
+      status.remove();
+      hint.hidden = false;
+    },
     (error) => {
       console.error("Failed to load the volume:", error);
-      loading.textContent = "Failed to load (see console)";
+      status.classList.add("error");
+      status.textContent =
+        "Could not load the volume. See the browser console for details.";
     },
   );
 
