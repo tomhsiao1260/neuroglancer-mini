@@ -75,8 +75,6 @@ export class ChunkQueueManager extends SharedObject {
   pendingChunkUpdates: any = null;
   pendingChunkUpdatesTail: any = null;
 
-  enablePrefetch = { value: true, changed: new NullarySignal() };
-
   constructor(
     rpc: RPC,
     public gl: GL,
@@ -103,9 +101,6 @@ export class ChunkQueueManager extends SharedObject {
       gpuMemoryCapacity: makeCapacityCounterparts(capacities.gpuMemory),
       systemMemoryCapacity: makeCapacityCounterparts(capacities.systemMemory),
       downloadCapacity: makeCapacityCounterparts(capacities.download),
-      enablePrefetch: this.registerDisposer(
-        SharedWatchableValue.makeFromExisting(rpc, this.enablePrefetch),
-      ).rpcId,
     });
   }
 

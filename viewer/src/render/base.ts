@@ -208,12 +208,6 @@ export interface TransformedSource<
 
   chunkLayout: ChunkLayout;
 
-  /**
-   * Arrays of length `rank` specifying the clip bounds (in voxels) for all dimensions.
-   */
-  lowerClipBound: Float32Array;
-  upperClipBound: Float32Array;
-
   // Lower clip bound (in voxels) in the "display" subspace of the chunk coordinate space.
   lowerClipDisplayBound: vec3;
   // Upper clip bound (in voxels) in the "display" subspace of the chunk coordinate space.
@@ -228,22 +222,6 @@ export interface TransformedSource<
    * Dimensions of the chunk corresponding to the 3 display dimensions of the slice view.
    */
   chunkDisplayDimensionIndices: number[];
-
-  /**
-   * Rank of "layer" space and the "chunk clip" space, which is >= rank of chunk space.
-   */
-  layerRank: number;
-
-  /**
-   * Transform from dimensions of layer space to dimensions of chunk space.
-   *
-   * Matrix has dimensions `(globalRank + localRank + 1) * layerRank`.
-   *
-   * Input space is `[global dimensions, local dimensions]`.  Output space is the "chunk clip"
-   * coordinate space, in units of voxels.
-   *
-   */
-  combinedGlobalLocalToChunkTransform: Float32Array;
 
   /**
    * When `computeVisibleChunks` invokes the `addChunk` callback, this is set to the position of the

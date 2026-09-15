@@ -186,16 +186,11 @@ function serializeTransformedSource(
   return {
     source: tsource.source.addCounterpartRef(),
     effectiveVoxelSize: tsource.effectiveVoxelSize,
-    layerRank: tsource.layerRank,
-    lowerClipBound: tsource.lowerClipBound,
-    upperClipBound: tsource.upperClipBound,
     lowerClipDisplayBound: tsource.lowerClipDisplayBound,
     upperClipDisplayBound: tsource.upperClipDisplayBound,
     chunkDisplayDimensionIndices: tsource.chunkDisplayDimensionIndices,
     lowerChunkDisplayBound: tsource.lowerChunkDisplayBound,
     upperChunkDisplayBound: tsource.upperChunkDisplayBound,
-    combinedGlobalLocalToChunkTransform:
-      tsource.combinedGlobalLocalToChunkTransform,
     chunkLayout: tsource.chunkLayout.toObject(),
   };
 }
@@ -591,9 +586,6 @@ export function getVolumetricTransformedSources(
       /*baseVoxelSize=*/ kOneVec,
     );
     return {
-      layerRank: rank,
-      lowerClipBound,
-      upperClipBound,
       renderLayer: layer,
       source,
       lowerChunkDisplayBound,
@@ -604,9 +596,6 @@ export function getVolumetricTransformedSources(
       chunkLayout,
       chunkDisplayDimensionIndices: [0, 1, 2],
       curPositionInChunks: new Float32Array(rank),
-      // Maps a change of global position to chunk coordinates, for prefetching.  It is never filled
-      // in, so it stays all zero and the worker's prefetching sees no motion.
-      combinedGlobalLocalToChunkTransform: new Float32Array((rank + 1) * rank),
       fixedPositionWithinChunk: new Uint32Array(rank),
     };
   };

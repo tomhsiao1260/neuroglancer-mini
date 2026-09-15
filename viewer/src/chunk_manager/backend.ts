@@ -48,11 +48,6 @@ import {
   SharedObjectCounterpart,
 } from "#src/worker/worker_rpc.js";
 
-let nextMarkGeneration = 0;
-export function getNextMarkGeneration() {
-  return ++nextMarkGeneration;
-}
-
 export class Chunk implements Disposable {
   // Node properties used for eviction/promotion heaps and LRU linked lists.  A chunk can be in two
   // queues at once: one using the `0` fields and one using the `1` fields.
@@ -70,9 +65,6 @@ export class Chunk implements Disposable {
   state = ChunkState.NEW;
 
   error: any = null;
-
-  // Used by layers for marking chunks for various purposes.
-  markGeneration = -1;
 
   /**
    * Specifies existing priority within priority tier.  Only meaningful if priorityTier in
@@ -503,8 +495,6 @@ export class ChunkQueueManager extends SharedObjectCounterpart {
   systemMemoryCapacity: AvailableCapacity;
   downloadCapacity: AvailableCapacity;
 
-  enablePrefetch: SharedWatchableValue<boolean>;
-
   /**
    * Contains all chunks in QUEUED state pending download.
    */
@@ -554,7 +544,6 @@ export class ChunkQueueManager extends SharedObjectCounterpart {
     };
     this.gpuMemoryCapacity = getCapacity(options.gpuMemoryCapacity);
     this.systemMemoryCapacity = getCapacity(options.systemMemoryCapacity);
-    this.enablePrefetch = rpc.get(options.enablePrefetch);
     this.downloadCapacity = getCapacity(options.downloadCapacity);
   }
 

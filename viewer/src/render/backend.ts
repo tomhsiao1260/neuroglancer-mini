@@ -4,7 +4,6 @@ import type { ChunkConstructor } from "#src/chunk_manager/backend.js";
 import {
   Chunk,
   ChunkSource,
-  getNextMarkGeneration,
   withChunkManager,
 } from "#src/chunk_manager/backend.js";
 import { ChunkPriorityTier } from "#src/chunk_manager/base.js";
@@ -34,10 +33,8 @@ import type {
   WatchableValueChangeInterface,
   WatchableValueInterface,
 } from "#src/state/trackable_value.js";
-import { erf } from "#src/util/erf.js";
 import { vec3, vec3Key } from "#src/util/geom.js";
 import { Signal } from "#src/util/signal.js";
-import { VelocityEstimator } from "#src/util/velocity_estimation.js";
 import type { RPC } from "#src/worker/worker_rpc.js";
 import {
   registerRPC,
@@ -108,19 +105,11 @@ function disposeTransformedSources(
 const SliceViewIntermediateBase = withChunkManager(SliceViewCounterpartBase);
 @registerSharedObject(SLICEVIEW_RPC_ID)
 export class SliceViewBackend extends SliceViewIntermediateBase {
-  velocityEstimator = new VelocityEstimator();
   constructor(rpc: RPC, options: any) {
     super(rpc, options);
     this.registerDisposer(
       this.chunkManager.recomputeChunkPriorities.add(() => {
         this.updateVisibleChunks();
-      }),
-    );
-    this.registerDisposer(
-      this.projectionParameters.changed.add(() => {
-        this.velocityEstimator.addSample(
-          this.projectionParameters.value.globalPosition,
-        );
       }),
     );
   }
@@ -143,8 +132,8 @@ export class SliceViewBackend extends SliceViewIntermediateBase {
     const chunkManager = this.chunkManager;
     this.updateVisibleSources();
     const { centerDataPosition } = projectionParameters;
-    // Chunks on the cross-section plane are requested as VISIBLE; chunks predicted from the motion
-    // of the view are requested as PREFETCH.
+    // Requests, as VISIBLE, every chunk the cross-section plane cuts through.  Finer scales get
+    // higher priority, and within a scale chunks closer to the center of the view come first.
     const priorityTier = ChunkPriorityTier.VISIBLE;
     const basePriority = BASE_PRIORITY;
 
@@ -152,10 +141,6 @@ export class SliceViewBackend extends SliceViewIntermediateBase {
 
     const chunkSize = tempChunkSize;
 
-    const curVisibleChunks: SliceViewChunk[] = [];
-    this.velocityEstimator.addSample(
-      this.projectionParameters.value.globalPosition,
-    );
     for (const { visibleSources } of this.visibleLayers.values()) {
       for (
         let i = 0, numVisibleSources = visibleSources.length;
@@ -163,17 +148,12 @@ export class SliceViewBackend extends SliceViewIntermediateBase {
         ++i
       ) {
         const tsource = visibleSources[i];
-        const prefetchOffsets = chunkManager.queueManager.enablePrefetch.value
-          ? getPrefetchChunkOffsets(this.velocityEstimator, tsource)
-          : [];
         const { chunkLayout } = tsource;
         chunkLayout.globalToLocalSpatial(localCenter, centerDataPosition);
         vec3.copy(chunkSize, chunkLayout.size);
         const priorityIndex = i;
         const sourceBasePriority =
           basePriority + SCALE_PRIORITY_MULTIPLIER * priorityIndex;
-        curVisibleChunks.length = 0;
-        const curMarkGeneration = getNextMarkGeneration();
         forEachPlaneIntersectingVolumetricChunk(
           projectionParameters,
           tsource,
@@ -188,44 +168,8 @@ export class SliceViewBackend extends SliceViewIntermediateBase {
               priorityTier,
               sourceBasePriority + priority,
             );
-            curVisibleChunks.push(chunk);
-            // Mark visible chunks to avoid duplicate work when prefetching.  Once we hit a
-            // visible chunk, we don't continue prefetching in the same direction.
-            chunk.markGeneration = curMarkGeneration;
           },
         );
-        if (prefetchOffsets.length !== 0) {
-          const { curPositionInChunks } = tsource;
-          for (const visibleChunk of curVisibleChunks) {
-            curPositionInChunks.set(visibleChunk.chunkGridPosition);
-            for (let j = 0, length = prefetchOffsets.length; j < length; ) {
-              const chunkDim = prefetchOffsets[j];
-              const minChunk = prefetchOffsets[j + 2];
-              const maxChunk = prefetchOffsets[j + 3];
-              const newPriority = prefetchOffsets[j + 4];
-              const jumpOffset = prefetchOffsets[j + 5];
-              const oldIndex = curPositionInChunks[chunkDim];
-              const newIndex = oldIndex + prefetchOffsets[j + 1];
-              if (newIndex < minChunk || newIndex > maxChunk) {
-                j = jumpOffset;
-                continue;
-              }
-              curPositionInChunks[chunkDim] = newIndex;
-              const chunk = tsource.source.getChunk(curPositionInChunks);
-              curPositionInChunks[chunkDim] = oldIndex;
-              if (chunk.markGeneration === curMarkGeneration) {
-                j = jumpOffset;
-                continue;
-              }
-              chunkManager.requestChunk(
-                chunk,
-                ChunkPriorityTier.PREFETCH,
-                sourceBasePriority + newPriority,
-              );
-              j += PREFETCH_ENTRY_SIZE;
-            }
-          }
-        }
       }
     }
   }
@@ -293,9 +237,6 @@ export function deserializeTransformedSources<
         renderLayer: layer,
         source,
         chunkLayout: ChunkLayout.fromObject(chunkLayout),
-        layerRank: serializedSource.layerRank,
-        lowerClipBound: serializedSource.lowerClipBound,
-        upperClipBound: serializedSource.upperClipBound,
         lowerClipDisplayBound: serializedSource.lowerClipDisplayBound,
         upperClipDisplayBound: serializedSource.upperClipDisplayBound,
         lowerChunkDisplayBound: serializedSource.lowerChunkDisplayBound,
@@ -303,8 +244,6 @@ export function deserializeTransformedSources<
         effectiveVoxelSize: serializedSource.effectiveVoxelSize,
         chunkDisplayDimensionIndices:
           serializedSource.chunkDisplayDimensionIndices,
-        combinedGlobalLocalToChunkTransform:
-          serializedSource.combinedGlobalLocalToChunkTransform,
         curPositionInChunks: new Float32Array(rank),
         fixedPositionWithinChunk: new Uint32Array(rank),
       };
@@ -456,95 +395,4 @@ export class SliceViewRenderLayerBackend
   ): Iterable<TransformedSource> {
     return filterVisibleSources(sliceView, this, sources);
   }
-}
-
-const PREFETCH_MS = 2000;
-const MAX_PREFETCH_VELOCITY = 0.1; // voxels per millisecond
-const MAX_SINGLE_DIRECTION_PREFETCH_CHUNKS = 32; // Maximum number of chunks to prefetch in a single direction.
-
-// If the probability under the model of needing a chunk within `PREFETCH_MS` is less than this
-// probability, skip prefetching it.
-const PREFETCH_PROBABILITY_CUTOFF = 0.05;
-
-const PREFETCH_ENTRY_SIZE = 6;
-
-function getPrefetchChunkOffsets(
-  velocityEstimator: VelocityEstimator,
-  tsource: TransformedSource,
-): number[] {
-  const offsets: number[] = [];
-  const globalRank = velocityEstimator.rank;
-  const { combinedGlobalLocalToChunkTransform, layerRank } = tsource;
-
-  const { rank: chunkRank, chunkDataSize } = tsource.source.spec;
-  const { mean: meanVec, variance: varianceVec } = velocityEstimator;
-  for (let chunkDim = 0; chunkDim < chunkRank; ++chunkDim) {
-    const isDisplayDimension =
-      tsource.chunkDisplayDimensionIndices.includes(chunkDim);
-    let mean = 0;
-    let variance = 0;
-    for (let globalDim = 0; globalDim < globalRank; ++globalDim) {
-      const meanValue = meanVec[globalDim];
-      const varianceValue = varianceVec[globalDim];
-      const coeff =
-        combinedGlobalLocalToChunkTransform[globalDim * layerRank + chunkDim];
-      mean += coeff * meanValue;
-      variance += coeff * coeff * varianceValue;
-    }
-    if (mean > MAX_PREFETCH_VELOCITY) {
-      continue;
-    }
-    const chunkSize = chunkDataSize[chunkDim];
-    const initialFraction = isDisplayDimension
-      ? 0
-      : tsource.fixedPositionWithinChunk[chunkDim] / chunkSize;
-    const adjustedMean = (mean / chunkSize) * PREFETCH_MS;
-    let adjustedStddevTimesSqrt2 =
-      (Math.sqrt(2 * variance) / chunkSize) * PREFETCH_MS;
-    if (Math.abs(adjustedMean) < 1e-3 && adjustedStddevTimesSqrt2 < 1e-3) {
-      continue;
-    }
-    adjustedStddevTimesSqrt2 = Math.max(1e-6, adjustedStddevTimesSqrt2);
-    const cdf = (x: number) =>
-      0.5 * (1 + erf((x - adjustedMean) / adjustedStddevTimesSqrt2));
-
-    const curChunk = tsource.curPositionInChunks[chunkDim];
-    const minChunk = Math.floor(tsource.lowerClipBound[chunkDim] / chunkSize);
-    const maxChunk =
-      Math.ceil(tsource.upperClipBound[chunkDim] / chunkSize) - 1;
-    let groupStart = offsets.length;
-    for (let i = 1; i <= MAX_SINGLE_DIRECTION_PREFETCH_CHUNKS; ++i) {
-      if (!isDisplayDimension && curChunk + i > maxChunk) break;
-      const probability = 1 - cdf(i - initialFraction);
-      // Probability that chunk `curChunk + i` will be needed within `PREFETCH_MS`.
-      if (probability < PREFETCH_PROBABILITY_CUTOFF) break;
-      offsets.push(chunkDim, i, minChunk, maxChunk, probability, 0);
-    }
-    let newGroupStart = offsets.length;
-    for (
-      let i = groupStart, end = offsets.length;
-      i < end;
-      i += PREFETCH_ENTRY_SIZE
-    ) {
-      offsets[i + PREFETCH_ENTRY_SIZE - 1] = newGroupStart;
-    }
-    groupStart = newGroupStart;
-
-    for (let i = 1; i <= MAX_SINGLE_DIRECTION_PREFETCH_CHUNKS; ++i) {
-      if (!isDisplayDimension && curChunk - i < minChunk) break;
-      const probability = cdf(-i + 1 - initialFraction);
-      // Probability that chunk `curChunk - i` will be needed within `PREFETCH_MS`.
-      if (probability < PREFETCH_PROBABILITY_CUTOFF) break;
-      offsets.push(chunkDim, -i, minChunk, maxChunk, probability, 0);
-    }
-    newGroupStart = offsets.length;
-    for (
-      let i = groupStart, end = offsets.length;
-      i < end;
-      i += PREFETCH_ENTRY_SIZE
-    ) {
-      offsets[i + PREFETCH_ENTRY_SIZE - 1] = newGroupStart;
-    }
-  }
-  return offsets;
 }
