@@ -260,9 +260,7 @@ export class SliceViewProjectionParameters extends ProjectionParameters {
 
   centerDataPosition = vec3.create();
 
-  /**
-   * Size in physical units of a single pixel.
-   */
+  // Size of a screen pixel, in voxels of the full-resolution scale.
   pixelSize = 0;
 }
 

@@ -267,6 +267,14 @@ export class SliceView extends SliceViewBase {
           for (let i = 0; i < 3; ++i) {
             viewportNormalInGlobalCoordinates[i] = viewMatrix[i * 4 + 2];
           }
+          // Size of a screen pixel, in voxels: the length of a view axis in voxel coordinates.
+          // `filterVisibleSources` compares it with the voxel size of each scale to choose the
+          // scales to draw and to load.
+          let pixelSize = 0;
+          for (let i = 0; i < 3; ++i) {
+            pixelSize += invViewMatrix[i] ** 2;
+          }
+          out.pixelSize = Math.sqrt(pixelSize);
         },
       }),
     );
