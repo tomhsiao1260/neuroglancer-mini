@@ -45,7 +45,7 @@ export class ZarrVolumeChunkSource extends WithParameters(
       });
       return;
     }
-    const decoded = await decodeChunk(metadata, data);
+    const decoded = await decodeChunk(metadata, data, signal);
     signal.throwIfAborted();
     chunk.data = decoded;
   }
