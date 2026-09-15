@@ -42,10 +42,16 @@ export class Position extends RefCounted {
   private handleCoordinateSpaceChanged() {
     const coordinateSpace = this.coordinateSpace.value;
     if (!coordinateSpace.valid) return;
-    const { lowerBounds, upperBounds } = coordinateSpace.bounds;
+    const { bounds } = coordinateSpace;
+    const { lowerBounds, upperBounds } = bounds;
     for (let i = 0; i < 3; ++i) {
-      // The center of the volume, rounded down to a half-integer coordinate.
-      this.value[i] = Math.floor((lowerBounds[i] + upperBounds[i]) / 2) + 0.5;
+      // The center of the volume, moved to the nearest voxel center, so that each view shows a
+      // single layer of voxels rather than the boundary between two.
+      this.value[i] = clampAndRoundToVoxelCenter(
+        bounds,
+        i,
+        (lowerBounds[i] + upperBounds[i]) / 2,
+      );
     }
     this.changed.dispatch();
   }
