@@ -1,7 +1,5 @@
 /** @license Copyright 2022 Google Inc. SPDX-License-Identifier: Apache-2.0 */
 
-import type { CoordinateSpace } from "#src/state/coordinate_transform.js";
-import { makeCoordinateSpace } from "#src/state/coordinate_transform.js";
 import {
   parseArray,
   parseFixedLengthArray,
@@ -22,8 +20,9 @@ export interface OmeMultiscaleScale {
 }
 
 export interface OmeMultiscaleMetadata {
+  // Number of axes.
+  rank: number;
   scales: OmeMultiscaleScale[];
-  coordinateSpace: CoordinateSpace;
 }
 
 const SUPPORTED_OME_MULTISCALE_VERSIONS = new Set(["0.4", "0.5-dev"]);
@@ -78,19 +77,10 @@ function parseOmeAxis(axis: unknown): Axis {
   return { name, unit: parsedUnit.unit, scale: parsedUnit.scale, type };
 }
 
-function parseOmeAxes(axes: unknown): CoordinateSpace {
-  const parsedAxes = parseArray(axes, parseOmeAxis);
-  return makeCoordinateSpace({
-    names: parsedAxes.map((axis) => {
-      const { name, type } = axis;
-      if (type === "channel") {
-        return `${name}'`;
-      }
-      return name;
-    }),
-    scales: Float64Array.from(parsedAxes, (axis) => axis.scale),
-    units: parsedAxes.map((axis) => axis.unit),
-  });
+// Checks the axes and returns their number.  The viewer works in voxels, so axis names and units are
+// not used further.
+function parseOmeAxes(axes: unknown): number {
+  return parseArray(axes, parseOmeAxis).length;
 }
 
 function parseScaleTransform(rank: number, obj: unknown) {
@@ -175,12 +165,7 @@ function parseMultiscaleScale(rank: number, obj: unknown): OmeMultiscaleScale {
 }
 
 function parseOmeMultiscale(multiscale: unknown): OmeMultiscaleMetadata {
-  const coordinateSpace = verifyObjectProperty(
-    multiscale,
-    "axes",
-    parseOmeAxes,
-  );
-  const rank = coordinateSpace.rank;
+  const rank = verifyObjectProperty(multiscale, "axes", parseOmeAxes);
   const transform = verifyObjectProperty(
     multiscale,
     "coordinateTransformations",
@@ -214,8 +199,7 @@ function parseOmeMultiscale(multiscale: unknown): OmeMultiscaleMetadata {
   // this will need to be modified.
   const baseScales = new Float64Array(rank);
   for (let i = 0; i < rank; ++i) {
-    const scale = (baseScales[i] = baseTransform[i * (rank + 1) + i]);
-    coordinateSpace.scales[i] *= scale;
+    baseScales[i] = baseTransform[i * (rank + 1) + i];
   }
 
   for (const scale of scales) {
@@ -238,7 +222,7 @@ function parseOmeMultiscale(multiscale: unknown): OmeMultiscaleMetadata {
       }
     }
   }
-  return { coordinateSpace, scales };
+  return { rank, scales };
 }
 
 export function parseOmeMetadata(

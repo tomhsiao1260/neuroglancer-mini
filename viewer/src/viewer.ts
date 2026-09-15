@@ -30,7 +30,7 @@ import type { ZarrStoreSpec } from "#src/datasource/zarr/store.js";
 import { DisplayContext, SliceViewPanel } from "#src/render/panel.js";
 import { ImageRenderLayer } from "#src/render/renderlayer.js";
 import {
-  makeCombinedCoordinateSpace,
+  makeCoordinateSpace,
   TrackableCoordinateSpace,
 } from "#src/state/coordinate_transform.js";
 import {
@@ -206,7 +206,7 @@ export class Viewer extends RefCounted {
     const navigationState = new NavigationState(
       this.sharedPosition.addRef(),
       this.sharedZoom.addRef(),
-      { orientation: viewRotations[orientation]() },
+      viewRotations[orientation](),
     );
     const view = new SliceViewPanel(element, navigationState, this);
 
@@ -264,8 +264,10 @@ export class Viewer extends RefCounted {
       });
     }
 
-    const { modelSpace } = volume;
-    this.coordinateSpace.value = makeCombinedCoordinateSpace(modelSpace);
+    this.coordinateSpace.value = makeCoordinateSpace(
+      volume.lowerBounds,
+      volume.upperBounds,
+    );
 
     this.renderLayer.value = new ImageRenderLayer(volume, {
       renderScaleTarget: this.renderScaleTarget,

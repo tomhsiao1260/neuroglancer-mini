@@ -1,6 +1,6 @@
 # Neuroglancer Mini
 
-This is a trimmed-down version of the original Neuroglancer source code, designed to make its core logic more accessible and easier to understand. This is not a new implementation, but rather a carefully curated subset of the original codebase (~115,510 lines) that has been reduced to about 8,300 lines by retaining only the minimal core functionality needed for the program to run, reducing npm dependencies, and simplifying the build process. This lightweight version serves as a learning demo, allowing developers to grasp the core concepts and architecture of Neuroglancer without being overwhelmed by the complexity of the original implementation.
+This is a trimmed-down version of the original Neuroglancer source code, designed to make its core logic more accessible and easier to understand. This is not a new implementation, but rather a carefully curated subset of the original codebase (~115,510 lines) that has been reduced to about 8,000 lines by retaining only the minimal core functionality needed for the program to run, reducing npm dependencies, and simplifying the build process. This lightweight version serves as a learning demo, allowing developers to grasp the core concepts and architecture of Neuroglancer without being overwhelmed by the complexity of the original implementation.
 
 <img width="1193" alt="img2" src="https://github.com/user-attachments/assets/c69a9014-3250-4d05-8350-abb96975b64c" />
 
@@ -162,7 +162,7 @@ The code is split between two threads. The **main thread** owns the WebGL canvas
 #### `viewer/src/state/`: navigation and coordinates
 
 - `navigation_state.ts`: `Position`, `TrackableZoom` and `NavigationState` (position, orientation and zoom, with pan, step and zoom operations).
-- `coordinate_transform.ts`: `CoordinateSpace` and its bounds (voxel centers sit at integer coordinates).
+- `coordinate_transform.ts`: `CoordinateSpace`, the bounds of the volume in voxels (made from the bounds of the full-resolution scale by `makeCoordinateSpace`), and `clampAndRoundToVoxelCenter`.
 - `trackable_value.ts`: `WatchableValue`, a value with a change signal.
 
 #### `viewer/src/webgl/`: WebGL helpers

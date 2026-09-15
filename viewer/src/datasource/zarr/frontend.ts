@@ -2,11 +2,6 @@
 
 import type { ChunkManager } from "#src/chunk_manager/frontend.js";
 import { WithParameters } from "#src/chunk_manager/frontend.js";
-import type { CoordinateSpace } from "#src/state/coordinate_transform.js";
-import {
-  makeCoordinateSpace,
-  makeIdentityTransformedBoundingBox,
-} from "#src/state/coordinate_transform.js";
 import {
   MISSING_CHUNK_RPC_ID,
   VolumeChunkSourceParameters,
@@ -57,7 +52,10 @@ interface ZarrScaleInfo {
 
 interface ZarrMultiscaleInfo {
   store: ZarrStoreSpec;
-  coordinateSpace: CoordinateSpace;
+  rank: number;
+  // Bounds of the volume in voxels of the full-resolution scale, in zarr (z, y, x) order.
+  lowerBounds: Float64Array;
+  upperBounds: Float64Array;
   dataType: DataType;
   scales: ZarrScaleInfo[];
 }
@@ -70,12 +68,16 @@ export class MultiscaleVolumeChunkSource extends GenericMultiscaleVolumeChunkSou
     return this.multiscale.dataType;
   }
 
-  get modelSpace() {
-    return this.multiscale.coordinateSpace;
+  get lowerBounds() {
+    return this.multiscale.lowerBounds;
+  }
+
+  get upperBounds() {
+    return this.multiscale.upperBounds;
   }
 
   get rank() {
-    return this.multiscale.coordinateSpace.rank;
+    return this.multiscale.rank;
   }
 
   constructor(
@@ -160,7 +162,7 @@ async function resolveOmeMultiscale(
   );
   const dataType = scaleZarrMetadata[0].dataType;
   const numScales = scaleZarrMetadata.length;
-  const rank = multiscale.coordinateSpace.rank;
+  const { rank } = multiscale;
   for (let i = 0; i < numScales; ++i) {
     const scale = multiscale.scales[i];
     const zarrMetadata = scaleZarrMetadata[i];
@@ -183,6 +185,8 @@ async function resolveOmeMultiscale(
     }
   }
 
+  // The volume starts at the translation of the full-resolution scale (-0.5 for OME's voxel-center
+  // convention) and spans its shape.
   const lowerBounds = new Float64Array(rank);
   const upperBounds = new Float64Array(rank);
   const baseScale = multiscale.scales[0];
@@ -191,22 +195,12 @@ async function resolveOmeMultiscale(
     const lower = (lowerBounds[i] = baseScale.transform[(rank + 1) * rank + i]);
     upperBounds[i] = lower + baseZarrMetadata.shape[i];
   }
-  const boundingBox = makeIdentityTransformedBoundingBox({
-    lowerBounds,
-    upperBounds,
-  });
-
-  const { coordinateSpace } = multiscale;
-  const resolvedCoordinateSpace = makeCoordinateSpace({
-    names: coordinateSpace.names,
-    units: coordinateSpace.units,
-    scales: coordinateSpace.scales,
-    boundingBoxes: [boundingBox],
-  });
 
   return {
     store: storeSpec,
-    coordinateSpace: resolvedCoordinateSpace,
+    rank,
+    lowerBounds,
+    upperBounds,
     dataType,
     scales: multiscale.scales.map((scale, i) => ({
       path: scale.path,
