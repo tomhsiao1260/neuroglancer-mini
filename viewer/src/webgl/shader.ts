@@ -1,0 +1,228 @@
+/**
+ * @license
+ * Copyright 2016 Google Inc.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+import { RefCounted } from "#src/util/disposable.js";
+import type { GL } from "#src/webgl/context.js";
+
+function compileShader(gl: GL, source: string, shaderType: number) {
+  const shader = gl.createShader(shaderType)!;
+  gl.shaderSource(shader, source);
+  gl.compileShader(shader);
+  if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+    const kind = shaderType === gl.VERTEX_SHADER ? "vertex" : "fragment";
+    throw new Error(
+      `Error compiling ${kind} shader: ${gl.getShaderInfoLog(shader) || ""}`,
+    );
+  }
+  return shader;
+}
+
+export class ShaderProgram extends RefCounted {
+  program: WebGLProgram;
+  vertexShader: WebGLShader;
+  fragmentShader: WebGLShader;
+  uniforms = new Map<string, WebGLUniformLocation | null>();
+  attributes = new Map<string, number>();
+
+  constructor(
+    public gl: GL,
+    vertexSource: string,
+    fragmentSource: string,
+    uniformNames: string[],
+    attributeNames: string[],
+  ) {
+    super();
+    const vertexShader = (this.vertexShader = compileShader(
+      gl,
+      vertexSource,
+      gl.VERTEX_SHADER,
+    ));
+    const fragmentShader = (this.fragmentShader = compileShader(
+      gl,
+      fragmentSource,
+      gl.FRAGMENT_SHADER,
+    ));
+    const program = gl.createProgram()!;
+    gl.attachShader(program, vertexShader);
+    gl.attachShader(program, fragmentShader);
+    gl.linkProgram(program);
+    if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+      throw new Error(
+        `Error linking shader: ${gl.getProgramInfoLog(program) || ""}`,
+      );
+    }
+    this.program = program;
+    for (const name of uniformNames) {
+      this.uniforms.set(name, gl.getUniformLocation(program, name));
+    }
+    for (const name of attributeNames) {
+      this.attributes.set(name, gl.getAttribLocation(program, name));
+    }
+  }
+
+  uniform(name: string): WebGLUniformLocation {
+    return this.uniforms.get(name)!;
+  }
+
+  attribute(name: string): number {
+    return this.attributes.get(name)!;
+  }
+
+  bind() {
+    this.gl.useProgram(this.program);
+  }
+
+  disposed() {
+    const { gl } = this;
+    gl.deleteShader(this.vertexShader);
+    gl.deleteShader(this.fragmentShader);
+    gl.deleteProgram(this.program);
+  }
+}
+
+/**
+ * GLSL code, possibly nested.  Each distinct string is emitted only once, so a definition shared by
+ * several parts (e.g. a struct) can be listed in each of them.
+ */
+export type ShaderCodePart = string | ShaderCodePart[];
+
+class ShaderCode {
+  code = "";
+  private parts = new Set<ShaderCodePart>();
+
+  add(x: ShaderCodePart) {
+    if (this.parts.has(x)) return;
+    this.parts.add(x);
+    if (typeof x === "string") {
+      this.code += x;
+    } else {
+      for (const y of x) this.add(y);
+    }
+  }
+}
+
+/**
+ * Assembles a vertex and fragment shader from declarations and code, and builds the program.
+ * Uniform and attribute locations are looked up by the names declared here.
+ */
+export class ShaderBuilder {
+  private uniformsCode = "";
+  private attributesCode = "";
+  private varyingsCodeVS = "";
+  private varyingsCodeFS = "";
+  private outputBufferCode = "";
+  private vertexCode = new ShaderCode();
+  private fragmentCode = new ShaderCode();
+  private vertexMain = "";
+  private fragmentMain = "";
+  private uniforms = new Array<string>();
+  private attributes = new Array<string>();
+  private initializers = new Array<(shader: ShaderProgram) => void>();
+
+  constructor(public gl: GL) {}
+
+  addAttribute(typeName: string, name: string, location?: number) {
+    this.attributes.push(name);
+    if (location !== undefined) {
+      this.attributesCode += `layout(location = ${location})`;
+    }
+    this.attributesCode += `in ${typeName} ${name};\n`;
+  }
+
+  addVarying(typeName: string, name: string) {
+    this.varyingsCodeVS += `out ${typeName} ${name};\n`;
+    this.varyingsCodeFS += `in ${typeName} ${name};\n`;
+  }
+
+  addOutputBuffer(typeName: string, name: string, location: number | null) {
+    if (location !== null) {
+      this.outputBufferCode += `layout(location = ${location}) `;
+    }
+    this.outputBufferCode += `out ${typeName} ${name};\n`;
+  }
+
+  addUniform(typeName: string, name: string, extent?: number) {
+    this.uniforms.push(name);
+    if (extent !== undefined) {
+      this.uniformsCode += `uniform ${typeName} ${name}[${extent}];\n`;
+    } else {
+      this.uniformsCode += `uniform ${typeName} ${name};\n`;
+    }
+  }
+
+  addVertexCode(code: ShaderCodePart) {
+    this.vertexCode.add(code);
+  }
+
+  addFragmentCode(code: ShaderCodePart) {
+    this.fragmentCode.add(code);
+  }
+
+  // Sets the body of the vertex shader's `main`.
+  setVertexMain(code: string) {
+    this.vertexMain = code;
+  }
+
+  // Sets the body of the fragment shader's `main`.
+  setFragmentMain(code: string) {
+    this.fragmentMain = code;
+  }
+
+  // Adds a function run once, with the program bound, after it is built (e.g. to set sampler units).
+  addInitializer(f: (shader: ShaderProgram) => void) {
+    this.initializers.push(f);
+  }
+
+  build() {
+    const vertexSource = `#version 300 es
+precision highp float;
+precision highp int;
+${this.uniformsCode}
+${this.attributesCode}
+${this.varyingsCodeVS}
+${this.vertexCode.code}
+void main() {
+${this.vertexMain}
+}
+`;
+    const fragmentSource = `#version 300 es
+precision highp float;
+precision highp int;
+${this.uniformsCode}
+${this.varyingsCodeFS}
+${this.outputBufferCode}
+${this.fragmentCode.code}
+void main() {
+${this.fragmentMain}
+}
+`;
+    const shader = new ShaderProgram(
+      this.gl,
+      vertexSource,
+      fragmentSource,
+      this.uniforms,
+      this.attributes,
+    );
+    const { initializers } = this;
+    if (initializers.length > 0) {
+      shader.bind();
+      for (const initializer of initializers) {
+        initializer(shader);
+      }
+    }
+    return shader;
+  }
+}
