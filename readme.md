@@ -1,6 +1,6 @@
 # Neuroglancer Mini
 
-This is a trimmed-down version of the original Neuroglancer source code, designed to make its core logic more accessible and easier to understand. This is not a new implementation, but rather a carefully curated subset of the original codebase (~115,510 lines) that has been reduced to about 7,250 lines by retaining only the minimal core functionality needed for the program to run, reducing npm dependencies, and simplifying the build process. This lightweight version serves as a learning demo, allowing developers to grasp the core concepts and architecture of Neuroglancer without being overwhelmed by the complexity of the original implementation.
+This is a trimmed-down version of the original Neuroglancer source code, designed to make its core logic more accessible and easier to understand. This is not a new implementation, but rather a carefully curated subset of the original codebase (~115,510 lines) that has been reduced to about 6,950 lines by retaining only the minimal core functionality needed for the program to run, reducing npm dependencies, and simplifying the build process. This lightweight version serves as a learning demo, allowing developers to grasp the core concepts and architecture of Neuroglancer without being overwhelmed by the complexity of the original implementation.
 
 <img width="1193" alt="img2" src="https://github.com/user-attachments/assets/c69a9014-3250-4d05-8350-abb96975b64c" />
 
@@ -179,10 +179,9 @@ The code is split between two threads. The **main thread** owns the WebGL canvas
 - Data: `data_type.ts` (the supported data types), `array.ts`.
 - `json.ts`: metadata validation.
 - Priority queues for the chunk manager:
-  - `pairing_heap.ts` and `linked_list.ts`: the interfaces.
-  - `pairing_heap.0.ts` / `.1.ts` and `linked_list.0.ts` / `.1.ts`: two copies of each with different link fields (`next0` vs `next1`), so one chunk can sit in the system memory eviction queue and in a download or GPU queue at the same time.
+  - `pairing_heap.ts` (`PairingHeap`) and `linked_list.ts` (`LinkedList`): nodes link themselves through fields named when the heap or list is created. Chunks have two sets of link fields (`child0`/`next0`/`prev0` and `child1`/`next1`/`prev1`), so one chunk can sit in the system memory eviction queue and in a download or GPU queue at the same time.
 - Math: `geom.ts` (gl-matrix plus helpers), `matrix.ts` (n-dimensional matrices), `vector.ts`.
-- Lifetime and events: `disposable.ts` (`RefCounted`), `signal.ts`, `memoize.ts`, `cancellation.ts`, `animation_frame_debounce.ts`.
+- Lifetime and events: `disposable.ts` (`RefCounted`), `signal.ts`, `memoize.ts`, `animation_frame_debounce.ts`.
 - `si_units.ts`: unit prefixes for OME units.
 
 ## License

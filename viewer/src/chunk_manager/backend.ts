@@ -24,19 +24,11 @@ import {
   ChunkState,
 } from "#src/chunk_manager/base.js";
 import type { SharedWatchableValue } from "#src/worker/shared_watchable_value.js";
-import type { CancellationToken } from "#src/util/cancellation.js";
-import { CancellationTokenSource } from "#src/util/cancellation.js";
 import type { Borrowed, Disposable } from "#src/util/disposable.js";
 import { RefCounted } from "#src/util/disposable.js";
-import LinkedList0 from "#src/util/linked_list.0.js";
-import LinkedList1 from "#src/util/linked_list.1.js";
-import type { LinkedListOperations } from "#src/util/linked_list.js";
-import PairingHeap0 from "#src/util/pairing_heap.0.js";
-import PairingHeap1 from "#src/util/pairing_heap.1.js";
-import type {
-  ComparisonFunction,
-  PairingHeapOperations,
-} from "#src/util/pairing_heap.js";
+import { LinkedList } from "#src/util/linked_list.js";
+import type { ComparisonFunction } from "#src/util/pairing_heap.js";
+import { PairingHeap } from "#src/util/pairing_heap.js";
 import { NullarySignal } from "#src/util/signal.js";
 import type { RPC } from "#src/worker/worker_rpc.js";
 import {
@@ -89,19 +81,18 @@ export class Chunk implements Disposable {
   private gpuMemoryBytes_ = 0;
 
   /**
-   * Specifies lowest numeric state required by any request, if `prioritTier !==
-   * ChunkPriorityTier.RECENT`, then this must be one of `GPU_MEMORY`, `SYSTEM_MEMORY`, or
-   * `SYSTEM_MEMORY_WORKER`.
+   * Where the chunk's requests need it: `GPU_MEMORY` while a view requests it (views draw chunks
+   * from the GPU), `NEW` otherwise.  Only requested chunks are copied to the GPU.
    */
   requestedState = ChunkState.NEW;
 
   newRequestedState = ChunkState.NEW;
 
   /**
-   * Cancellation token used to cancel the pending download.  Set to undefined except when state !==
-   * DOWNLOADING.  This should not be accessed by code outside this module.
+   * Aborts the pending download.  Set only while the state is DOWNLOADING.  This should not be
+   * accessed by code outside this module.
    */
-  downloadCancellationToken: CancellationTokenSource | undefined = undefined;
+  downloadAbortController: AbortController | undefined = undefined;
 
   initialize(key: string) {
     this.key = key;
@@ -148,13 +139,9 @@ export class Chunk implements Disposable {
     this.queueManager.updateChunkState(this, ChunkState.FAILED);
   }
 
+  // The downloaded data stays in the worker until the chunk is copied to the GPU.
   downloadSucceeded() {
-    if (this.requestedState === ChunkState.SYSTEM_MEMORY) {
-      this.queueManager.moveChunkToFrontend(this);
-      this.queueManager.updateChunkState(this, ChunkState.SYSTEM_MEMORY);
-    } else {
-      this.queueManager.updateChunkState(this, ChunkState.SYSTEM_MEMORY_WORKER);
-    }
+    this.queueManager.updateChunkState(this, ChunkState.SYSTEM_MEMORY_WORKER);
   }
 
   freeSystemMemory() {}
@@ -277,25 +264,25 @@ export interface ChunkSource {
    * Note: This method must be defined by subclasses.
    *
    * @param chunk Chunk to download.
-   * @param cancellationToken If this token is canceled, the download/decoding should be aborted if
-   * possible.
+   * @param abortSignal Aborted when the chunk is evicted while downloading; the download/decoding
+   * should then stop if possible.
    */
-  download(chunk: Chunk, cancellationToken: CancellationToken): Promise<void>;
+  download(chunk: Chunk, abortSignal: AbortSignal): Promise<void>;
 }
 
 function startChunkDownload(chunk: Chunk) {
-  const downloadCancellationToken = (chunk.downloadCancellationToken =
-    new CancellationTokenSource());
-  chunk.source!.download(chunk, downloadCancellationToken).then(
+  const abortController = (chunk.downloadAbortController =
+    new AbortController());
+  chunk.source!.download(chunk, abortController.signal).then(
     () => {
-      if (chunk.downloadCancellationToken === downloadCancellationToken) {
-        chunk.downloadCancellationToken = undefined;
+      if (chunk.downloadAbortController === abortController) {
+        chunk.downloadAbortController = undefined;
         chunk.downloadSucceeded();
       }
     },
     (error: any) => {
-      if (chunk.downloadCancellationToken === downloadCancellationToken) {
-        chunk.downloadCancellationToken = undefined;
+      if (chunk.downloadAbortController === abortController) {
+        chunk.downloadAbortController = undefined;
         chunk.downloadFailed(error);
         console.log(`Error retrieving chunk ${chunk}: ${error}`);
       }
@@ -303,10 +290,12 @@ function startChunkDownload(chunk: Chunk) {
   );
 }
 
+// Aborts the chunk's download.  Whatever the download still produces is ignored, since the chunk no
+// longer holds the same abort controller.
 function cancelChunkDownload(chunk: Chunk) {
-  const token = chunk.downloadCancellationToken!;
-  chunk.downloadCancellationToken = undefined;
-  token.cancel();
+  const abortController = chunk.downloadAbortController!;
+  chunk.downloadAbortController = undefined;
+  abortController.abort();
 }
 
 /**
@@ -324,8 +313,8 @@ class ChunkPriorityQueue {
    */
   private recentHead = new Chunk();
   constructor(
-    private heapOperations: PairingHeapOperations<Chunk>,
-    private linkedListOperations: LinkedListOperations<Chunk>,
+    private heapOperations: PairingHeap<Chunk>,
+    private linkedListOperations: LinkedList<Chunk>,
   ) {
     linkedListOperations.initializeHead(this.recentHead);
   }
@@ -416,12 +405,20 @@ class ChunkPriorityQueue {
   }
 }
 
+// A chunk can be in two queues at once: queues made by `makeChunkPriorityQueue0` link it through its
+// `0` fields, and those made by `makeChunkPriorityQueue1` through its `1` fields.
 function makeChunkPriorityQueue0(compare: ComparisonFunction<Chunk>) {
-  return new ChunkPriorityQueue(new PairingHeap0(compare), LinkedList0);
+  return new ChunkPriorityQueue(
+    new PairingHeap(compare, "child0", "next0", "prev0"),
+    new LinkedList("next0", "prev0"),
+  );
 }
 
 function makeChunkPriorityQueue1(compare: ComparisonFunction<Chunk>) {
-  return new ChunkPriorityQueue(new PairingHeap1(compare), LinkedList1);
+  return new ChunkPriorityQueue(
+    new PairingHeap(compare, "child1", "next1", "prev1"),
+    new LinkedList("next1", "prev1"),
+  );
 }
 
 /**
@@ -737,15 +734,6 @@ export class ChunkQueueManager extends SharedObjectCounterpart {
     }
   }
 
-  moveChunkToFrontend(chunk: Chunk) {
-    const rpc = this.rpc!;
-    const msg: any = {};
-    const transfers: any[] = [];
-    chunk.serialize(msg, transfers);
-    msg.state = ChunkState.SYSTEM_MEMORY;
-    rpc.invoke("Chunk.update", msg, transfers);
-  }
-
   /**
    * Frees the chunk's data wherever it is (being downloaded, in the worker, on the main thread or on
    * the GPU) and puts the chunk back in the download queue.  It is downloaded again if it is still
@@ -884,24 +872,20 @@ export class ChunkManager extends SharedObjectCounterpart {
   }
 
   /**
+   * Requests `chunk` in GPU memory for this round of priority updates.
+   *
    * @param chunk
    * @param tier New priority tier.  Must not equal ChunkPriorityTier.RECENT.
    * @param priority Priority within tier.
-   * @param requestedState Indicates requested chunk state.
    */
-  requestChunk(
-    chunk: Chunk,
-    tier: ChunkPriorityTier,
-    priority: number,
-    requestedState: ChunkState = ChunkState.GPU_MEMORY,
-  ) {
+  requestChunk(chunk: Chunk, tier: ChunkPriorityTier, priority: number) {
     if (Number.isNaN(priority)) {
       return;
     }
     if (tier === ChunkPriorityTier.RECENT) {
       throw new Error("Not going to request a chunk with the RECENT tier");
     }
-    chunk.newRequestedState = Math.min(chunk.newRequestedState, requestedState);
+    chunk.newRequestedState = ChunkState.GPU_MEMORY;
     if (chunk.newPriorityTier === ChunkPriorityTier.RECENT) {
       this.newTierChunks.push(chunk);
     }
@@ -967,21 +951,13 @@ export function WithParameters<
 }
 
 /**
- * Interface that represents shared objects that request chunks from a ChunkManager.
- */
-export interface ChunkRequester extends SharedObject {
-  chunkManager: ChunkManager;
-}
-
-/**
- * Mixin that adds a chunkManager property initialized from the RPC-supplied options.
- *
- * The resultant class implements `ChunkRequester`.
+ * Mixin that adds a `chunkManager` property, for shared objects that request chunks, initialized
+ * from the RPC-supplied options.
  */
 export function withChunkManager<
   T extends { new (...args: any[]): SharedObject },
 >(Base: T) {
-  return class extends Base implements ChunkRequester {
+  return class extends Base {
     chunkManager: ChunkManager;
     constructor(...args: any[]) {
       super(...args);
