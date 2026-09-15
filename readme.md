@@ -36,7 +36,7 @@ Please use Chrome or Edge.
 
 ### Option 1: Online Demo
 
-Visit [neuroglancer-mini.vercel.app](https://neuroglancer-mini.vercel.app) and click "choose .zarr folder" to open a local `.zarr` folder, or open a scroll straight from the Vesuvius Challenge data server:
+Visit [neuroglancer-mini.vercel.app](https://neuroglancer-mini.vercel.app) and click "Open local folder" to open a local `.zarr` folder, enter the URL of a `.zarr` folder, or open a scroll straight from the Vesuvius Challenge data server:
 
 [neuroglancer-mini.vercel.app/?zarr=https://dl.ash2txt.org/full-scrolls/Scroll1/PHercParis4.volpkg/volumes_zarr_standardized/54keV_7.91um_Scroll1A.zarr](https://neuroglancer-mini.vercel.app/?zarr=https://dl.ash2txt.org/full-scrolls/Scroll1/PHercParis4.volpkg/volumes_zarr_standardized/54keV_7.91um_Scroll1A.zarr)
 
@@ -59,7 +59,7 @@ Then open `http://localhost:3000`.
 
 The viewer opens one OME-Zarr multiscale volume stored as Zarr v2. The example page's URL parameters choose where it comes from:
 
-- No parameters: click "choose .zarr folder" and pick the `.zarr` folder itself (the one containing `.zattrs`). This uses the File System Access API.
+- No parameters: the start screen. Click "Open local folder" and pick the `.zarr` folder itself (the one containing `.zattrs`); this uses the File System Access API. Or enter a URL, which opens the page with `?zarr=<url>`.
 - `?zarr=<url>`: read the files over HTTP, where `<url>` is the URL of the `.zarr` folder. Any server that returns the files (and 404 for missing ones) works if it allows cross-origin requests (CORS): the Vesuvius Challenge data server, a static server such as `npx http-server <folder containing scroll.zarr> -p 9000 --cors`, or the server of the forward branch.
 
 What is supported:
@@ -113,7 +113,7 @@ The code is split between two threads. The **main thread** owns the WebGL canvas
 
 #### `example/`
 
-- `index.html`, `src/style.css`: page and styles.
+- `index.html`, `src/style.css`: the start screen (folder button and URL form), loading status and styles.
 - `src/main.ts`: chooses the store (`?zarr=<url>` or the folder picker), creates the viewer and lays out three views side by side. Start here to try the viewer API.
 - `vite.config.ts`, `tsconfig.json`, `package.json`: build configuration (dev server on port 3000) and the `viewer` import described in [Using the Viewer](#using-the-viewer).
 
