@@ -31,11 +31,10 @@ interface TextureFormat {
   format: number;
   texelType: number;
   arrayConstructor: TypedArrayConstructor;
-  // Prefix of the sampler type: `usampler3D`, `isampler3D` or `sampler3D`.
-  samplerPrefix: "" | "i" | "u";
+  // Prefix of the sampler type: `usampler3D` or `sampler3D`.
+  samplerPrefix: "" | "u";
 }
 
-// A 64-bit value is stored as two 32-bit channels (low, high).
 const textureFormats: Record<DataType, TextureFormat> = {
   [DataType.UINT8]: {
     internalFormat: WebGL.R8UI,
@@ -44,46 +43,11 @@ const textureFormats: Record<DataType, TextureFormat> = {
     arrayConstructor: Uint8Array,
     samplerPrefix: "u",
   },
-  [DataType.INT8]: {
-    internalFormat: WebGL.R8I,
-    format: WebGL.RED_INTEGER,
-    texelType: WebGL.BYTE,
-    arrayConstructor: Int8Array,
-    samplerPrefix: "i",
-  },
   [DataType.UINT16]: {
     internalFormat: WebGL.R16UI,
     format: WebGL.RED_INTEGER,
     texelType: WebGL.UNSIGNED_SHORT,
     arrayConstructor: Uint16Array,
-    samplerPrefix: "u",
-  },
-  [DataType.INT16]: {
-    internalFormat: WebGL.R16I,
-    format: WebGL.RED_INTEGER,
-    texelType: WebGL.SHORT,
-    arrayConstructor: Int16Array,
-    samplerPrefix: "i",
-  },
-  [DataType.UINT32]: {
-    internalFormat: WebGL.R32UI,
-    format: WebGL.RED_INTEGER,
-    texelType: WebGL.UNSIGNED_INT,
-    arrayConstructor: Uint32Array,
-    samplerPrefix: "u",
-  },
-  [DataType.INT32]: {
-    internalFormat: WebGL.R32I,
-    format: WebGL.RED_INTEGER,
-    texelType: WebGL.INT,
-    arrayConstructor: Int32Array,
-    samplerPrefix: "i",
-  },
-  [DataType.UINT64]: {
-    internalFormat: WebGL.RG32UI,
-    format: WebGL.RG_INTEGER,
-    texelType: WebGL.UNSIGNED_INT,
-    arrayConstructor: Uint32Array,
     samplerPrefix: "u",
   },
   [DataType.FLOAT32]: {
@@ -186,21 +150,12 @@ export class ChunkFormat extends RefCounted {
     });
     // Texel offset of voxel (0, 0, 0), then the texel offset per voxel along x, y and z.
     builder.addUniform(`highp ${offsetType}`, "uVolumeChunkStrides", 4);
-    let readValue: string;
-    switch (dataType) {
-      case DataType.FLOAT32:
-        readValue = "return texelFetch(uVolumeChunkSampler, offset, 0).r;";
-        break;
-      case DataType.UINT64:
-        readValue = `uint64_t result;
-  result.value = texelFetch(uVolumeChunkSampler, offset, 0).rg;
-  return result;`;
-        break;
-      default:
-        readValue = `${shaderType} result;
+    const readValue =
+      dataType === DataType.FLOAT32
+        ? "return texelFetch(uVolumeChunkSampler, offset, 0).r;"
+        : `${shaderType} result;
   result.value = texelFetch(uVolumeChunkSampler, offset, 0).r;
   return result;`;
-    }
     builder.addFragmentCode([
       dataTypeShaderDefinition[dataType],
       `
@@ -340,8 +295,7 @@ export class FillValueTexture extends RefCounted {
 
   constructor(gl: GL, chunkFormat: ChunkFormat, rank: number) {
     super();
-    const { dataType, textureDims, textureTarget, textureFormat } =
-      chunkFormat;
+    const { textureDims, textureTarget, textureFormat } = chunkFormat;
     const chunkSizeInVoxels = new Uint32Array(rank);
     chunkSizeInVoxels.fill(1);
     const textureLayout = (this.textureLayout = new TextureLayout(
@@ -355,7 +309,7 @@ export class FillValueTexture extends RefCounted {
     chunkFormat.setTextureData(
       gl,
       textureLayout,
-      new textureFormat.arrayConstructor(dataType === DataType.UINT64 ? 2 : 1),
+      new textureFormat.arrayConstructor(1),
     );
     gl.bindTexture(textureTarget, null);
   }

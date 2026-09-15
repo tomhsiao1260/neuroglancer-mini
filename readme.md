@@ -1,6 +1,6 @@
 # Neuroglancer Mini
 
-This is a trimmed-down version of the original Neuroglancer source code, designed to make its core logic more accessible and easier to understand. This is not a new implementation, but rather a carefully curated subset of the original codebase (~115,510 lines) that has been reduced to about 8,800 lines by retaining only the minimal core functionality needed for the program to run, reducing npm dependencies, and simplifying the build process. This lightweight version serves as a learning demo, allowing developers to grasp the core concepts and architecture of Neuroglancer without being overwhelmed by the complexity of the original implementation.
+This is a trimmed-down version of the original Neuroglancer source code, designed to make its core logic more accessible and easier to understand. This is not a new implementation, but rather a carefully curated subset of the original codebase (~115,510 lines) that has been reduced to about 8,450 lines by retaining only the minimal core functionality needed for the program to run, reducing npm dependencies, and simplifying the build process. This lightweight version serves as a learning demo, allowing developers to grasp the core concepts and architecture of Neuroglancer without being overwhelmed by the complexity of the original implementation.
 
 <img width="1193" alt="img2" src="https://github.com/user-attachments/assets/c69a9014-3250-4d05-8350-abb96975b64c" />
 
@@ -66,7 +66,7 @@ What is supported:
 
 - Metadata: `.zattrs` with OME `multiscales`, and a `.zarray` for each scale (C order).
 - Compressors: blosc and null (raw).
-- Data types: uint8, int8, uint16, int16, uint32, int32, uint64 (8-byte integers are read as unsigned) and float32, little or big endian.
+- Data types: uint8 (`|u1`) and uint16 (`<u2`), which is what the Vesuvius Challenge scroll and fragment volumes use, and float32 (`<f4`, shown over the range [0, 1]) for surface data such as tifxyz coordinates. Other data types are rejected with an error.
 - Chunk keys may use either `.` or `/` as the dimension separator. Chunks missing from the store are shown as 0.
 
 The volume is shown in three cross-section views (XY, YZ and XZ) that share one position and zoom. Drag with the left mouse button to pan, use the wheel to step one voxel through the slice, and hold Ctrl while using the wheel to zoom around the cursor.
@@ -149,7 +149,7 @@ The code is split between two threads. The **main thread** owns the WebGL canvas
 - `metadata.ts`: parses `.zarray` (shape, chunk shape, data type, compressor, dimension separator).
 - `frontend.ts`: `loadZarrVolume` and `MultiscaleVolumeChunkSource`, which creates one chunk source per scale and maps zarr's (z, y, x) axis order to chunk order.
 - `backend.ts` (worker): `ZarrVolumeChunkSource.download` reads one chunk file and decodes it.
-- `decode.ts`: blosc or raw decoding, size check and endianness conversion.
+- `decode.ts`: blosc or raw decoding and size check.
 - `store.ts`: `ZarrStore`, where the store's files are read from: `HttpStore` (any HTTP server) or `DirectoryStore` (a local folder through the File System Access API). A `ZarrStoreSpec` describes the store so that the worker can create its own.
 - `base.ts`: chunk source parameters sent to the worker (store, path of the scale's array, and metadata).
 
@@ -177,7 +177,7 @@ The code is split between two threads. The **main thread** owns the WebGL canvas
 
 #### `viewer/src/util/`
 
-- Data: `data_type.ts`, `numpy_dtype.ts`, `endian.ts`, `array.ts`.
+- Data: `data_type.ts` (the supported data types), `array.ts`.
 - `json.ts`: metadata validation and `stableStringify`.
 - Priority queues for the chunk manager:
   - `pairing_heap.ts` and `linked_list.ts`: the interfaces.
