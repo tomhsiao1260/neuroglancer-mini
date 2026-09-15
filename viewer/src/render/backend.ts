@@ -29,10 +29,7 @@ import {
   SLICEVIEW_RPC_ID,
   SliceViewBase,
 } from "#src/render/base.js";
-import type {
-  WatchableValueChangeInterface,
-  WatchableValueInterface,
-} from "#src/state/trackable_value.js";
+import type { WatchableValueChangeInterface } from "#src/state/trackable_value.js";
 import { vec3, vec3Key } from "#src/util/geom.js";
 import { Signal } from "#src/util/signal.js";
 import type { RPC } from "#src/worker/worker_rpc.js";
@@ -119,10 +116,6 @@ export class SliceViewBackend extends SliceViewIntermediateBase {
     this.chunkManager.scheduleUpdateChunkPriorities();
   }
 
-  handleLayerChanged = () => {
-    this.chunkManager.scheduleUpdateChunkPriorities();
-  };
-
   private handleRenderScaleTargetChanged = () => {
     this.invalidateVisibleSources();
   };
@@ -180,7 +173,6 @@ export class SliceViewBackend extends SliceViewIntermediateBase {
     visibleLayers.delete(layer);
     disposeTransformedSources(layerInfo.allSources);
     layer.renderScaleTarget.changed.remove(this.handleRenderScaleTargetChanged);
-    layer.localPosition.changed.remove(this.handleLayerChanged);
     this.invalidateVisibleSources();
   }
 
@@ -201,7 +193,6 @@ export class SliceViewBackend extends SliceViewIntermediateBase {
       };
       this.visibleLayers.set(layer, layerInfo);
       layer.renderScaleTarget.changed.add(this.handleRenderScaleTargetChanged);
-      layer.localPosition.changed.add(this.handleLayerChanged);
     } else {
       disposeTransformedSources(layerInfo.allSources);
       layerInfo.allSources = allSources;
@@ -381,12 +372,10 @@ export class SliceViewRenderLayerBackend
 {
   rpcId: number;
   renderScaleTarget: SharedWatchableValue<number>;
-  localPosition: WatchableValueInterface<Float32Array>;
 
   constructor(rpc: RPC, options: any) {
     super(rpc, options);
     this.renderScaleTarget = rpc.get(options.renderScaleTarget);
-    this.localPosition = rpc.get(options.localPosition);
   }
 
   filterVisibleSources(

@@ -1,6 +1,6 @@
 # Neuroglancer Mini
 
-This is a trimmed-down version of the original Neuroglancer source code, designed to make its core logic more accessible and easier to understand. This is not a new implementation, but rather a carefully curated subset of the original codebase (~115,510 lines) that has been reduced to about 8,450 lines by retaining only the minimal core functionality needed for the program to run, reducing npm dependencies, and simplifying the build process. This lightweight version serves as a learning demo, allowing developers to grasp the core concepts and architecture of Neuroglancer without being overwhelmed by the complexity of the original implementation.
+This is a trimmed-down version of the original Neuroglancer source code, designed to make its core logic more accessible and easier to understand. This is not a new implementation, but rather a carefully curated subset of the original codebase (~115,510 lines) that has been reduced to about 8,300 lines by retaining only the minimal core functionality needed for the program to run, reducing npm dependencies, and simplifying the build process. This lightweight version serves as a learning demo, allowing developers to grasp the core concepts and architecture of Neuroglancer without being overwhelmed by the complexity of the original implementation.
 
 <img width="1193" alt="img2" src="https://github.com/user-attachments/assets/c69a9014-3250-4d05-8350-abb96975b64c" />
 
@@ -140,7 +140,7 @@ The code is split between two threads. The **main thread** owns the WebGL canvas
 
 - `base.ts`: chunk states (`QUEUED`, `DOWNLOADING`, `SYSTEM_MEMORY_WORKER`, `SYSTEM_MEMORY`, `GPU_MEMORY`, ...) and priority tiers (`VISIBLE`, `PREFETCH`, `RECENT`; nothing is requested as `PREFETCH` at the moment).
 - `backend.ts` (worker): `Chunk` and `ChunkSource`; `ChunkQueueManager`, which keeps the download, system memory and GPU memory queues and moves chunks between states within capacity; and `ChunkManager`, which recomputes chunk priorities when the view changes.
-- `frontend.ts` (main thread): `ChunkQueueManager` applies `Chunk.update` messages from the worker. `ChunkManager` creates each chunk source once, together with its worker counterpart.
+- `frontend.ts` (main thread): `ChunkQueueManager` applies `Chunk.update` messages from the worker. `ChunkManager.getChunkSource` creates each chunk source once, together with its worker counterpart, and shares it among all views by key (reference counted).
 - `README.md`: notes from the original Neuroglancer on chunk states and priority tiers.
 
 #### `viewer/src/datasource/zarr/`: reading OME-Zarr
@@ -178,12 +178,12 @@ The code is split between two threads. The **main thread** owns the WebGL canvas
 #### `viewer/src/util/`
 
 - Data: `data_type.ts` (the supported data types), `array.ts`.
-- `json.ts`: metadata validation and `stableStringify`.
+- `json.ts`: metadata validation.
 - Priority queues for the chunk manager:
   - `pairing_heap.ts` and `linked_list.ts`: the interfaces.
   - `pairing_heap.0.ts` / `.1.ts` and `linked_list.0.ts` / `.1.ts`: two copies of each with different link fields (`next0` vs `next1`), so one chunk can sit in the system memory eviction queue and in a download or GPU queue at the same time.
 - Math: `geom.ts` (gl-matrix plus helpers), `matrix.ts` (n-dimensional matrices), `vector.ts`.
-- Lifetime and events: `disposable.ts` (`RefCounted`), `signal.ts`, `memoize.ts`, `object_id.ts`, `cancellation.ts`, `animation_frame_debounce.ts`.
+- Lifetime and events: `disposable.ts` (`RefCounted`), `signal.ts`, `memoize.ts`, `cancellation.ts`, `animation_frame_debounce.ts`.
 - `si_units.ts`: unit prefixes for OME units.
 
 ## License

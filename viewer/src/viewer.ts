@@ -109,12 +109,8 @@ export class Viewer extends RefCounted {
     new Position(this.coordinateSpace),
   );
   private sharedZoom = this.registerDisposer(new TrackableZoom());
-  // Position in the image's local coordinate space, which spans the volume like the global
-  // coordinate space.  It is shared with the worker by the render layer.
-  private localCoordinateSpace = new TrackableCoordinateSpace();
-  private localPosition = this.registerDisposer(
-    new Position(this.localCoordinateSpace),
-  );
+  // Preferred size of a voxel of the chosen scale, in screen pixels (1: pick the scale whose voxels
+  // are closest to one pixel).  It is shared with the worker by the render layer.
   private renderScaleTarget = new WatchableValue(1);
   // The pointer's last position over a view, if it is over one.
   private pointer:
@@ -270,11 +266,9 @@ export class Viewer extends RefCounted {
 
     const { modelSpace } = volume;
     this.coordinateSpace.value = makeCombinedCoordinateSpace(modelSpace);
-    this.localCoordinateSpace.value = makeCombinedCoordinateSpace(modelSpace);
 
     this.renderLayer.value = new ImageRenderLayer(volume, {
       renderScaleTarget: this.renderScaleTarget,
-      localPosition: this.localPosition,
     });
   }
 }

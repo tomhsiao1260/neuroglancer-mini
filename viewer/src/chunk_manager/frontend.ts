@@ -19,9 +19,6 @@ import {
 import { SharedWatchableValue } from "#src/worker/shared_watchable_value.js";
 import { WatchableValue } from "#src/state/trackable_value.js";
 import type { Borrowed } from "#src/util/disposable.js";
-import { stableStringify } from "#src/util/json.js";
-import { StringMemoize } from "#src/util/memoize.js";
-import { getObjectId } from "#src/util/object_id.js";
 import { NullarySignal } from "#src/util/signal.js";
 import type { GL } from "#src/webgl/context.js";
 import type { RPC } from "#src/worker/worker_rpc.js";
@@ -197,18 +194,10 @@ registerRPC("Chunk.update", function (x) {
   }
 });
 
-export type GettableChunkSource = SharedObject & { OPTIONS: object; key: any };
-
-export interface ChunkSourceConstructor<
-  T extends GettableChunkSource = GettableChunkSource,
-> {
-  new (...args: any[]): T;
-  encodeOptions(options: T["OPTIONS"]): any;
-}
-
 @registerSharedObjectOwner(CHUNK_MANAGER_RPC_ID)
 export class ChunkManager extends SharedObject {
-  memoize = new StringMemoize();
+  // Chunk sources by key, so that all views of the same data share one source and its chunks.
+  private chunkSources = new Map<string, ChunkSource>();
 
   get gl() {
     return this.chunkQueueManager.gl;
@@ -223,27 +212,24 @@ export class ChunkManager extends SharedObject {
   }
 
   /**
-   * Returns the chunk source for `options`, creating it (and its worker counterpart) the first time.
+   * Returns the chunk source with `key`.  The first time, it is created with `create` together with
+   * its worker counterpart; later calls add a reference to the same source.
    */
-  getChunkSource<T extends GettableChunkSource>(
-    constructorFunction: ChunkSourceConstructor<T>,
-    options: any,
-  ): T {
-    const keyObject = constructorFunction.encodeOptions(options);
-    keyObject.constructorId = getObjectId(constructorFunction);
-    const key = stableStringify(keyObject);
-    return this.memoize.get(key, () => {
-      const newSource = new constructorFunction(this, options);
-      newSource.initializeCounterpart(this.rpc!, {});
-      newSource.key = keyObject;
-      return newSource;
-    });
+  getChunkSource<T extends ChunkSource>(key: string, create: () => T): T {
+    let source = this.chunkSources.get(key) as T | undefined;
+    if (source === undefined) {
+      source = create();
+      source.initializeCounterpart(this.rpc!, {});
+      source.registerDisposer(() => this.chunkSources.delete(key));
+      this.chunkSources.set(key, source);
+    } else {
+      source.addRef();
+    }
+    return source;
   }
 }
 
-// eslint-disable-next-line @typescript-eslint/no-unsafe-declaration-merging
 export class ChunkSource extends SharedObject {
-  OPTIONS: object;
   chunks = new Map<string, Chunk>();
 
   constructor(
@@ -286,45 +272,29 @@ export class ChunkSource extends SharedObject {
   getChunk(_x: any): Chunk {
     throw new Error("Not implemented.");
   }
-
-  static encodeOptions(_options: object): { [key: string]: any } {
-    return {};
-  }
 }
 
-// eslint-disable-next-line @typescript-eslint/no-unsafe-declaration-merging
-export interface ChunkSource {
-  key: any;
-}
-
+/**
+ * Mixin that adds `parameters` (from the constructor options) to a chunk source, sends them to the
+ * worker counterpart, and registers the class under the parameters' `RPC_ID`.
+ */
 export function WithParameters<
   Parameters,
-  TBase extends ChunkSourceConstructor,
+  TBase extends { new (...args: any[]): ChunkSource },
 >(
   Base: TBase,
   parametersConstructor: ChunkSourceParametersConstructor<Parameters>,
 ) {
-  type WithParametersOptions = InstanceType<TBase>["OPTIONS"] & {
-    parameters: Parameters;
-  };
   @registerSharedObjectOwner(parametersConstructor.RPC_ID)
   class C extends Base {
-    OPTIONS: WithParametersOptions;
     parameters: Parameters;
     constructor(...args: any[]) {
       super(...args);
-      const options: WithParametersOptions = args[1];
-      this.parameters = options.parameters;
+      this.parameters = args[1].parameters;
     }
     initializeCounterpart(rpc: RPC, options: any) {
       options.parameters = this.parameters;
       super.initializeCounterpart(rpc, options);
-    }
-    static encodeOptions(options: WithParametersOptions) {
-      return Object.assign(
-        { parameters: options.parameters },
-        Base.encodeOptions(options),
-      );
     }
   }
   return C;

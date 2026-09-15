@@ -340,11 +340,6 @@ export class SliceView extends SliceViewBase {
     disposers: Disposer[],
   ) {
     disposers.push(
-      renderLayer.localPosition.changed.add(() =>
-        this.invalidateVisibleChunks(),
-      ),
-    );
-    disposers.push(
       renderLayer.renderScaleTarget.changed.add(() =>
         this.invalidateVisibleSources(),
       ),
@@ -458,8 +453,6 @@ export abstract class SliceViewChunkSource<
 {
   chunks: Map<string, ChunkType>;
 
-  OPTIONS: SliceViewChunkSourceOptions<Spec>;
-
   spec: Spec;
 
   constructor(
@@ -468,20 +461,6 @@ export abstract class SliceViewChunkSource<
   ) {
     super(chunkManager, options);
     this.spec = options.spec;
-  }
-
-  static encodeSpec(spec: SliceViewChunkSpecification) {
-    return {
-      chunkDataSize: Array.from(spec.chunkDataSize),
-      lowerVoxelBound: Array.from(spec.lowerVoxelBound),
-      upperVoxelBound: Array.from(spec.upperVoxelBound),
-    };
-  }
-
-  static encodeOptions(options: SliceViewChunkSourceOptions): any {
-    const encoding = ChunkSource.encodeOptions(options);
-    encoding.spec = SliceViewChunkSource.encodeSpec(options.spec);
-    return encoding;
   }
 
   initializeCounterpart(rpc: RPC, options: any) {

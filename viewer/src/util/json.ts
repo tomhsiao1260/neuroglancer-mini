@@ -33,52 +33,6 @@ export function verifyFinitePositiveFloat(obj: any): number {
   );
 }
 
-/**
- * Returns a JSON representation of x, with object keys sorted to ensure a
- * consistent result.
- */
-export function stableStringify(x: any) {
-  if (typeof x === "object") {
-    if (x === null) {
-      return "null";
-    }
-    if (Array.isArray(x)) {
-      let s = "[";
-      const size = x.length;
-      let i = 0;
-      if (i < size) {
-        s += stableStringify(x[i]);
-        while (++i < size) {
-          s += ",";
-          s += stableStringify(x[i]);
-        }
-      }
-      s += "]";
-      return s;
-    }
-    let s = "{";
-    const keys = Object.keys(x).sort();
-    let i = 0;
-    const size = keys.length;
-    if (i < size) {
-      let key = keys[i];
-      s += JSON.stringify(key);
-      s += ":";
-      s += stableStringify(x[key]);
-      while (++i < size) {
-        s += ",";
-        key = keys[i];
-        s += JSON.stringify(key);
-        s += ":";
-        s += stableStringify(x[key]);
-      }
-    }
-    s += "}";
-    return s;
-  }
-  return JSON.stringify(x);
-}
-
 // Checks that `x' is an array, maps each element by parseElement.
 export function parseArray<T>(
   x: any,

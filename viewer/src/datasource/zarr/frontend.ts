@@ -122,17 +122,15 @@ export class MultiscaleVolumeChunkSource extends GenericMultiscaleVolumeChunkSou
           upperVoxelBound: permutedDataShape,
           chunkDataSizes: [permutedChunkShape],
         }).map((spec): SliceViewSingleResolutionSource<VolumeChunkSource> => {
-          // The same chunk source is returned for the same options on every call.
+          // Every call (one per view) returns the same chunk source for a scale.  A viewer's chunk
+          // manager holds a single volume, so the scale's path identifies the source.
+          const options = {
+            spec,
+            parameters: { store: this.multiscale.store, path: scale.path, metadata },
+          };
           const chunkSource = this.chunkManager.getChunkSource(
-            ZarrVolumeChunkSource,
-            {
-              spec,
-              parameters: {
-                store: this.multiscale.store,
-                path: scale.path,
-                metadata,
-              },
-            },
+            `zarr:${scale.path}`,
+            () => new ZarrVolumeChunkSource(this.chunkManager, options),
           );
           // Adding a listener that is already added has no effect.
           chunkSource.missingChunk.add(this.missingChunk.dispatch);

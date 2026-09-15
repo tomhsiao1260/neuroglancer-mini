@@ -1,7 +1,6 @@
 /** @license Copyright 2016 Google Inc. SPDX-License-Identifier: Apache-2.0 */
 
 import type { RefCounted } from "#src/util/disposable.js";
-import { stableStringify } from "#src/util/json.js";
 
 export class Memoize<Key, Value extends RefCounted> {
   private map = new Map<Key, Value>();
@@ -22,14 +21,5 @@ export class Memoize<Key, Value extends RefCounted> {
       obj.addRef();
     }
     return obj;
-  }
-}
-
-export class StringMemoize extends Memoize<string, RefCounted> {
-  get<T extends RefCounted>(x: any, getter: () => T) {
-    if (typeof x !== "string") {
-      x = stableStringify(x);
-    }
-    return super.get(x, getter);
   }
 }

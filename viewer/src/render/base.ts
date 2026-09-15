@@ -186,7 +186,6 @@ export class ChunkLayout {
 }
 
 export interface MultiscaleVolumetricDataRenderLayer {
-  localPosition: WatchableValueInterface<Float32Array>;
   renderScaleTarget: WatchableValueInterface<number>;
 }
 
@@ -233,10 +232,6 @@ export interface TransformedSource<
 }
 
 export interface SliceViewRenderLayer {
-  /**
-   * Current position of non-global layer dimensions.
-   */
-  localPosition: WatchableValueInterface<Float32Array>;
   renderScaleTarget: WatchableValueInterface<number>;
 
   filterVisibleSources(

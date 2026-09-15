@@ -349,8 +349,6 @@ function setNormalizedUniforms(shader: ShaderProgram, dataType: DataType) {
 
 export interface ImageRenderLayerOptions {
   renderScaleTarget: WatchableValueInterface<number>;
-  // Position within the local coordinate space.
-  localPosition: WatchableValueInterface<Float32Array>;
 }
 
 export interface SliceViewRenderContext {
@@ -366,7 +364,6 @@ export class ImageRenderLayer extends RefCounted {
   rpcId: RpcId | null = null;
   chunkManager: ChunkManager;
   renderScaleTarget: WatchableValueInterface<number>;
-  localPosition: WatchableValueInterface<Float32Array>;
   private vertexIdHelper: VertexIdHelper;
   // Shader for each chunk format, built on first use; `null` if it failed to build.
   private shaders = new Map<ChunkFormat, ShaderProgram | null>();
@@ -378,7 +375,6 @@ export class ImageRenderLayer extends RefCounted {
     super();
     this.chunkManager = multiscaleSource.chunkManager;
     this.renderScaleTarget = options.renderScaleTarget;
-    this.localPosition = options.localPosition;
     this.vertexIdHelper = this.registerDisposer(VertexIdHelper.get(this.gl));
     this.registerDisposer(() => {
       for (const shader of this.shaders.values()) {
@@ -407,9 +403,6 @@ export class ImageRenderLayer extends RefCounted {
     const rpc = this.chunkManager.rpc!;
     sharedObject.RPC_TYPE_ID = SLICEVIEW_RENDERLAYER_RPC_ID;
     sharedObject.initializeCounterpart(rpc, {
-      localPosition: this.registerDisposer(
-        SharedWatchableValue.makeFromExisting(rpc, this.localPosition),
-      ).rpcId,
       renderScaleTarget: this.registerDisposer(
         SharedWatchableValue.makeFromExisting(rpc, this.renderScaleTarget),
       ).rpcId,
