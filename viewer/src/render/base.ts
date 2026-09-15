@@ -295,37 +295,30 @@ export class SliceViewBase<
 }
 
 /**
- * Generic specification for SliceView chunks specifying a layout and voxel size.
+ * The chunk grid of one scale, in its chunk space (x, y, z voxels): chunks of `chunkDataSize` voxels
+ * covering `[lowerVoxelBound, upperVoxelBound)`.
  */
-export interface SliceViewChunkSpecification<
-  ChunkDataSize extends Uint32Array | Float32Array = Uint32Array | Float32Array,
-> {
+export interface VolumeChunkSpecification {
   rank: number;
-
-  /**
-   * Size of chunk in voxels.
-   */
-  chunkDataSize: ChunkDataSize;
-
-  /**
-   * All valid chunks are in the range [lowerChunkBound, upperChunkBound).
-   *
-   * These are specified in units of chunks (not voxels).
-   */
+  // Size of a chunk, in voxels.
+  chunkDataSize: Uint32Array;
+  // All chunks are in the range [lowerChunkBound, upperChunkBound), in chunks.
   lowerChunkBound: Float32Array;
   upperChunkBound: Float32Array;
-
   lowerVoxelBound: Float32Array;
   upperVoxelBound: Float32Array;
+  dataType: DataType;
 }
 
-export function makeSliceViewChunkSpecification<
-  ChunkDataSize extends Uint32Array | Float32Array,
->(
-  options: SliceViewChunkSpecificationOptions<ChunkDataSize>,
-): SliceViewChunkSpecification<ChunkDataSize> {
-  const { rank, chunkDataSize, upperVoxelBound } = options;
-  const { lowerVoxelBound = new Float32Array(rank) } = options;
+// Returns the grid of chunks of `chunkDataSize` voxels covering `[0, upperVoxelBound)`.
+export function makeVolumeChunkSpecification(options: {
+  rank: number;
+  dataType: DataType;
+  chunkDataSize: Uint32Array;
+  upperVoxelBound: Float32Array;
+}): VolumeChunkSpecification {
+  const { rank, dataType, chunkDataSize, upperVoxelBound } = options;
+  const lowerVoxelBound = new Float32Array(rank);
   const lowerChunkBound = new Float32Array(rank);
   const upperChunkBound = new Float32Array(rank);
   for (let i = 0; i < rank; ++i) {
@@ -341,28 +334,8 @@ export function makeSliceViewChunkSpecification<
     upperChunkBound,
     lowerVoxelBound,
     upperVoxelBound,
-  };
-}
-
-export interface VolumeChunkSpecification
-  extends SliceViewChunkSpecification<Uint32Array> {
-  dataType: DataType;
-}
-
-/**
- * Returns a chunk specification for each chunk size in `chunkDataSizes`.
- */
-export function makeDefaultVolumeChunkSpecifications(options: {
-  rank: number;
-  dataType: DataType;
-  upperVoxelBound: Float32Array;
-  chunkDataSizes: Uint32Array[];
-}): VolumeChunkSpecification[] {
-  const { dataType } = options;
-  return options.chunkDataSizes.map((chunkDataSize) => ({
-    ...makeSliceViewChunkSpecification({ ...options, chunkDataSize }),
     dataType,
-  }));
+  };
 }
 
 /**
@@ -437,34 +410,9 @@ export function* filterVisibleSources<T extends TransformedSource<any>>(
   }
 }
 
-/**
- * Common parameters for SliceView Chunks.
- */
-export interface SliceViewChunkSpecificationBaseOptions {
-  rank: number;
-
-  /**
-   * If not specified, defaults to an all-zero vector.  This determines lowerChunkBound.  If this is
-   * not a multiple of chunkDataSize, then voxels at lower positions may still be requested.
-   */
-  lowerVoxelBound?: Float32Array;
-
-  /**
-   * Exclusive upper bound in "chunk" coordinate space, in voxels.  This determines upperChunkBound.
-   */
-  upperVoxelBound: Float32Array;
-}
-
-export interface SliceViewChunkSpecificationOptions<
-  ChunkDataSize extends Uint32Array | Float32Array = Uint32Array | Float32Array,
-> extends SliceViewChunkSpecificationBaseOptions {
-  chunkDataSize: ChunkDataSize;
-}
-
-export interface SliceViewChunkSource<
-  Spec extends SliceViewChunkSpecification = SliceViewChunkSpecification,
-> extends Disposable {
-  spec: Spec;
+// What both threads' chunk sources (`VolumeChunkSource` in `frontend.ts` and `backend.ts`) have.
+export interface SliceViewChunkSource extends Disposable {
+  spec: VolumeChunkSpecification;
 }
 
 export const SLICEVIEW_RPC_ID = "SliceView";

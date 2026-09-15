@@ -1,6 +1,5 @@
 /** @license Copyright 2016 Google Inc. SPDX-License-Identifier: Apache-2.0 */
 
-import type { ChunkConstructor } from "#src/chunk_manager/backend.js";
 import {
   Chunk,
   ChunkSource,
@@ -10,8 +9,6 @@ import { ChunkPriorityTier } from "#src/chunk_manager/base.js";
 import type { SharedWatchableValue } from "#src/worker/shared_watchable_value.js";
 import type {
   ProjectionParameters,
-  SliceViewChunkSource as SliceViewChunkSourceInterface,
-  SliceViewChunkSpecification,
   TransformedSource,
   VolumeChunkSpecification,
 } from "#src/render/base.js";
@@ -72,7 +69,7 @@ const tempChunkPosition = vec3.create();
 const tempCenter = vec3.create();
 const tempChunkSize = vec3.create();
 
-class SliceViewCounterpartBase extends SliceViewBase<SliceViewChunkSourceBackend> {
+class SliceViewCounterpartBase extends SliceViewBase<VolumeChunkSource> {
   constructor(rpc: RPC, options: any) {
     super(rpc.get(options.projectionParameters));
     this.initializeSharedObject(rpc, options.id);
@@ -148,7 +145,7 @@ export class SliceViewBackend extends SliceViewIntermediateBase {
   // Shows `sources`, the scales of `layer`, replacing any layer shown before.
   setLayer(
     layer: SliceViewRenderLayerBackend,
-    sources: TransformedSource<SliceViewChunkSourceBackend>[],
+    sources: TransformedSource<VolumeChunkSource>[],
   ) {
     this.removeLayer();
     this.layer = layer;
@@ -188,10 +185,8 @@ export class SliceViewBackend extends SliceViewIntermediateBase {
 function deserializeTransformedSource(
   rpc: RPC,
   serializedSource: any,
-): TransformedSource<SliceViewChunkSourceBackend> {
-  const source = rpc.getRef<SliceViewChunkSourceBackend>(
-    serializedSource.source,
-  );
+): TransformedSource<VolumeChunkSource> {
+  const source = rpc.getRef<VolumeChunkSource>(serializedSource.source);
   return {
     source,
     chunkLayout: ChunkLayout.fromObject(serializedSource.chunkLayout),
@@ -213,87 +208,27 @@ registerRPC(SLICEVIEW_SET_LAYER_RPC_ID, function (x) {
   sliceView.setLayer(layer, sources);
 });
 
-export class SliceViewChunk extends Chunk {
-  chunkGridPosition: Float32Array;
-  source: SliceViewChunkSourceBackend | null = null;
-
-  initializeVolumeChunk(key: string, chunkGridPosition: Float32Array) {
-    super.initialize(key);
-    this.chunkGridPosition = Float32Array.from(chunkGridPosition);
-  }
-
-  serialize(msg: any, transfers: any[]) {
-    super.serialize(msg, transfers);
-    msg.chunkGridPosition = this.chunkGridPosition;
-  }
-
-  downloadSucceeded() {
-    super.downloadSucceeded();
-  }
-
-  freeSystemMemory() {}
-
-  toString() {
-    return this.source!.toString() + ":" + vec3Key(this.chunkGridPosition);
-  }
-}
-
-export interface SliceViewChunkSourceBackend<
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  Spec extends SliceViewChunkSpecification = SliceViewChunkSpecification,
-  ChunkType extends SliceViewChunk = SliceViewChunk,
-> {
-  // TODO(jbms): Move this declaration to the class definition below and declare abstract once
-  // TypeScript supports mixins with abstact classes.
-  getChunk(chunkGridPosition: vec3): ChunkType;
-
-  chunkConstructor: ChunkConstructor<SliceViewChunk>;
-}
-
-// eslint-disable-next-line @typescript-eslint/no-unsafe-declaration-merging
-export class SliceViewChunkSourceBackend<
-    Spec extends SliceViewChunkSpecification = SliceViewChunkSpecification,
-    ChunkType extends SliceViewChunk = SliceViewChunk,
-  >
-  extends ChunkSource
-  implements SliceViewChunkSourceInterface
-{
-  spec: Spec;
-  chunks: Map<string, ChunkType>;
-  constructor(rpc: RPC, options: any) {
-    super(rpc, options);
-    this.spec = options.spec;
-  }
-
-  getChunk(chunkGridPosition: Float32Array) {
-    const key = chunkGridPosition.join();
-    let chunk = this.chunks.get(key);
-    if (chunk === undefined) {
-      chunk = this.getNewChunk_(this.chunkConstructor) as ChunkType;
-      chunk.initializeVolumeChunk(key, chunkGridPosition);
-      this.addChunk(chunk);
-    }
-    return chunk;
-  }
-}
-
 /**
  * Worker-side volume chunk.  `download` fills `data`; the data is transferred to the main thread
  * (and dropped here) when the chunk is serialized for an upload to the GPU.
  */
-export class VolumeChunk extends SliceViewChunk {
+export class VolumeChunk extends Chunk {
   source: VolumeChunkSource | null = null;
+  // Position of the chunk in the chunk grid.
+  chunkGridPosition: Float32Array;
   data: ArrayBufferView | null;
   chunkDataSize: Uint32Array | null;
 
-  initializeVolumeChunk(key: string, chunkGridPosition: vec3) {
-    super.initializeVolumeChunk(key, chunkGridPosition);
+  initializeVolumeChunk(key: string, chunkGridPosition: Float32Array) {
+    super.initialize(key);
+    this.chunkGridPosition = Float32Array.from(chunkGridPosition);
     this.chunkDataSize = null;
     this.data = null;
   }
 
   serialize(msg: any, transfers: any[]) {
     super.serialize(msg, transfers);
+    msg.chunkGridPosition = this.chunkGridPosition;
     const chunkDataSize = this.chunkDataSize;
     if (chunkDataSize !== this.source!.spec.chunkDataSize) {
       msg.chunkDataSize = chunkDataSize;
@@ -313,12 +248,37 @@ export class VolumeChunk extends SliceViewChunk {
   freeSystemMemory() {
     this.data = null;
   }
+
+  toString() {
+    return this.source!.toString() + ":" + vec3Key(this.chunkGridPosition);
+  }
 }
 
-export class VolumeChunkSource extends SliceViewChunkSourceBackend {
+/**
+ * Worker side of the chunk source of one scale.  Keeps its chunks by grid position and creates each
+ * the first time it is requested; `download` is defined by the data source (see
+ * `datasource/zarr/backend.ts`).
+ */
+export class VolumeChunkSource extends ChunkSource {
   spec: VolumeChunkSpecification;
+  chunks: Map<string, VolumeChunk>;
+
+  constructor(rpc: RPC, options: any) {
+    super(rpc, options);
+    this.spec = options.spec;
+  }
+
+  getChunk(chunkGridPosition: Float32Array) {
+    const key = chunkGridPosition.join();
+    let chunk = this.chunks.get(key);
+    if (chunk === undefined) {
+      chunk = this.getNewChunk_(VolumeChunk);
+      chunk.initializeVolumeChunk(key, chunkGridPosition);
+      this.addChunk(chunk);
+    }
+    return chunk;
+  }
 }
-VolumeChunkSource.prototype.chunkConstructor = VolumeChunk;
 
 @registerSharedObject(SLICEVIEW_RENDERLAYER_RPC_ID)
 export class SliceViewRenderLayerBackend extends SharedObjectCounterpart {

@@ -18,7 +18,6 @@ import type { ChunkFormat } from "#src/render/chunk_format.js";
 import type {
   MultiscaleVolumeChunkSource,
   SliceView,
-  VolumeChunkSource,
 } from "#src/render/frontend.js";
 import type { WatchableValueInterface } from "#src/state/trackable_value.js";
 import { DataType } from "#src/util/data_type.js";
@@ -463,8 +462,7 @@ export class ImageRenderLayer extends RefCounted {
     };
     let newSource = true;
     for (const transformedSource of visibleSources) {
-      const { chunkLayout } = transformedSource;
-      const source = transformedSource.source as VolumeChunkSource;
+      const { chunkLayout, source } = transformedSource;
       const { chunkFormat } = source;
       if (chunkFormat !== prevChunkFormat) {
         endShader();

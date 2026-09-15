@@ -1,7 +1,6 @@
 /** @license Copyright 2016 Google Inc. SPDX-License-Identifier: Apache-2.0 */
 
 import { debounce } from "es-toolkit";
-import { ChunkState } from "#src/chunk_manager/base.js";
 import type { ChunkManager } from "#src/chunk_manager/frontend.js";
 import { Chunk, ChunkSource } from "#src/chunk_manager/frontend.js";
 import type { NavigationState } from "#src/state/navigation_state.js";
@@ -10,8 +9,6 @@ import type {
   WatchableValueInterface,
 } from "#src/state/trackable_value.js";
 import type {
-  SliceViewChunkSource as SliceViewChunkSourceInterface,
-  SliceViewChunkSpecification,
   TransformedSource,
   VolumeChunkSpecification,
 } from "#src/render/base.js";
@@ -155,7 +152,7 @@ export class SharedProjectionParameters<
 // The message for `deserializeTransformedSource` in `backend.ts`; adds a worker reference to the
 // chunk source.
 function serializeTransformedSource(
-  tsource: TransformedSource<SliceViewChunkSource>,
+  tsource: TransformedSource<VolumeChunkSource>,
 ) {
   return {
     source: tsource.source.addCounterpartRef(),
@@ -174,7 +171,7 @@ function serializeTransformedSource(
  * and draws the chunks that have reached the GPU into `offscreenFramebuffer`.
  */
 @registerSharedObjectOwner(SLICEVIEW_RPC_ID)
-export class SliceView extends SliceViewBase<SliceViewChunkSource> {
+export class SliceView extends SliceViewBase<VolumeChunkSource> {
   gl = this.chunkManager.gl;
   viewChanged = new NullarySignal();
   renderingStale = true;
@@ -386,77 +383,14 @@ export class SliceView extends SliceViewBase<SliceViewChunkSource> {
   }
 }
 
-export interface SliceViewChunkSourceOptions<
-  Spec extends SliceViewChunkSpecification = SliceViewChunkSpecification,
-> {
-  spec: Spec;
-}
-
-// eslint-disable-next-line @typescript-eslint/no-unsafe-declaration-merging
-export abstract class SliceViewChunkSource<
-    Spec extends SliceViewChunkSpecification = SliceViewChunkSpecification,
-    ChunkType extends SliceViewChunk = SliceViewChunk,
-  >
-  extends ChunkSource
-  implements SliceViewChunkSourceInterface
-{
-  chunks: Map<string, ChunkType>;
-
-  spec: Spec;
-
-  constructor(
-    chunkManager: ChunkManager,
-    options: SliceViewChunkSourceOptions<Spec>,
-  ) {
-    super(chunkManager, options);
-    this.spec = options.spec;
-  }
-
-  initializeCounterpart(rpc: RPC, options: any) {
-    options.spec = this.spec;
-    super.initializeCounterpart(rpc, options);
-  }
-}
-
-// eslint-disable-next-line @typescript-eslint/no-unsafe-declaration-merging
-export interface SliceViewChunkSource {
-  // TODO(jbms): Move this declaration to the class definition above and declare abstract once
-  // TypeScript supports mixins with abstact classes.
-  getChunk(x: any): any;
-}
-
-export class SliceViewChunk extends Chunk {
-  chunkGridPosition: vec3;
-  source: SliceViewChunkSource;
-
-  constructor(source: SliceViewChunkSource, x: any) {
-    super(source);
-    this.chunkGridPosition = x.chunkGridPosition;
-    this.state = ChunkState.SYSTEM_MEMORY;
-  }
-}
-
-export interface SliceViewSingleResolutionSource<
-  Source extends SliceViewChunkSource = SliceViewChunkSource,
-> {
-  chunkSource: Source;
-
-  /**
-   * (rank + 1)*(rank + 1) homogeneous transformation matrix from the "chunk" coordinate space to
-   * the MultiscaleSliceViewChunkSource space.
-   */
+/**
+ * One scale of the volume: its chunk source, and `chunkToMultiscaleTransform`, the
+ * (rank + 1) * (rank + 1) homogeneous transform from its chunk space (x, y, z voxels of the scale) to
+ * the viewer's voxel coordinates.
+ */
+export interface SliceViewSingleResolutionSource {
+  chunkSource: VolumeChunkSource;
   chunkToMultiscaleTransform: Float32Array;
-}
-
-export abstract class MultiscaleSliceViewChunkSource<
-  Source extends SliceViewChunkSource = SliceViewChunkSource,
-> {
-  abstract get rank(): number;
-
-  // Returns the chunk source of each scale, finest first.
-  abstract getSources(): SliceViewSingleResolutionSource<Source>[];
-
-  constructor(public chunkManager: Borrowed<ChunkManager>) {}
 }
 
 /**
@@ -465,13 +399,13 @@ export abstract class MultiscaleSliceViewChunkSource<
  * choose which scales to show.  Chunk dimension `i` is shown along view dimension `i`.
  */
 export function getVolumetricTransformedSources(
-  scales: SliceViewSingleResolutionSource<SliceViewChunkSource>[],
-): TransformedSource<SliceViewChunkSource>[] {
+  scales: SliceViewSingleResolutionSource[],
+): TransformedSource<VolumeChunkSource>[] {
   const rank = 3;
 
   const getTransformedSource = (
     singleResolutionSource: SliceViewSingleResolutionSource,
-  ): TransformedSource<SliceViewChunkSource> => {
+  ): TransformedSource<VolumeChunkSource> => {
     const { chunkSource: source, chunkToMultiscaleTransform } =
       singleResolutionSource;
     const { spec } = source;
@@ -521,10 +455,14 @@ export function getVolumetricTransformedSources(
   return scales.map(getTransformedSource);
 }
 
-export class VolumeChunkSource extends SliceViewChunkSource<
-  VolumeChunkSpecification,
-  VolumeChunk
-> {
+/**
+ * Main-thread side of the chunk source of one scale.  Its chunks arrive from the worker in
+ * `Chunk.update` messages (see `chunk_manager/frontend.ts`) and are uploaded to textures of
+ * `chunkFormat`.
+ */
+export class VolumeChunkSource extends ChunkSource {
+  chunks: Map<string, VolumeChunk>;
+  spec: VolumeChunkSpecification;
   chunkFormat: ChunkFormat;
   // Layout of the texture of each chunk of this source.
   textureLayout: TextureLayout;
@@ -535,6 +473,7 @@ export class VolumeChunkSource extends SliceViewChunkSource<
     options: { spec: VolumeChunkSpecification },
   ) {
     super(chunkManager, options);
+    this.spec = options.spec;
     const { gl } = chunkManager.chunkQueueManager;
     const { chunkDataSize, dataType } = this.spec;
     let numDims = 0;
@@ -551,6 +490,11 @@ export class VolumeChunkSource extends SliceViewChunkSource<
     );
   }
 
+  initializeCounterpart(rpc: RPC, options: any) {
+    options.spec = this.spec;
+    super.initializeCounterpart(rpc, options);
+  }
+
   getChunk(x: any): VolumeChunk {
     const chunk = new VolumeChunk(this, x);
     if (chunk.data === null) {
@@ -565,15 +509,18 @@ export class VolumeChunkSource extends SliceViewChunkSource<
  * Main-thread copy of a volume chunk.  Its data is uploaded to a texture while the chunk is in GPU
  * memory; a chunk with no data uses the source's fill value texture instead.
  */
-export class VolumeChunk extends SliceViewChunk {
+export class VolumeChunk extends Chunk {
   source: VolumeChunkSource;
+  // Position of the chunk in the chunk grid.
+  chunkGridPosition: vec3;
   chunkDataSize: Uint32Array;
   data: TypedArray | null;
   texture: WebGLTexture | null = null;
   textureLayout: TextureLayout | null = null;
 
   constructor(source: VolumeChunkSource, x: any) {
-    super(source, x);
+    super(source);
+    this.chunkGridPosition = x.chunkGridPosition;
     this.chunkDataSize = x.chunkDataSize || source.spec.chunkDataSize;
     this.data = x.data;
   }
@@ -598,6 +545,12 @@ export class VolumeChunk extends SliceViewChunk {
   }
 }
 
-export abstract class MultiscaleVolumeChunkSource extends MultiscaleSliceViewChunkSource<VolumeChunkSource> {
+// A volume stored at several scales (see `datasource/zarr/frontend.ts`).
+export abstract class MultiscaleVolumeChunkSource {
   abstract dataType: DataType;
+
+  // Returns the chunk source of each scale, finest first.
+  abstract getSources(): SliceViewSingleResolutionSource[];
+
+  constructor(public chunkManager: Borrowed<ChunkManager>) {}
 }

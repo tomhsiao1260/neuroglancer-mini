@@ -12,7 +12,7 @@ import type { OmeMultiscaleMetadata } from "#src/datasource/zarr/ome.js";
 import { parseOmeMetadata } from "#src/datasource/zarr/ome.js";
 import type { ZarrStore, ZarrStoreSpec } from "#src/datasource/zarr/store.js";
 import { createZarrStore } from "#src/datasource/zarr/store.js";
-import { makeDefaultVolumeChunkSpecifications } from "#src/render/base.js";
+import { makeVolumeChunkSpecification } from "#src/render/base.js";
 import type { SliceViewSingleResolutionSource } from "#src/render/frontend.js";
 import {
   MultiscaleVolumeChunkSource as GenericMultiscaleVolumeChunkSource,
@@ -51,7 +51,6 @@ interface ZarrScaleInfo {
 
 interface ZarrMultiscaleInfo {
   store: ZarrStoreSpec;
-  rank: number;
   // Bounds of the volume in voxels of the full-resolution scale, in zarr (z, y, x) order.
   lowerBounds: Float64Array;
   upperBounds: Float64Array;
@@ -75,9 +74,6 @@ export class MultiscaleVolumeChunkSource extends GenericMultiscaleVolumeChunkSou
     return this.multiscale.upperBounds;
   }
 
-  get rank() {
-    return this.multiscale.rank;
-  }
 
   constructor(
     chunkManager: Borrowed<ChunkManager>,
@@ -91,7 +87,7 @@ export class MultiscaleVolumeChunkSource extends GenericMultiscaleVolumeChunkSou
   // `datasource/zarr/backend.ts`).
   getSources() {
     return this.multiscale.scales.map(
-      (scale): SliceViewSingleResolutionSource<VolumeChunkSource> => {
+      (scale): SliceViewSingleResolutionSource => {
         const { metadata } = scale;
         const { rank, chunkShape, shape } = metadata;
         // Zarr lists dimensions in (z, y, x) order; chunk space uses the reverse order, (x, y, z),
@@ -118,11 +114,11 @@ export class MultiscaleVolumeChunkSource extends GenericMultiscaleVolumeChunkSou
           rank + 1,
           rank + 1,
         );
-        const [spec] = makeDefaultVolumeChunkSpecifications({
+        const spec = makeVolumeChunkSpecification({
           rank,
           dataType: metadata.dataType,
+          chunkDataSize: permutedChunkShape,
           upperVoxelBound: permutedDataShape,
-          chunkDataSizes: [permutedChunkShape],
         });
         // Every call (one per view) returns the same chunk source for a scale.  A viewer's chunk
         // manager holds a single volume, so the scale's path identifies the source.
@@ -197,7 +193,6 @@ async function resolveOmeMultiscale(
 
   return {
     store: storeSpec,
-    rank,
     lowerBounds,
     upperBounds,
     dataType,
