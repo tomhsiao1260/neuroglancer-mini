@@ -10,7 +10,7 @@ import { ChunkState } from "#src/chunk_manager/base.js";
 import type { ChunkManager } from "#src/chunk_manager/frontend.js";
 import type {
   ChunkLayout,
-  SliceViewProjectionParameters,
+  ProjectionParameters,
   TransformedSource,
 } from "#src/render/base.js";
 import { SLICEVIEW_RENDERLAYER_RPC_ID } from "#src/render/base.js";
@@ -349,7 +349,7 @@ export interface ImageRenderLayerOptions {
 
 export interface SliceViewRenderContext {
   sliceView: SliceView;
-  projectionParameters: SliceViewProjectionParameters;
+  projectionParameters: ProjectionParameters;
 }
 
 /**

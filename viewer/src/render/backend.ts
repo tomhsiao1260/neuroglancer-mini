@@ -37,15 +37,15 @@ import {
  * `frontend.ts`.  `changed` fires after each update.
  */
 @registerSharedObject(PROJECTION_PARAMETERS_RPC_ID)
-export class SharedProjectionParametersBackend<
-    T extends ProjectionParameters = ProjectionParameters,
-  >
+export class SharedProjectionParametersBackend
   extends SharedObjectCounterpart
-  implements WatchableValueChangeInterface<T>
+  implements WatchableValueChangeInterface<ProjectionParameters>
 {
-  value: T;
-  oldValue: T;
-  changed = new Signal<(oldValue: T, newValue: T) => void>();
+  value: ProjectionParameters;
+  oldValue: ProjectionParameters;
+  changed = new Signal<
+    (oldValue: ProjectionParameters, newValue: ProjectionParameters) => void
+  >();
   constructor(rpc: RPC, options: any) {
     super(rpc, options);
     this.value = options.value;

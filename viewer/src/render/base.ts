@@ -30,80 +30,44 @@ export const PROJECTION_PARAMETERS_RPC_ID = "SharedProjectionParameters";
 export const PROJECTION_PARAMETERS_CHANGED_RPC_METHOD_ID =
   "SharedProjectionParameters.changed";
 
+// The size of a panel, in canvas pixels.
 export class RenderViewport {
-  // Width of visible portion of panel in canvas pixels.
   width = 0;
-
-  // Height of visible portion of panel in canvas pixels.
   height = 0;
-
-  // Width in canvas pixels, including portions outside of the canvas (i.e. outside the "viewport"
-  // window).
-  logicalWidth = 0;
-
-  // Height in canvas pixels, including portions outside of the canvas (i.e. outside the "viewport"
-  // window).
-  logicalHeight = 0;
-
-  // Left edge of visible region within full (logical) panel, as fraction in [0, 1].
-  visibleLeftFraction = 0;
-
-  // Top edge of visible region within full (logical) panel, as fraction in [0, 1].
-  visibleTopFraction = 0;
-
-  // Fraction of logical width that is visible, equal to `widthInCanvasPixels / logicalWidth`.
-  visibleWidthFraction = 0;
-
-  // Fraction of logical height that is visible, equal to `heightInCanvasPixels / logicalHeight`.
-  visibleHeightFraction = 0;
 }
 
 export function renderViewportsEqual(a: RenderViewport, b: RenderViewport) {
-  return (
-    a.width === b.width &&
-    a.height === b.height &&
-    a.logicalWidth === b.logicalWidth &&
-    a.logicalHeight === b.logicalHeight &&
-    a.visibleLeftFraction === b.visibleLeftFraction &&
-    a.visibleTopFraction === b.visibleTopFraction
-  );
+  return a.width === b.width && a.height === b.height;
 }
 
 /**
- * A panel's viewport and camera: `invViewMatrix` places the view in global voxel coordinates, and
- * `projectionMat` maps it to clip coordinates.  The worker receives a copy to choose chunks.
+ * A panel's viewport and camera: `invViewMatrix` places the view (in screen pixels, centered on the
+ * panel) in voxel coordinates, and `projectionMat` maps it to clip coordinates.  The worker receives
+ * a copy to choose chunks.
  */
 export class ProjectionParameters extends RenderViewport {
-  /**
-   * Global position.
-   */
+  // Position of the center of the view, in voxels.
   globalPosition: Float32Array = kEmptyFloat32Vec;
 
-  /**
-   * Transform from camera coordinates to OpenGL clip coordinates.
-   */
+  // Transform from view coordinates to clip coordinates.
   projectionMat: mat4 = mat4.create();
 
-  /**
-   * Transform from world coordinates to camera coordinates.
-   */
+  // Transform from voxel coordinates to view coordinates.
   viewMatrix: mat4 = mat4.create();
 
-  /**
-   * Inverse of `viewMat`.
-   */
+  // Inverse of `viewMatrix`.
   invViewMatrix: mat4 = mat4.create();
 
-  /**
-   * Transform from world coordinates to OpenGL clip coordinates.  Equal to:
-   * `projectionMat * viewMat`.
-   */
+  // Transform from voxel coordinates to clip coordinates: `projectionMat * viewMatrix`.
   viewProjectionMat: mat4 = mat4.create();
 
-  /**
-   * Inverse of `viewProjectionMat`.
-   */
-  invViewProjectionMat: mat4 = mat4.create();
+  // Normal of the cross-section plane, in voxel coordinates.
+  viewportNormalInGlobalCoordinates = vec3.create();
+
+  centerDataPosition = vec3.create();
+
+  // Size of a screen pixel, in voxels of the full-resolution scale.
+  pixelSize = 0;
 }
 
 export function projectionParametersEqual(
@@ -116,15 +80,6 @@ export function projectionParametersEqual(
     arraysEqual(a.projectionMat, b.projectionMat) &&
     arraysEqual(a.viewMatrix, b.viewMatrix)
   );
-}
-
-export function updateProjectionParametersFromInverseViewAndProjection(
-  p: ProjectionParameters,
-) {
-  const { viewMatrix, viewProjectionMat } = p;
-  mat4.invert(viewMatrix, p.invViewMatrix);
-  mat4.multiply(viewProjectionMat, p.projectionMat, viewMatrix);
-  mat4.invert(p.invViewProjectionMat, viewProjectionMat);
 }
 
 /**
@@ -211,21 +166,9 @@ export interface TransformedSource<
   curPositionInChunks: Float32Array;
 }
 
-export class SliceViewProjectionParameters extends ProjectionParameters {
-  /**
-   * Normal vector of cross section in (non-isotropic) global voxel coordinates.
-   */
-  viewportNormalInGlobalCoordinates = vec3.create();
-
-  centerDataPosition = vec3.create();
-
-  // Size of a screen pixel, in voxels of the full-resolution scale.
-  pixelSize = 0;
-}
-
 function visibleSourcesInvalidated(
-  oldValue: SliceViewProjectionParameters,
-  newValue: SliceViewProjectionParameters,
+  oldValue: ProjectionParameters,
+  newValue: ProjectionParameters,
 ) {
   if (oldValue.pixelSize !== newValue.pixelSize) return true;
   const { viewMatrix: oldViewMatrix } = oldValue;
@@ -252,7 +195,7 @@ export class SliceViewBase<
   visibleSourcesStale = true;
 
   constructor(
-    public projectionParameters: WatchableValueChangeInterface<SliceViewProjectionParameters>,
+    public projectionParameters: WatchableValueChangeInterface<ProjectionParameters>,
   ) {
     super();
     this.registerDisposer(

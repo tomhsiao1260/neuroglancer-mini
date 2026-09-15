@@ -24,8 +24,6 @@ import {
   SLICEVIEW_RPC_ID,
   SLICEVIEW_SET_LAYER_RPC_ID,
   SliceViewBase,
-  SliceViewProjectionParameters,
-  updateProjectionParametersFromInverseViewAndProjection,
 } from "#src/render/base.js";
 import {
   ChunkFormat,
@@ -40,7 +38,6 @@ import { invokeDisposers, RefCounted } from "#src/util/disposable.js";
 import { kOneVec, mat4, vec3 } from "#src/util/geom.js";
 import { NullarySignal, Signal } from "#src/util/signal.js";
 import type { GL } from "#src/webgl/context.js";
-import { OffscreenFramebuffer } from "#src/webgl/offscreen.js";
 import type { RPC } from "#src/worker/worker_rpc.js";
 import {
   registerSharedObjectOwner,
@@ -51,32 +48,23 @@ import {
  * Projection parameters of a panel, recomputed (debounced) whenever the navigation state or the
  * viewport changes.  `changed` fires only if the result differs from the previous value.
  */
-export class DerivedProjectionParameters<
-    Parameters extends ProjectionParameters = ProjectionParameters,
-  >
+export class DerivedProjectionParameters
   extends RefCounted
-  implements WatchableValueChangeInterface<Parameters>
+  implements WatchableValueChangeInterface<ProjectionParameters>
 {
-  private oldValue_: Parameters;
-  private value_: Parameters;
+  // Two objects are swapped on each change, so the previous value stays available to listeners.
+  private oldValue_ = new ProjectionParameters();
+  private value_ = new ProjectionParameters();
   private renderViewport = new RenderViewport();
 
-  changed = new Signal<(oldValue: Parameters, newValue: Parameters) => void>();
-  constructor(options: {
-    navigationState: Borrowed<NavigationState>;
-    update: (out: Parameters, navigationState: NavigationState) => void;
-    isEqual?: (a: Parameters, b: Parameters) => boolean;
-    parametersConstructor?: { new (): Parameters };
-  }) {
+  changed = new Signal<
+    (oldValue: ProjectionParameters, newValue: ProjectionParameters) => void
+  >();
+  constructor(
+    navigationState: Borrowed<NavigationState>,
+    update: (out: ProjectionParameters, navigationState: NavigationState) => void,
+  ) {
     super();
-    const {
-      parametersConstructor = ProjectionParameters as { new (): Parameters },
-      navigationState,
-      update,
-      isEqual = projectionParametersEqual,
-    } = options;
-    this.oldValue_ = new parametersConstructor();
-    this.value_ = new parametersConstructor();
     const performUpdate = () => {
       const { oldValue_, value_ } = this;
       Object.assign(oldValue_, this.renderViewport);
@@ -88,7 +76,7 @@ export class DerivedProjectionParameters<
       }
       globalPosition.set(newGlobalPosition);
       update(oldValue_, navigationState);
-      if (isEqual(oldValue_, value_)) return;
+      if (projectionParametersEqual(oldValue_, value_)) return;
       this.value_ = oldValue_;
       this.oldValue_ = value_;
       this.changed.dispatch(value_, oldValue_);
@@ -119,12 +107,10 @@ export class DerivedProjectionParameters<
  * `backend.ts`), at most every `updateInterval` milliseconds.
  */
 @registerSharedObjectOwner(PROJECTION_PARAMETERS_RPC_ID)
-export class SharedProjectionParameters<
-  T extends ProjectionParameters = ProjectionParameters,
-> extends SharedObject {
+export class SharedProjectionParameters extends SharedObject {
   constructor(
     rpc: RPC,
-    public base: WatchableValueChangeInterface<T>,
+    public base: WatchableValueChangeInterface<ProjectionParameters>,
     public updateInterval = 10,
   ) {
     super();
@@ -137,7 +123,7 @@ export class SharedProjectionParameters<
   }
 
   private update = this.registerCancellable(
-    debounce((_oldValue: T, newValue: T) => {
+    debounce((_oldValue: ProjectionParameters, newValue: ProjectionParameters) => {
       // Note: Because we are using debounce, we cannot rely on `_oldValue`, since
       // `DerivedProjectionParameters` reuses the objects.  A copy is sent, in case the message is
       // queued until the worker is ready.
@@ -168,28 +154,20 @@ function serializeTransformedSource(
 /**
  * Main-thread side of one cross-section view.  Sends the volume's sources and the projection
  * parameters to its worker counterpart (`SliceViewBackend`), which requests the visible chunks,
- * and draws the chunks that have reached the GPU into `offscreenFramebuffer`.
+ * and draws the chunks that have reached the GPU.
  */
 @registerSharedObjectOwner(SLICEVIEW_RPC_ID)
 export class SliceView extends SliceViewBase<VolumeChunkSource> {
   gl = this.chunkManager.gl;
+  // Dispatched when the view needs to be drawn again.
   viewChanged = new NullarySignal();
-  renderingStale = true;
   // The render layer being drawn, once `renderLayer` has a value.
   layer: ImageRenderLayer | undefined;
   private layerDisposers: Disposer[] = [];
 
-  offscreenFramebuffer = this.registerDisposer(
-    new OffscreenFramebuffer(this.gl),
-  );
+  projectionParameters: Owned<DerivedProjectionParameters>;
 
-  projectionParameters: Owned<
-    DerivedProjectionParameters<SliceViewProjectionParameters>
-  >;
-
-  sharedProjectionParameters: Owned<
-    SharedProjectionParameters<SliceViewProjectionParameters>
-  >;
+  sharedProjectionParameters: Owned<SharedProjectionParameters>;
 
   flushBackendProjectionParameters() {
     this.sharedProjectionParameters.flush();
@@ -202,45 +180,43 @@ export class SliceView extends SliceViewBase<VolumeChunkSource> {
     public navigationState: Owned<NavigationState>,
   ) {
     super(
-      new DerivedProjectionParameters({
-        parametersConstructor: SliceViewProjectionParameters,
-        navigationState,
-        update: (out, navigationState) => {
-          const { invViewMatrix, centerDataPosition } = out;
-          navigationState.toMat4(invViewMatrix);
-          for (let i = 0; i < 3; ++i) {
-            centerDataPosition[i] = invViewMatrix[12 + i];
-          }
-          const {
-            logicalWidth,
-            logicalHeight,
-            projectionMat,
-            viewportNormalInGlobalCoordinates,
-          } = out;
-          const relativeDepthRange = 10;
-          mat4.ortho(
-            projectionMat,
-            -logicalWidth / 2,
-            logicalWidth / 2,
-            logicalHeight / 2,
-            -logicalHeight / 2,
-            -relativeDepthRange,
-            relativeDepthRange,
-          );
-          updateProjectionParametersFromInverseViewAndProjection(out);
-          const { viewMatrix } = out;
-          for (let i = 0; i < 3; ++i) {
-            viewportNormalInGlobalCoordinates[i] = viewMatrix[i * 4 + 2];
-          }
-          // Size of a screen pixel, in voxels: the length of a view axis in voxel coordinates.
-          // `filterVisibleSources` compares it with the voxel size of each scale to choose the
-          // scales to draw and to load.
-          let pixelSize = 0;
-          for (let i = 0; i < 3; ++i) {
-            pixelSize += invViewMatrix[i] ** 2;
-          }
-          out.pixelSize = Math.sqrt(pixelSize);
-        },
+      new DerivedProjectionParameters(navigationState, (out, navigationState) => {
+        const { invViewMatrix, centerDataPosition } = out;
+        navigationState.toMat4(invViewMatrix);
+        for (let i = 0; i < 3; ++i) {
+          centerDataPosition[i] = invViewMatrix[12 + i];
+        }
+        const {
+          width,
+          height,
+          projectionMat,
+          viewMatrix,
+          viewProjectionMat,
+          viewportNormalInGlobalCoordinates,
+        } = out;
+        const relativeDepthRange = 10;
+        mat4.ortho(
+          projectionMat,
+          -width / 2,
+          width / 2,
+          height / 2,
+          -height / 2,
+          -relativeDepthRange,
+          relativeDepthRange,
+        );
+        mat4.invert(viewMatrix, invViewMatrix);
+        mat4.multiply(viewProjectionMat, projectionMat, viewMatrix);
+        for (let i = 0; i < 3; ++i) {
+          viewportNormalInGlobalCoordinates[i] = viewMatrix[i * 4 + 2];
+        }
+        // Size of a screen pixel, in voxels: the length of a view axis in voxel coordinates.
+        // `filterVisibleSources` compares it with the voxel size of each scale to choose the
+        // scales to draw and to load.
+        let pixelSize = 0;
+        for (let i = 0; i < 3; ++i) {
+          pixelSize += invViewMatrix[i] ** 2;
+        }
+        out.pixelSize = Math.sqrt(pixelSize);
       }),
     );
     const rpc = this.chunkManager.rpc!;
@@ -258,9 +234,6 @@ export class SliceView extends SliceViewBase<VolumeChunkSource> {
       }),
     );
 
-    this.viewChanged.add(() => {
-      this.renderingStale = true;
-    });
     this.registerDisposer(
       chunkManager.chunkQueueManager.visibleChunksChanged.add(
         this.viewChanged.dispatch,
@@ -345,41 +318,32 @@ export class SliceView extends SliceViewBase<VolumeChunkSource> {
     return this.navigationState.valid;
   }
 
-  updateRendering() {
+  // Draws the slice into the current viewport, which the panel has set to its part of the canvas.
+  draw() {
     const projectionParameters = this.projectionParameters.value;
     const { width, height } = projectionParameters;
-    if (!this.renderingStale || !this.valid || width === 0 || height === 0) {
+    if (width === 0 || height === 0) {
       return;
     }
-    this.renderingStale = false;
     this.updateLayer.flush();
     this.updateVisibleSources();
 
-    const { gl, offscreenFramebuffer } = this;
-
-    offscreenFramebuffer.bind(width, height);
-    gl.disable(gl.SCISSOR_TEST);
-
-    gl.clearColor(0, 0, 0, 0);
-    gl.colorMask(true, true, true, true);
+    const { gl } = this;
+    // Pixels where no chunk is drawn are gray.
+    gl.clearColor(0.5, 0.5, 0.5, 1);
     gl.clear(WebGL2RenderingContext.COLOR_BUFFER_BIT);
-    const renderContext = {
-      sliceView: this,
-      projectionParameters,
-    };
-    // The viewer has a single render layer, so nothing is blended over another layer.
     const { layer } = this;
     if (layer !== undefined) {
+      // The depth buffer keeps coarser scales from being drawn over finer ones (see
+      // `renderlayer.ts`).
       gl.enable(WebGL2RenderingContext.DEPTH_TEST);
       gl.depthFunc(WebGL2RenderingContext.LESS);
       gl.clearDepth(1);
       gl.clear(WebGL2RenderingContext.DEPTH_BUFFER_BIT);
       gl.disable(WebGL2RenderingContext.BLEND);
-      layer.draw(renderContext);
+      layer.draw({ sliceView: this, projectionParameters });
     }
-    gl.disable(WebGL2RenderingContext.BLEND);
     gl.disable(WebGL2RenderingContext.DEPTH_TEST);
-    offscreenFramebuffer.unbind();
   }
 }
 

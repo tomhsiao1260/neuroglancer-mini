@@ -1,6 +1,6 @@
 # Neuroglancer Mini
 
-This is a trimmed-down version of the original Neuroglancer source code, designed to make its core logic more accessible and easier to understand. This is not a new implementation, but rather a carefully curated subset of the original codebase (~115,510 lines) that has been reduced to about 7,550 lines by retaining only the minimal core functionality needed for the program to run, reducing npm dependencies, and simplifying the build process. This lightweight version serves as a learning demo, allowing developers to grasp the core concepts and architecture of Neuroglancer without being overwhelmed by the complexity of the original implementation.
+This is a trimmed-down version of the original Neuroglancer source code, designed to make its core logic more accessible and easier to understand. This is not a new implementation, but rather a carefully curated subset of the original codebase (~115,510 lines) that has been reduced to about 7,250 lines by retaining only the minimal core functionality needed for the program to run, reducing npm dependencies, and simplifying the build process. This lightweight version serves as a learning demo, allowing developers to grasp the core concepts and architecture of Neuroglancer without being overwhelmed by the complexity of the original implementation.
 
 <img width="1193" alt="img2" src="https://github.com/user-attachments/assets/c69a9014-3250-4d05-8350-abb96975b64c" />
 
@@ -107,7 +107,7 @@ The code is split between two threads. The **main thread** owns the WebGL canvas
 4. **Queueing** (`viewer/src/chunk_manager/backend.ts`): chunks are ordered by tier and priority. The highest-priority chunks are downloaded while capacity allows, and lower-priority chunks are evicted to make room.
 5. **Downloading** (`viewer/src/datasource/zarr/backend.ts`, `decode.ts`): the worker reads the chunk file from the store and decodes it. A missing file is reported to the main thread (`onMissingChunk`).
 6. **Upload** (`viewer/src/chunk_manager/frontend.ts`, `viewer/src/render/frontend.ts`): the chunk data is transferred to the main thread in a `Chunk.update` message. The main thread applies these updates in 30 ms time slices and uploads each chunk to a texture.
-7. **Drawing** (`viewer/src/render/panel.ts`, `viewer/src/render/renderlayer.ts`): on each animation frame, every view renders its slice into an offscreen texture and then draws that texture into its part of the canvas. Only chunks already on the GPU are drawn, and finer scales are drawn over coarser ones.
+7. **Drawing** (`viewer/src/render/panel.ts`, `viewer/src/render/renderlayer.ts`): on each animation frame, every view draws its slice into its part of the canvas. Only chunks already on the GPU are drawn, and finer scales are drawn over coarser ones.
 
 ### Files
 
@@ -130,7 +130,7 @@ The code is split between two threads. The **main thread** owns the WebGL canvas
 #### `viewer/src/render/`: cross-section views
 
 - `base.ts` (main thread and worker): `ProjectionParameters` (a view's viewport plus view and projection matrices), `ChunkLayout` (the chunk grid in view coordinates), `VolumeChunkSpecification` (a scale's chunk grid and data type), `SliceViewBase` (a view's scales and the scales it shows), `filterVisibleSources` (which scales to draw and load for the current pixel size) and `forEachPlaneIntersectingVolumetricChunk` (which chunks the plane cuts through).
-- `frontend.ts` (main thread): `SliceView` sends its layer and projection to the worker and draws the visible GPU chunks into an offscreen framebuffer. `DerivedProjectionParameters` recomputes a view's projection from its navigation state and viewport, and `SharedProjectionParameters` sends it to the worker. `getVolumetricTransformedSources` places each scale's chunk grid in the view. `VolumeChunkSource` and `VolumeChunk` upload chunk data to textures and free them again.
+- `frontend.ts` (main thread): `SliceView` sends its layer and projection to the worker and draws the visible GPU chunks. `DerivedProjectionParameters` recomputes a view's projection from its navigation state and viewport, and `SharedProjectionParameters` sends it to the worker. `getVolumetricTransformedSources` places each scale's chunk grid in the view. `VolumeChunkSource` and `VolumeChunk` upload chunk data to textures and free them again.
 - `backend.ts` (worker): `SliceViewBackend` requests the visible chunks, using the projection received by `SharedProjectionParametersBackend`. The worker-side `VolumeChunkSource` keeps a scale's chunks by grid position, and `VolumeChunk` holds downloaded data until it is sent to the main thread.
 - `chunk_format.ts`: how a chunk is stored as a texture (one texel per voxel) and read in the fragment shader. Missing chunks share one texture filled with 0.
 - `renderlayer.ts`: `ImageRenderLayer`. For each chunk it draws the polygon where the plane cuts the chunk's box (computed in the vertex shader) and maps the data value to gray.
@@ -170,9 +170,8 @@ The code is split between two threads. The **main thread** owns the WebGL canvas
 - `context.ts`: WebGL2 context setup and `gl.memoize` for shared GPU objects.
 - `shader.ts`: `ShaderBuilder` and `ShaderProgram`.
 - `shader_lib.ts`: GLSL types for each voxel data type.
-- `texture.ts`: texture parameters and resizing.
+- `texture.ts`: texture parameters.
 - `buffer.ts`: vertex buffer.
-- `offscreen.ts`: `OffscreenFramebuffer` (color and depth textures).
 - `vertex_id.ts`: dummy vertex attribute needed by Firefox.
 
 #### `viewer/src/util/`
