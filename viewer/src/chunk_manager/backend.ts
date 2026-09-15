@@ -259,13 +259,14 @@ export interface ChunkSource {
   /**
    * Begin downloading the specified the chunk.  The returned promise should resolve when the
    * downloaded data has been successfully decoded and stored in the chunk, or rejected if the
-   * download or decoding fails.
+   * download or decoding fails, which puts the chunk in the FAILED state.
    *
    * Note: This method must be defined by subclasses.
    *
    * @param chunk Chunk to download.
-   * @param abortSignal Aborted when the chunk is evicted while downloading; the download/decoding
-   * should then stop if possible.
+   * @param abortSignal Aborted when the chunk is evicted while downloading.  The download should then
+   * stop, and must not modify `chunk` any more: the chunk object may already be reused for another
+   * chunk.
    */
   download(chunk: Chunk, abortSignal: AbortSignal): Promise<void>;
 }

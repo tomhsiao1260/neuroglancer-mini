@@ -1,6 +1,6 @@
 # Neuroglancer Mini
 
-This is a trimmed-down version of the original Neuroglancer source code, designed to make its core logic more accessible and easier to understand. This is not a new implementation, but rather a carefully curated subset of the original codebase (~115,510 lines) that has been reduced to about 6,950 lines by retaining only the minimal core functionality needed for the program to run, reducing npm dependencies, and simplifying the build process. This lightweight version serves as a learning demo, allowing developers to grasp the core concepts and architecture of Neuroglancer without being overwhelmed by the complexity of the original implementation.
+This is a trimmed-down version of the original Neuroglancer source code, designed to make its core logic more accessible and easier to understand. This is not a new implementation, but rather a carefully curated subset of the original codebase (~115,510 lines) that has been reduced to about 7,000 lines by retaining only the minimal core functionality needed for the program to run, reducing npm dependencies, and simplifying the build process. This lightweight version serves as a learning demo, allowing developers to grasp the core concepts and architecture of Neuroglancer without being overwhelmed by the complexity of the original implementation.
 
 <img width="1193" alt="img2" src="https://github.com/user-attachments/assets/c69a9014-3250-4d05-8350-abb96975b64c" />
 
@@ -105,7 +105,7 @@ The code is split between two threads. The **main thread** owns the WebGL canvas
 2. **Loading the volume** (`viewer/src/viewer.ts`, `viewer/src/datasource/zarr/frontend.ts`): the viewer reads the metadata of every scale, creates one chunk source per scale, sets the coordinate spaces from the volume bounds and creates the render layer.
 3. **Choosing chunks** (`viewer/src/render/backend.ts`): for each view, the worker picks the scales that match the current zoom. It then finds the chunks the cross-section plane cuts through and requests them as `VISIBLE`: finer scales first, and within a scale the chunks closest to the center of the view. Chunks outside the plane are not requested ahead of time.
 4. **Queueing** (`viewer/src/chunk_manager/backend.ts`): chunks are ordered by tier and priority. The highest-priority chunks are downloaded while capacity allows, and lower-priority chunks are evicted to make room.
-5. **Downloading** (`viewer/src/datasource/zarr/backend.ts`, `decode.ts`): the worker reads the chunk file from the store and decodes it. A missing file is reported to the main thread (`onMissingChunk`).
+5. **Downloading** (`viewer/src/datasource/zarr/backend.ts`, `decode.ts`): the worker reads the chunk file from the store and decodes it. A missing file is reported to the main thread (`onMissingChunk`) and the chunk is shown as 0. HTTP requests answered with 429, 503 or 504 are retried after increasing delays; any other failure makes the chunk `FAILED`, so it is not drawn and coarser scales show through. When the chunk manager cancels a download to make room for more important chunks, the request is aborted and the chunk is left untouched.
 6. **Upload** (`viewer/src/chunk_manager/frontend.ts`, `viewer/src/render/frontend.ts`): the chunk data is transferred to the main thread in a `Chunk.update` message. The main thread applies these updates in 30 ms time slices and uploads each chunk to a texture.
 7. **Drawing** (`viewer/src/render/panel.ts`, `viewer/src/render/renderlayer.ts`): on each animation frame, every view draws its slice into its part of the canvas. Only chunks already on the GPU are drawn, and finer scales are drawn over coarser ones.
 
@@ -148,9 +148,9 @@ The code is split between two threads. The **main thread** owns the WebGL canvas
 - `ome.ts`: parses the OME `multiscales` metadata in `.zattrs` (scales, coordinate transforms, units).
 - `metadata.ts`: parses `.zarray` (shape, chunk shape, data type, compressor, dimension separator).
 - `frontend.ts`: `loadZarrVolume` and `MultiscaleVolumeChunkSource`, which creates one chunk source per scale and maps zarr's (z, y, x) axis order to chunk order.
-- `backend.ts` (worker): `ZarrVolumeChunkSource.download` reads one chunk file and decodes it.
+- `backend.ts` (worker): `ZarrVolumeChunkSource.download` reads one chunk file and decodes it, and stops without touching the chunk once its download is cancelled.
 - `decode.ts`: blosc or raw decoding and size check.
-- `store.ts`: `ZarrStore`, where the store's files are read from: `HttpStore` (any HTTP server) or `DirectoryStore` (a local folder through the File System Access API). A `ZarrStoreSpec` describes the store so that the worker can create its own.
+- `store.ts`: `ZarrStore`, where the store's files are read from: `HttpStore` (any HTTP server; retries 429, 503 and 504 responses) or `DirectoryStore` (a local folder through the File System Access API). A `ZarrStoreSpec` describes the store so that the worker can create its own.
 - `base.ts`: chunk source parameters sent to the worker (store, path of the scale's array, and metadata).
 
 #### `viewer/src/worker/`: threads

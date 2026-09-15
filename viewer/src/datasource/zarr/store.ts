@@ -15,9 +15,9 @@
 export interface ZarrStore {
   /**
    * Returns the contents of the file at `key`, or `undefined` if there is no such file.  Other
-   * failures, such as network errors, reject.
+   * failures, such as network errors, reject.  Once `signal` is aborted, rejects with its reason.
    */
-  get(key: string): Promise<Uint8Array | undefined>;
+  get(key: string, signal?: AbortSignal): Promise<Uint8Array | undefined>;
 }
 
 export type ZarrStoreSpec =
@@ -26,47 +26,89 @@ export type ZarrStoreSpec =
   // Files in a local folder picked with the File System Access API.
   | { kind: "directory"; handle: FileSystemDirectoryHandle };
 
+// Requests answered with 429 (too many requests), 503 (service unavailable) or 504 (gateway timeout)
+// are retried, up to `MAX_ATTEMPTS` attempts in all, after a random delay that doubles with each
+// attempt: 0.5-1 s, 1-2 s, 2-4 s, ..., at most 5-10 s.
+const MAX_ATTEMPTS = 32;
+const MIN_DELAY_MS = 500;
+const MAX_DELAY_MS = 10000;
+
+function pickDelay(attempt: number) {
+  return Math.min(2 ** attempt * MIN_DELAY_MS, MAX_DELAY_MS / 2) * (1 + Math.random());
+}
+
+// Resolves after `ms` milliseconds, or rejects as soon as `signal` is aborted.
+function sleep(ms: number, signal: AbortSignal | undefined) {
+  return new Promise<void>((resolve, reject) => {
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(signal!.reason);
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
 export class HttpStore implements ZarrStore {
   // `url` is the URL of the store's root, without a trailing slash.
   constructor(public url: string) {}
 
-  async get(key: string) {
+  async get(key: string, signal?: AbortSignal) {
     const url = `${this.url}/${key}`;
-    let response: Response;
-    try {
-      response = await fetch(url);
-    } catch {
-      // The browser reports a response blocked by CORS the same way as a network error.
-      throw new Error(
-        `Could not fetch ${url}: network error, or the server does not allow ` +
-          `cross-origin requests (no Access-Control-Allow-Origin header)`,
-      );
+    for (let attempt = 1; ; ++attempt) {
+      signal?.throwIfAborted();
+      let response: Response;
+      try {
+        // Aborting `signal` also aborts reading the body below.
+        response = await fetch(url, { signal });
+      } catch {
+        signal?.throwIfAborted();
+        // The browser reports a response blocked by CORS the same way as a network error.
+        throw new Error(
+          `Could not fetch ${url}: network error, or the server does not allow ` +
+            `cross-origin requests (no Access-Control-Allow-Origin header)`,
+        );
+      }
+      const { status } = response;
+      // S3 answers 403 rather than 404 for a missing file.
+      if (status === 404 || status === 403) return undefined;
+      if (
+        (status === 429 || status === 503 || status === 504) &&
+        attempt < MAX_ATTEMPTS
+      ) {
+        await sleep(pickDelay(attempt - 1), signal);
+        continue;
+      }
+      if (!response.ok) {
+        throw new Error(
+          `Fetching ${url} failed: ${status} ${response.statusText}`,
+        );
+      }
+      return new Uint8Array(await response.arrayBuffer());
     }
-    // S3 answers 403 rather than 404 for a missing file.
-    if (response.status === 404 || response.status === 403) return undefined;
-    if (!response.ok) {
-      throw new Error(
-        `Fetching ${url} failed: ${response.status} ${response.statusText}`,
-      );
-    }
-    return new Uint8Array(await response.arrayBuffer());
   }
 }
 
 export class DirectoryStore implements ZarrStore {
   constructor(public handle: FileSystemDirectoryHandle) {}
 
-  async get(key: string) {
+  // Reading a local file cannot be interrupted, so `signal` is checked between the steps.
+  async get(key: string, signal?: AbortSignal) {
     const parts = key.split("/");
     const fileName = parts.pop()!;
+    let file: File;
     try {
       let directory = this.handle;
       for (const part of parts) {
         directory = await directory.getDirectoryHandle(part);
+        signal?.throwIfAborted();
       }
       const fileHandle = await directory.getFileHandle(fileName);
-      const file = await fileHandle.getFile();
-      return new Uint8Array(await file.arrayBuffer());
+      signal?.throwIfAborted();
+      file = await fileHandle.getFile();
     } catch (e) {
       // `TypeMismatchError`: a path component is a file where a folder is expected, or vice versa.
       if (
@@ -77,6 +119,10 @@ export class DirectoryStore implements ZarrStore {
       }
       throw e;
     }
+    signal?.throwIfAborted();
+    const data = new Uint8Array(await file.arrayBuffer());
+    signal?.throwIfAborted();
+    return data;
   }
 }
 
