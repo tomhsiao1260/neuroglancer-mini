@@ -1,10 +1,10 @@
 /** @license Copyright 2016 Google Inc. SPDX-License-Identifier: Apache-2.0 */
 
+import type { ChunkManager } from "#src/chunk_manager/backend.js";
 import {
   Chunk,
   ChunkSource,
   getNextMarkGeneration,
-  withChunkManager,
 } from "#src/chunk_manager/backend.js";
 import { ChunkPriorityTier } from "#src/chunk_manager/base.js";
 import type { SharedWatchableValue } from "#src/worker/shared_watchable_value.js";
@@ -72,23 +72,28 @@ const tempChunkPosition = vec3.create();
 const tempCenter = vec3.create();
 const tempChunkSize = vec3.create();
 
-class SliceViewCounterpartBase extends SliceViewBase<VolumeChunkSource> {
-  constructor(rpc: RPC, options: any) {
-    super(rpc.get(options.projectionParameters));
-    this.initializeSharedObject(rpc, options.id);
-  }
-}
-
-const SliceViewIntermediateBase = withChunkManager(SliceViewCounterpartBase);
 @registerSharedObject(SLICEVIEW_RPC_ID)
-export class SliceViewBackend extends SliceViewIntermediateBase {
+export class SliceViewBackend extends SliceViewBase<VolumeChunkSource> {
+  // The chunk manager the view requests its chunks from.  No reference is added, because the main
+  // thread's view holds one.
+  chunkManager: ChunkManager;
   // The render layer whose sources are shown, once the main thread has sent it.
   layer: SliceViewRenderLayerBackend | undefined;
   // Estimates how the view position moves, to prefetch the chunks it is heading towards.
   velocityEstimator = new VelocityEstimator();
+  // How much this view's chunks are worth loading (see `render/panel.ts`).
+  visibility: SharedWatchableValue<number>;
 
   constructor(rpc: RPC, options: any) {
-    super(rpc, options);
+    super(rpc.get(options.projectionParameters));
+    this.initializeSharedObject(rpc, options.id);
+    this.chunkManager = rpc.get(options.chunkManager);
+    this.visibility = rpc.get(options.visibility);
+    this.registerDisposer(
+      this.visibility.changed.add(() => {
+        this.chunkManager.scheduleUpdateChunkPriorities();
+      }),
+    );
     this.registerDisposer(
       this.chunkManager.recomputeChunkPriorities.add(() => {
         this.updateVisibleChunks();
@@ -122,13 +127,24 @@ export class SliceViewBackend extends SliceViewIntermediateBase {
     if (globalPosition.length === 0 || width === 0 || height === 0) {
       return;
     }
+    // A view that is neither on screen nor near it requests nothing; one that is only near the
+    // screen loads its chunks at the PREFETCH tier, so that it is ready once it is scrolled into
+    // view but gives way to the views that are being looked at.
+    const visibility = this.visibility.value;
+    if (visibility === Number.NEGATIVE_INFINITY) {
+      return;
+    }
+    const priorityTier =
+      visibility === Number.POSITIVE_INFINITY
+        ? ChunkPriorityTier.VISIBLE
+        : ChunkPriorityTier.PREFETCH;
     const chunkManager = this.chunkManager;
     this.updateVisibleSources();
     const { centerDataPosition } = projectionParameters;
-    // Requests every chunk the cross-section plane cuts through as VISIBLE, and the chunks next to
-    // them that the view is likely to reach soon, judging by how its position has been moving, as
-    // PREFETCH.  Within a tier, coarser scales (listed later) get higher priority, so that something
-    // is shown quickly, and within a scale chunks closer to the center of the view come first.
+    // Requests every chunk the cross-section plane cuts through, and the chunks next to them that
+    // the view is likely to reach soon, judging by how its position has been moving, as PREFETCH.
+    // Within a tier, coarser scales (listed later) get higher priority, so that something is shown
+    // quickly, and within a scale chunks closer to the center of the view come first.
     const basePriority = BASE_PRIORITY;
 
     const localCenter = tempCenter;
@@ -163,7 +179,7 @@ export class SliceViewBackend extends SliceViewIntermediateBase {
           const chunk = tsource.source.getChunk(curPositionInChunks);
           chunkManager.requestChunk(
             chunk,
-            ChunkPriorityTier.VISIBLE,
+            priorityTier,
             sourceBasePriority + priority,
           );
           curVisibleChunks.push(chunk);
@@ -275,8 +291,8 @@ registerRPC(SLICEVIEW_SET_LAYER_RPC_ID, function (x) {
 export class VolumeChunk extends Chunk {
   source: VolumeChunkSource | null = null;
   // Position of the chunk in the chunk grid.
-  chunkGridPosition: Float32Array;
-  data: ArrayBufferView | null;
+  chunkGridPosition!: Float32Array;
+  data!: ArrayBufferView | null;
 
   initializeVolumeChunk(key: string, chunkGridPosition: Float32Array) {
     super.initialize(key);
@@ -315,7 +331,7 @@ export class VolumeChunk extends Chunk {
  */
 export class VolumeChunkSource extends ChunkSource {
   spec: VolumeChunkSpecification;
-  chunks: Map<string, VolumeChunk>;
+  chunks!: Map<string, VolumeChunk>;
 
   constructor(rpc: RPC, options: any) {
     super(rpc, options);
@@ -336,7 +352,7 @@ export class VolumeChunkSource extends ChunkSource {
 
 @registerSharedObject(SLICEVIEW_RENDERLAYER_RPC_ID)
 export class SliceViewRenderLayerBackend extends SharedObjectCounterpart {
-  rpcId: number;
+  rpcId!: number;
   renderScaleTarget: SharedWatchableValue<number>;
 
   constructor(rpc: RPC, options: any) {

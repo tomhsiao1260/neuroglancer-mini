@@ -114,8 +114,8 @@ export class SharedObject extends RefCounted {
   rpc: RPC | null = null;
   rpcId: RpcId | null = null;
   isOwner: boolean | undefined;
-  unreferencedGeneration: number;
-  referencedGeneration: number;
+  unreferencedGeneration!: number;
+  referencedGeneration!: number;
 
   initializeSharedObject(rpc: RPC, rpcId = rpc.newId()) {
     this.rpc = rpc;
@@ -180,21 +180,13 @@ export class SharedObject extends RefCounted {
   declare RPC_TYPE_ID: string;
 }
 
-export function initializeSharedObjectCounterpart(
-  obj: SharedObject,
-  rpc?: RPC,
-  options: any = {},
-) {
-  if (rpc != null) {
-    obj.initializeSharedObject(rpc, options.id);
-  }
-}
-
 // A shared object that is always a counterpart, never an owner.
 export class SharedObjectCounterpart extends SharedObject {
   constructor(rpc?: RPC, options: any = {}) {
     super();
-    initializeSharedObjectCounterpart(this, rpc, options);
+    if (rpc != null) {
+      this.initializeSharedObject(rpc, options.id);
+    }
   }
 }
 

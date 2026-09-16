@@ -223,13 +223,18 @@ ${this.shaderType} getDataValue() {
 
 /**
  * A chunk missing from the store arrives with no data.  All such chunks share this single-voxel
- * texture holding 0, so a sparse volume does not allocate a texture per chunk.
+ * texture holding the array's fill value, so a sparse volume does not allocate a texture per chunk.
  */
 export class FillValueTexture extends RefCounted {
   texture: WebGLTexture | null;
   textureLayout: TextureLayout;
 
-  constructor(gl: GL, chunkFormat: ChunkFormat, rank: number) {
+  constructor(
+    gl: GL,
+    chunkFormat: ChunkFormat,
+    rank: number,
+    fillValue: number,
+  ) {
     super();
     const chunkSizeInVoxels = new Uint32Array(rank);
     chunkSizeInVoxels.fill(1);
@@ -243,15 +248,20 @@ export class FillValueTexture extends RefCounted {
     chunkFormat.setTextureData(
       gl,
       textureLayout,
-      new chunkFormat.textureFormat.arrayConstructor(1),
+      chunkFormat.textureFormat.arrayConstructor.of(fillValue),
     );
     gl.bindTexture(WebGL.TEXTURE_3D, null);
   }
 
-  static get(gl: GL, chunkFormat: ChunkFormat, rank: number) {
+  static get(
+    gl: GL,
+    chunkFormat: ChunkFormat,
+    rank: number,
+    fillValue: number,
+  ) {
     return gl.memoize.get(
-      `sliceview.FillValueTexture:${rank}:${chunkFormat.dataType}`,
-      () => new FillValueTexture(gl, chunkFormat, rank),
+      `sliceview.FillValueTexture:${rank}:${chunkFormat.dataType}:${fillValue}`,
+      () => new FillValueTexture(gl, chunkFormat, rank, fillValue),
     );
   }
 }

@@ -23,7 +23,7 @@ export function invokeDisposers(disposers: Disposer[]) {
 export class RefCounted implements Disposable {
   public refCount = 1;
   wasDisposed: boolean | undefined;
-  private disposers: Disposer[];
+  private disposers!: Disposer[];
   addRef() {
     ++this.refCount;
     return this;

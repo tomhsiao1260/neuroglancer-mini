@@ -20,7 +20,7 @@ export class SharedWatchableValue<T>
   extends SharedObjectCounterpart
   implements WatchableValueInterface<T>
 {
-  base: WatchableValueInterface<T>;
+  base!: WatchableValueInterface<T>;
 
   /**
    * The value is being updated to reflect a remote change.

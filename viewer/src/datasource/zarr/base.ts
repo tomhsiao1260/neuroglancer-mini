@@ -5,10 +5,10 @@ import type { ZarrStoreSpec } from "#src/datasource/zarr/store.js";
 
 export class VolumeChunkSourceParameters {
   // The store holding the volume.
-  store: ZarrStoreSpec;
+  store!: ZarrStoreSpec;
   // Path of this scale's array within the store, e.g. `0`.
-  path: string;
-  metadata: ArrayMetadata;
+  path!: string;
+  metadata!: ArrayMetadata;
   static RPC_ID = "zarr/VolumeChunkSource";
 }
 

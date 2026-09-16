@@ -4,7 +4,9 @@ import type { ChunkManager } from "#src/chunk_manager/frontend.js";
 import { RenderViewport } from "#src/render/base.js";
 import { SliceView } from "#src/render/frontend.js";
 import type { ImageRenderLayer } from "#src/render/renderlayer.js";
+import type { NavigationState } from "#src/state/navigation_state.js";
 import type { WatchableValueInterface } from "#src/state/trackable_value.js";
+import { WatchableValue } from "#src/state/trackable_value.js";
 import { animationFrameDebounce } from "#src/util/animation_frame_debounce.js";
 import { RefCounted } from "#src/util/disposable.js";
 import { mat4, vec3 } from "#src/util/geom.js";
@@ -84,6 +86,7 @@ export class DisplayContext extends RefCounted {
     gl.clearColor(0.0, 0.0, 0.0, 0.0);
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
     for (const panel of this.panels) {
+      if (panel.visibility.value === Number.NEGATIVE_INFINITY) continue;
       panel.ensureBoundsUpdated();
       const { renderViewport } = panel;
       if (renderViewport.width === 0 || renderViewport.height === 0) continue;
@@ -107,6 +110,8 @@ export interface SliceViewerState {
 }
 
 const tempVec3 = vec3.create();
+const tempMat4 = mat4.create();
+const tempOffset = new Float32Array(2);
 
 function hasNoModifiers(event: MouseEvent) {
   return !event.ctrlKey && !event.altKey && !event.metaKey && !event.shiftKey;
@@ -115,6 +120,9 @@ function hasNoModifiers(event: MouseEvent) {
 function hasOnlyControl(event: MouseEvent) {
   return event.ctrlKey && !event.altKey && !event.metaKey && !event.shiftKey;
 }
+
+// How far outside the container a panel still counts as about to be seen (see `visibility`).
+const NEAR_SCREEN_MARGIN = "200px";
 
 // Zoom factor for one wheel event: e^(deltaY / 200) when the delta is in pixels.
 function getWheelZoomAmount(event: WheelEvent) {
@@ -155,11 +163,22 @@ export class SliceViewPanel extends RefCounted {
 
   renderViewport = new RenderViewport();
 
+  /**
+   * How much this panel's chunks are worth loading: `POSITIVE_INFINITY` while the panel is on
+   * screen, `0` while it is only near its container (scrolled just out of a board of views, say),
+   * and `NEGATIVE_INFINITY` once it is neither, in which case it is not drawn and its chunks are
+   * not requested at all (see `render/backend.ts`).  Panels start out visible, so that the first
+   * frame is not delayed by waiting for the observers below.
+   */
+  visibility = new WatchableValue(Number.POSITIVE_INFINITY);
+  private onScreen = true;
+  private nearScreen = true;
+
   sliceView: SliceView;
 
   constructor(
     public element: HTMLElement,
-    public navigationState: any,
+    public navigationState: NavigationState,
     public viewer: SliceViewerState,
   ) {
     super();
@@ -167,8 +186,36 @@ export class SliceViewPanel extends RefCounted {
     display.addPanel(this);
     this.registerDisposer(() => display.removePanel(this));
 
+    const updateVisibility = () => {
+      this.visibility.value = this.onScreen
+        ? Number.POSITIVE_INFINITY
+        : this.nearScreen
+          ? 0
+          : Number.NEGATIVE_INFINITY;
+    };
+    const observe = (
+      options: IntersectionObserverInit,
+      set: (intersecting: boolean) => void,
+    ) => {
+      const observer = new IntersectionObserver((entries) => {
+        set(entries[entries.length - 1].isIntersecting);
+        updateVisibility();
+      }, options);
+      observer.observe(element);
+      this.registerDisposer(() => observer.disconnect());
+    };
+    // Whether the panel is on screen at all, and whether it is at least close to its place in the
+    // container.  The second observer measures against the container rather than the window,
+    // because a container that clips (a scrolling board of views) hides the panel from the window
+    // long before it is far away.
+    observe({}, (intersecting) => (this.onScreen = intersecting));
+    observe(
+      { root: display.container, rootMargin: NEAR_SCREEN_MARGIN },
+      (intersecting) => (this.nearScreen = intersecting),
+    );
+
     this.sliceView = this.registerDisposer(
-      new SliceView(chunkManager, renderLayer, navigationState),
+      new SliceView(chunkManager, renderLayer, navigationState, this.visibility),
     );
 
     this.registerDisposer(
@@ -287,22 +334,30 @@ export class SliceViewPanel extends RefCounted {
     this.sliceView.projectionParameters.setViewport(this.renderViewport);
   }
 
+  // Position on the page, as an offset in viewport pixels from the center of the panel.
+  private offsetFromCenter(clientX: number, clientY: number) {
+    const { element, renderViewport } = this;
+    const bounds = element.getBoundingClientRect();
+    tempOffset[0] =
+      clientX - (bounds.left + element.clientLeft) - renderViewport.width / 2;
+    tempOffset[1] =
+      clientY - (bounds.top + element.clientTop) - renderViewport.height / 2;
+    return tempOffset;
+  }
+
   /**
    * Returns the point, in the viewer's (z, y, x) coordinates, shown at `clientX`, `clientY` on the
    * page, or `undefined` before the volume has loaded.  Computed from the navigation state rather than
    * the projection parameters, which are updated after a delay.
    */
   pointAt(clientX: number, clientY: number) {
-    const { navigationState, element, renderViewport } = this;
+    const { navigationState } = this;
     if (!navigationState.valid) return undefined;
-    const invViewMatrix = mat4.create();
-    navigationState.toMat4(invViewMatrix);
-    const bounds = element.getBoundingClientRect();
-    const x = clientX - (bounds.left + element.clientLeft) - renderViewport.width / 2;
-    const y = clientY - (bounds.top + element.clientTop) - renderViewport.height / 2;
+    navigationState.toMat4(tempMat4);
+    const [x, y] = this.offsetFromCenter(clientX, clientY);
     const point = new Float32Array(3);
     for (let i = 0; i < 3; ++i) {
-      point[i] = invViewMatrix[i] * x + invViewMatrix[4 + i] * y + invViewMatrix[12 + i];
+      point[i] = tempMat4[i] * x + tempMat4[4 + i] * y + tempMat4[12 + i];
     }
     return point;
   }
@@ -316,14 +371,8 @@ export class SliceViewPanel extends RefCounted {
     if (!navigationState.valid) {
       return;
     }
-    const { element, sliceView } = this;
-    const { width, height, invViewMatrix } =
-      sliceView.projectionParameters.value;
-    const bounds = element.getBoundingClientRect();
-    const mouseX =
-      event.clientX - (bounds.left + element.clientLeft) - width / 2;
-    const mouseY =
-      event.clientY - (bounds.top + element.clientTop) - height / 2;
+    const { invViewMatrix } = this.sliceView.projectionParameters.value;
+    const [mouseX, mouseY] = this.offsetFromCenter(event.clientX, event.clientY);
     // Desired invariance:
     //
     // invViewMatrixLinear * [mouseX, mouseY, 0]^T + [oldX, oldY, oldZ]^T =

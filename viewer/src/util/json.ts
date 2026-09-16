@@ -87,7 +87,7 @@ export function verifyObjectProperty<T>(
   } catch (parseError) {
     throw new Error(
       `Error parsing ${JSON.stringify(propertyName)} property: ${
-        parseError.message
+        (parseError as Error).message
       }`,
     );
   }

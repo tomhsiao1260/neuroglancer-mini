@@ -5,15 +5,12 @@ export interface WritableArrayLike<T> {
   [n: number]: T;
 }
 
-export type TypedArrayConstructor =
-  | typeof Int8Array
-  | typeof Uint8Array
-  | typeof Int16Array
-  | typeof Uint16Array
-  | typeof Int32Array
-  | typeof Uint32Array
-  | typeof Float32Array
-  | typeof Float64Array;
+export interface TypedArrayConstructor {
+  new (length: number): TypedArray;
+  new (buffer: ArrayBufferLike, byteOffset: number, length: number): TypedArray;
+  of(...values: number[]): TypedArray;
+  readonly BYTES_PER_ELEMENT: number;
+}
 
 export type TypedArray =
   | Int8Array

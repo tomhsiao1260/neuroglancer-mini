@@ -1,6 +1,7 @@
 /** @license Copyright 2016 Google Inc. SPDX-License-Identifier: Apache-2.0 */
 
 import { debounce } from "es-toolkit";
+import { ChunkState } from "#src/chunk_manager/base.js";
 import type { ChunkManager } from "#src/chunk_manager/frontend.js";
 import { Chunk, ChunkSource } from "#src/chunk_manager/frontend.js";
 import type { NavigationState } from "#src/state/navigation_state.js";
@@ -37,6 +38,7 @@ import type { Borrowed, Disposer, Owned } from "#src/util/disposable.js";
 import { invokeDisposers, RefCounted } from "#src/util/disposable.js";
 import { mat4, vec3 } from "#src/util/geom.js";
 import { NullarySignal, Signal } from "#src/util/signal.js";
+import { SharedWatchableValue } from "#src/worker/shared_watchable_value.js";
 import { kEmptyFloat32Vec } from "#src/util/vector.js";
 import type { GL } from "#src/webgl/context.js";
 import type { RPC } from "#src/worker/worker_rpc.js";
@@ -166,7 +168,7 @@ export class SliceView extends SliceViewBase<VolumeChunkSource> {
   layer: ImageRenderLayer | undefined;
   private layerDisposers: Disposer[] = [];
 
-  projectionParameters: Owned<DerivedProjectionParameters>;
+  projectionParameters!: Owned<DerivedProjectionParameters>;
 
   sharedProjectionParameters: Owned<SharedProjectionParameters>;
 
@@ -179,6 +181,8 @@ export class SliceView extends SliceViewBase<VolumeChunkSource> {
     // The render layer to draw; `undefined` until the volume has loaded.
     public renderLayer: WatchableValueInterface<ImageRenderLayer | undefined>,
     public navigationState: Owned<NavigationState>,
+    // How much the view's chunks are worth loading (see `render/panel.ts`).
+    visibility: WatchableValueInterface<number>,
   ) {
     super(
       new DerivedProjectionParameters(navigationState, (out, navigationState) => {
@@ -228,6 +232,9 @@ export class SliceView extends SliceViewBase<VolumeChunkSource> {
     this.initializeCounterpart(rpc, {
       chunkManager: chunkManager.rpcId,
       projectionParameters: sharedProjectionParameters.rpcId,
+      visibility: this.registerDisposer(
+        SharedWatchableValue.makeFromExisting(rpc, visibility),
+      ).rpcId,
     });
     this.registerDisposer(
       renderLayer.changed.add(() => {
@@ -317,6 +324,27 @@ export class SliceView extends SliceViewBase<VolumeChunkSource> {
     return this.navigationState.valid;
   }
 
+  /**
+   * Whether every chunk this view would draw is already on the GPU, i.e. the view shows its data
+   * with nothing still loading.  Tests and screenshots poll it instead of waiting a fixed time.  A
+   * chunk whose download failed never becomes ready.
+   */
+  isReady() {
+    const { width, height } = this.projectionParameters.value;
+    if (!this.valid || width === 0 || height === 0) return false;
+    this.updateLayer.flush();
+    this.updateVisibleSources();
+    for (const tsource of this.visibleSources) {
+      const { chunks } = tsource.source;
+      let ready = true;
+      this.forEachVisibleChunk(tsource, (key) => {
+        if (chunks.get(key)?.state !== ChunkState.GPU_MEMORY) ready = false;
+      });
+      if (!ready) return false;
+    }
+    return true;
+  }
+
   // Draws the slice into the current viewport, which the panel has set to its part of the canvas.
   draw() {
     const projectionParameters = this.projectionParameters.value;
@@ -395,7 +423,7 @@ export function getVolumetricTransformedSources(
  * `chunkFormat`.
  */
 export class VolumeChunkSource extends ChunkSource {
-  chunks: Map<string, VolumeChunk>;
+  chunks!: Map<string, VolumeChunk>;
   spec: VolumeChunkSpecification;
   chunkFormat: ChunkFormat;
   // Layout of the texture of each chunk of this source.
@@ -409,11 +437,16 @@ export class VolumeChunkSource extends ChunkSource {
     super(chunkManager, options);
     this.spec = options.spec;
     const { gl } = chunkManager.chunkQueueManager;
-    const { chunkDataSize, dataType } = this.spec;
+    const { chunkDataSize, dataType, fillValue } = this.spec;
     this.chunkFormat = this.registerDisposer(ChunkFormat.get(gl, dataType));
     this.textureLayout = new TextureLayout(gl, chunkDataSize);
     this.fillValueTexture = this.registerDisposer(
-      FillValueTexture.get(gl, this.chunkFormat, chunkDataSize.length),
+      FillValueTexture.get(
+        gl,
+        this.chunkFormat,
+        chunkDataSize.length,
+        fillValue,
+      ),
     );
   }
 
@@ -435,7 +468,7 @@ export class VolumeChunkSource extends ChunkSource {
 // Main-thread copy of a volume chunk: its data lives in a texture while the chunk is in GPU memory.
 // A chunk with no data uses the source's fill value texture instead.
 export class VolumeChunk extends Chunk {
-  source: VolumeChunkSource;
+  source!: VolumeChunkSource;
   // Position of the chunk in the chunk grid.
   chunkGridPosition: vec3;
   data: TypedArray | null;
