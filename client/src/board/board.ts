@@ -9,6 +9,7 @@ import { bindGestures } from "./gestures";
 import { LinkGroup } from "./links";
 import type { Source, VolumeRegistry } from "./sources";
 import { sourceLabel } from "./sources";
+import type { StoredBoard } from "./storage";
 import type { BoardTransform } from "./transform";
 import { cssTransform, toBoard } from "./transform";
 
@@ -31,6 +32,9 @@ export interface BoardOptions {
 export class Board {
   transform: BoardTransform = { x: 0, y: 0, scale: 1 };
   readonly cards: Card[] = [];
+  // Called whenever anything the saved board holds has changed.  Set once the board has been put
+  // back, so that putting it back does not save it again.
+  onChanged: (() => void) | undefined;
   // The card waiting to be linked to the next one clicked, if the user is linking.
   linkFrom: Card | undefined;
   private appliedScale = 1;
@@ -73,12 +77,20 @@ export class Board {
     { x, y }: { x: number; y: number },
     orientation: ViewOrientation = "xy",
     group = new LinkGroup(),
+    rect?: { width: number; height: number },
+    id?: string,
   ) {
     const card = new Card(
       this,
-      { x, y, width: CARD_WIDTH, height: CARD_HEIGHT },
+      {
+        x,
+        y,
+        width: rect?.width ?? CARD_WIDTH,
+        height: rect?.height ?? CARD_HEIGHT,
+      },
       orientation,
       group,
+      id,
     );
     this.cards.push(card);
     this.bringToFront(card);
@@ -202,6 +214,7 @@ export class Board {
 
   // Shows the board at its current pan and zoom.
   applyTransform() {
+    this.reportChanged();
     this.layer.style.transform = cssTransform(this.transform);
     // Panning needs nothing else: each card's slice is drawn in a canvas inside the card, which the
     // transform moves along with it.  Zooming changes how large the cards are on screen, and so how
@@ -219,5 +232,77 @@ export class Board {
 
   reportViewChanged() {
     for (const callback of this.viewChangedListeners) callback();
+    this.reportChanged();
+  }
+
+  // Says that something the saved board holds has changed.
+  reportChanged() {
+    this.onChanged?.();
+  }
+
+  /**
+   * The board as it is saved: the cards, the sets that move together and where each set is looking,
+   * and the board's own pan and zoom.  `rev` is filled in by the store.
+   */
+  serialize(): StoredBoard {
+    const groups = new Map<string, LinkGroup>();
+    for (const card of this.cards) groups.set(card.group.id, card.group);
+    return {
+      version: 1,
+      rev: 0,
+      view: { ...this.transform },
+      groups: [...groups.values()].map((group) => ({
+        id: group.id,
+        hue: group.hue,
+        position: group.navigation?.position ?? null,
+        zoom: group.navigation?.zoom ?? null,
+      })),
+      cards: this.cards.map((card) => ({
+        id: card.id,
+        x: card.rect.x,
+        y: card.rect.y,
+        width: card.rect.width,
+        height: card.rect.height,
+        z: Number(card.element.style.zIndex) || 0,
+        orientation: card.orientation,
+        sourceId: card.source?.id ?? null,
+        groupId: card.group.id,
+      })),
+    };
+  }
+
+  /**
+   * Puts a saved board back: the cards in the order they were stacked, each with the source it
+   * showed, and each set of linked cards where it was looking.  Cards whose source the server no
+   * longer knows ask for one again.
+   */
+  restore(board: StoredBoard, sources: Map<string, Source>) {
+    for (const card of [...this.cards]) this.removeCard(card);
+    this.transform = { ...board.view };
+    this.appliedScale = this.transform.scale;
+    this.applyTransform();
+    const groups = new Map(
+      board.groups.map((group) => [
+        group.id,
+        new LinkGroup(group.id, group.hue),
+      ]),
+    );
+    for (const stored of [...board.cards].sort((a, b) => a.z - b.z)) {
+      const group = groups.get(stored.groupId) ?? new LinkGroup();
+      const card = this.addCard(
+        stored,
+        stored.orientation,
+        group,
+        stored,
+        stored.id,
+      );
+      const source =
+        stored.sourceId === null ? undefined : sources.get(stored.sourceId);
+      if (source !== undefined) card.setSource(source);
+    }
+    for (const stored of board.groups) {
+      groups.get(stored.id)?.restore(stored.position, stored.zoom);
+    }
+    this.showLinks();
   }
 }

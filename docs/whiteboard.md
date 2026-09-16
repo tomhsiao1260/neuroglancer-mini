@@ -39,7 +39,14 @@ Cards can also be linked: the cards of a group share one `NavigationGroup`, so t
 and the group is created from the first volume one of its members shows, which is what the shared
 position is clamped against (`client/src/board/links.ts`).
 
-What is left: the board saved on the server.
+The board itself is kept on the server (`client/src/board/storage.ts`,
+`server/src/utils/board.ts`): the cards, their sources and planes, the linked sets and where each is
+looking, and the board's pan and zoom.
+
+That is everything these notes set out to build.  What the board does not have yet, in no particular
+order: selecting several cards at once, a card's own missing-chunk list and readout, more than one
+board, per-card memory limits, and honouring `devicePixelRatio` so that a zoomed-in card is as sharp
+as the screen allows.
 
 ## What already works
 

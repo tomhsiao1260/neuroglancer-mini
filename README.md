@@ -9,6 +9,7 @@ This branch builds an app on top of Neuroglancer Mini, a trimmed-down version of
 - [A Board of Cards](#a-board-of-cards)
 - [A Source per Card](#a-source-per-card)
 - [Linked Cards](#linked-cards)
+- [The Board Is Kept](#the-board-is-kept)
 - [Coordinate Information](#coordinate-information)
 - [Local First Design](#local-first-design)
 - [Missing Chunks](#missing-chunks)
@@ -33,7 +34,8 @@ larger without showing more data, and they are drawn at the resolution they are 
 | the ⛓ in a card's header | link this card to another, or unlink it |
 | the ✕ in a card's header | remove the card |
 
-Saving the board is the next step (see [docs/whiteboard.md](docs/whiteboard.md)).
+See [docs/whiteboard.md](docs/whiteboard.md) for what the viewer needed for this and what is not
+built yet.
 
 ### A Source per Card
 
@@ -71,6 +73,17 @@ Linking two sets merges them, and the larger set's position wins, so the smaller
 Unlinking a card leaves it exactly where it was. Cards showing different sources may be linked: they
 then show the same voxel coordinates, which lines up only for volumes on the same grid (two scans of
 one scroll, say).
+
+### The Board Is Kept
+
+The board is stored on the server, in `server/db/json/board.json`, a little after every change:
+where the cards are, how large they are, which plane and source each one shows, which of them are
+linked, where each linked set is looking, and the board's own pan and zoom. Opening the page again —
+or opening it in another browser — brings the same board back.
+
+The file is plain JSON and can be read or edited by hand. If two pages have the same board open, the
+one that saves second is told that the board changed elsewhere and stops saving, rather than
+overwriting the other; reloading it picks up the newer board.
 
 ### Coordinate Information
 
@@ -143,6 +156,7 @@ straight from your disk.
   - `src/board/links.ts`: the groups of linked cards, each holding the position and zoom its cards share.
   - `src/board/sources.ts`: the sources on the server, and one volume per source, shared by the cards that name it.
   - `src/board/source_panel.ts`: the form a card shows until it has a source.
+  - `src/board/storage.ts`: reading the board from the server and saving it back after every change.
   - `src/app/position_display.ts`: the coordinate panel in the bottom-right corner.
   - `src/app/missing_chunks.ts`: the `onMissingChunk` handler that lists missing chunks.
   - `src/app/source_form.ts`: the **Default source** form in the header, which writes the server's settings.
@@ -150,8 +164,10 @@ straight from your disk.
   - `vite.config.ts`, `tsconfig.json`, `package.json`: build configuration (output in `build/client/page`) and the `viewer` import, set up as in the backward branch's `example/`.
 - `server/`: local-first zarr stores (Node, Express), on port 3005 of this machine only.
   - `src/routes/data.ts`: `GET /api/data/<sourceId>/<key>` serves a file of that source's store. A file the source's folder does not have is first downloaded from its remote store, if it has one; a file neither has answers 404. `GET /api/data/zarr/<key>` still serves the pair in the settings.
+  - `src/routes/board.ts`: `GET /api/board` reads the board and `PUT /api/board` stores it; a page that saved an older board is answered with 409 and the newer one.
   - `src/routes/sources.ts`: `GET /api/sources` lists the sources and `POST /api/sources` adds one, or returns the existing source for the same pair of paths.
   - `src/routes/settings.ts`: `GET /api/settings` reads the values a new card's form starts with and `POST /api/settings` changes them.
+  - `src/utils/board.ts`: the board in `db/json/board.json`, and the reading of a board the page sent or a person edited.
   - `src/utils/sources.ts`: the sources in `db/json/sources.json`, their ids, where each one's files are kept, and the check that keeps a key inside its folder.
   - `src/utils/download.ts`: downloads one file, at most eight at a time, sharing one download between the cards that ask for the same file and writing it under a name of its own first so that a partly written file is never served.
   - `src/utils/settings.ts`: the defaults in `db/json/settings.json`: `zarr_data_path` and `scroll_url_path`.

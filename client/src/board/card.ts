@@ -20,6 +20,8 @@ export interface CardRect {
 
 export const MIN_CARD_SIZE = 140;
 
+let nextCardId = 0;
+
 const ORIENTATIONS: ViewOrientation[] = ["xy", "xz", "yz"];
 
 export class Card {
@@ -37,9 +39,11 @@ export class Card {
   constructor(
     private board: Board,
     public rect: CardRect,
-    private orientation: ViewOrientation,
+    public orientation: ViewOrientation,
     // The cards this one moves with; a new card is in a group of its own.
     public group: LinkGroup,
+    // Names the card in the saved board.
+    readonly id = `c${nextCardId++}`,
   ) {
     const { element, slice, overlay, orientationSelect } = this;
     element.className = "card";
@@ -100,6 +104,7 @@ export class Card {
     this.name.textContent = this.board.sourceName(source);
     this.name.title = [source.local, source.http].filter((x) => x !== "").join("\n");
     this.showView(this.board.volumes.get(source.id));
+    this.board.reportChanged();
     // A card linked to empty cards hands them its source, so that a new linked set only has to be
     // given one.
     for (const card of this.group.members) {
@@ -116,6 +121,7 @@ export class Card {
     const { source } = this;
     // A view looks through its group's position and zoom, so it is added again for the new group.
     if (source !== undefined) this.showView(this.board.volumes.get(source.id));
+    this.board.reportChanged();
   }
 
   // Shows whether this card is linked, and to how many others.
@@ -146,11 +152,13 @@ export class Card {
     // A view shows one plane for its whole life, but adding it again costs no downloads.
     const { source } = this;
     if (source !== undefined) this.showView(this.board.volumes.get(source.id));
+    this.board.reportChanged();
   }
 
   setRect(rect: CardRect) {
     this.rect = rect;
     this.applyRect();
+    this.board.reportChanged();
     // Nothing else to do: the slice is drawn in a canvas inside the card, so it moves with it, and
     // resizing the card resizes that element, which the viewer is already watching.
   }

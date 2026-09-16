@@ -1,10 +1,10 @@
 /**
  * @file A board of cross-section cards.
  *
- * The board starts empty: a double click adds a card, and a card shows a form until it is given a
- * data source (a folder on the server, a remote store, or both).  Cards naming the same source show
- * the same volume, so its chunks are downloaded once.  A later round links cards, so that their
- * coordinates move together, and saves the board on the server.
+ * A double click adds a card, and a card shows a form until it is given a data source (a folder on
+ * the server, a remote store, or both).  Cards naming the same source show the same volume, so its
+ * chunks are downloaded once.  Linked cards share a position and zoom, and the whole board is kept
+ * on the server, so it is there again on the next visit.
  */
 
 import { Viewer } from "viewer";
@@ -12,13 +12,17 @@ import { listMissingChunks } from "./app/missing_chunks";
 import { showPosition } from "./app/position_display";
 import { createDefaultSourceForm } from "./app/source_form";
 import { Board } from "./board/board";
-import { VolumeRegistry } from "./board/sources";
+import type { Source } from "./board/sources";
+import { listSources, VolumeRegistry } from "./board/sources";
+import type { StoredBoard } from "./board/storage";
+import { createBoardStore, loadBoard } from "./board/storage";
 import "./style.css";
 
 const main = document.querySelector<HTMLElement>("main")!;
 const element = document.querySelector<HTMLDivElement>("#board")!;
 const layer = document.querySelector<HTMLDivElement>("#board-layer")!;
 const hint = document.querySelector<HTMLElement>("#board-hint")!;
+const conflict = document.querySelector<HTMLElement>("#board-conflict")!;
 
 const defaults = createDefaultSourceForm(
   document.querySelector<HTMLElement>("#source")!,
@@ -47,14 +51,44 @@ board.onLinkingChanged((linking) => {
 document
   .querySelector<HTMLButtonElement>("#add-linked")!
   .addEventListener("click", () => {
-    const { x, y } = board.pointAt(
-      element.getBoundingClientRect().left + 40,
-      element.getBoundingClientRect().top + 40,
-    );
+    const bounds = element.getBoundingClientRect();
+    const { x, y } = board.pointAt(bounds.left + 40, bounds.top + 40);
     board.addLinkedCards({ x: Math.round(x), y: Math.round(y) });
   });
 
 // The hint stands in for the cards while the board is empty.
 board.onViewChanged(() => {
   hint.hidden = board.cards.length > 0;
+});
+
+const store = createBoardStore({
+  serialize: () => board.serialize(),
+  onConflict: () => {
+    conflict.hidden = false;
+  },
+});
+
+// The board is saved a moment after every change, and at once if the page is closing.
+window.addEventListener("pagehide", () => store.saveOnUnload());
+document
+  .querySelector<HTMLButtonElement>("#board-reload")!
+  .addEventListener("click", () => window.location.reload());
+
+// The board on the server, with the sources its cards name.
+async function openBoard() {
+  const [stored, sources] = await Promise.all([loadBoard(), listSources()]);
+  putBack(stored, sources);
+}
+
+function putBack(stored: StoredBoard, sources: Source[]) {
+  board.restore(stored, new Map(sources.map((source) => [source.id, source])));
+  store.revision = stored.rev;
+  board.onChanged = () => store.schedule();
+  hint.hidden = board.cards.length > 0;
+}
+
+openBoard().catch((error) => {
+  console.error("Failed to read the board:", error);
+  // The board is still usable; it just will not be saved.
+  hint.textContent = "Could not read the board from the server. See the browser console.";
 });
