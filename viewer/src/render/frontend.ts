@@ -346,21 +346,15 @@ export class SliceView extends SliceViewBase<VolumeChunkSource> {
   }
 }
 
-/**
- * One scale of the volume: its chunk source, and `chunkToMultiscaleTransform`, the
- * (rank + 1) * (rank + 1) homogeneous transform from its chunk space (x, y, z voxels of the scale) to
- * the viewer's voxel coordinates.
- */
+// One scale of the volume: its chunk source, and the homogeneous transform ((rank + 1) squared,
+// column-major) from its chunk space (x, y, z voxels of the scale) to the viewer's coordinates.
 export interface SliceViewSingleResolutionSource {
   chunkSource: VolumeChunkSource;
   chunkToMultiscaleTransform: Float32Array;
 }
 
-/**
- * Computes, for every scale, where its chunk grid lies in the view: the chunk layout (chunk size
- * and chunk-to-view transform), the chunk and voxel bounds, and the effective voxel size used to
- * choose which scales to show.  Chunk dimension `i` is shown along view dimension `i`.
- */
+// Places every scale's chunk grid in the view.  Chunk dimension `i` is shown along view dimension
+// `i`, so the chunk layout is the only thing each scale needs.
 export function getVolumetricTransformedSources(
   scales: SliceViewSingleResolutionSource[],
 ): TransformedSource<VolumeChunkSource>[] {
@@ -438,10 +432,8 @@ export class VolumeChunkSource extends ChunkSource {
   }
 }
 
-/**
- * Main-thread copy of a volume chunk.  Its data is uploaded to a texture while the chunk is in GPU
- * memory; a chunk with no data uses the source's fill value texture instead.
- */
+// Main-thread copy of a volume chunk: its data lives in a texture while the chunk is in GPU memory.
+// A chunk with no data uses the source's fill value texture instead.
 export class VolumeChunk extends Chunk {
   source: VolumeChunkSource;
   // Position of the chunk in the chunk grid.

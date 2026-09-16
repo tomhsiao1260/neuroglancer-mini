@@ -29,10 +29,6 @@ import {
 import type { GL } from "#src/webgl/context.js";
 import type { ShaderProgram } from "#src/webgl/shader.js";
 import { ShaderBuilder } from "#src/webgl/shader.js";
-import {
-  dataTypeShaderDefinition,
-  getShaderType,
-} from "#src/webgl/shader_lib.js";
 import { defineVertexId, VertexIdHelper } from "#src/webgl/vertex_id.js";
 import { SharedWatchableValue } from "#src/worker/shared_watchable_value.js";
 import type { RpcId } from "#src/worker/worker_rpc.js";
@@ -54,17 +50,10 @@ import { SharedObject } from "#src/worker/worker_rpc.js";
 const tempVec3 = vec3.create();
 const tempVec3b = vec3.create();
 
-/**
- * Amount by which a computed intersection point may lie outside the [0, 1] range and still be
- * considered valid.  This needs to be non-zero in order to avoid vertex placement artifacts.
- */
+// How far outside a box edge an intersection may lie and still count; non-zero to avoid artifacts.
 const LAMBDA_EPSILON = 1e-3;
 
-/**
- * If the absolute value of the dot product of a cube edge direction and the viewport plane normal
- * is less than this value, intersections along that cube edge will be exluded.  This needs to be
- * non-zero in order to avoid vertex placement artifacts.
- */
+// Box edges this close to parallel with the plane are skipped; non-zero to avoid artifacts.
 const ORTHOGONAL_EPSILON = 1e-3;
 
 // Positions of the 8 box corners; corner `i` has coordinate `(i >> axis) & 1` along each axis.
@@ -79,10 +68,7 @@ const vertexBasePositions = new Float32Array([
   1, 1, 1,
 ]);
 
-/**
- * For each front vertex (8), for each polygon vertex (6), 4 candidate edges given as pairs of corner
- * indices: 8 * 6 * 4 * 2 entries.
- */
+// For each front vertex (8) and polygon vertex (6), the 4 candidate edges as corner index pairs.
 const boundingBoxCrossSectionVertexIndices = (() => {
   // The paper numbers the corners differently: its corners 3 and 5 are our corners 4 and 3.
   const vertexUncorrectedToCorrected = [0, 1, 2, 4, 5, 3, 6, 7];
@@ -215,15 +201,9 @@ function setBoundingBoxCrossSectionShaderViewportPlane(
 // ---------------------------------------------------------------------------------------------------
 
 /**
- * Extra amount by which the chunk position computed in the vertex shader is shifted in the
- * direction of the component-wise absolute value of the plane normal.  In Neuroglancer, a
- * cross-section plane exactly on the boundary between two voxels is a common occurrence and is
- * intended to result in the display of the "next" (i.e. higher coordinate) plane rather than the
- * "previous" (lower coordinate) plane.  However, due to various sources of floating point
- * inaccuracy (in particular, shader code which has relaxed rules), values exactly on the boundary
- * between voxels may be slightly shifted in either direction.  To ensure that this doesn't result
- * in the display of the wrong data (i.e. the previous rather than next plane), we always shift
- * toward the "next" plane by this small amount.
+ * A plane exactly on the boundary between two voxels is meant to show the one at higher coordinates,
+ * but the shader's arithmetic may land on either side of the boundary.  The chunk position is
+ * therefore nudged along the plane normal by this much, so that it always lands on that voxel.
  */
 const CHUNK_POSITION_EPSILON = 1e-3;
 
@@ -307,36 +287,23 @@ function beginSource(
 // Gray level
 // ---------------------------------------------------------------------------------------------------
 
-// Range of values mapped onto [0, 1]: the full range of the integer types, and [0, 1] for float32.
-const dataTypeRange: Record<DataType, [number, number]> = {
-  [DataType.UINT8]: [0, 0xff],
-  [DataType.UINT16]: [0, 0xffff],
-  [DataType.FLOAT32]: [0, 1],
-};
-
-/**
- * Returns the code of `float normalized(value)`, which maps a data value from the range of its
- * data type onto [0, 1].
- */
-function defineNormalized(builder: ShaderBuilder, dataType: DataType) {
-  // [lower bound, 1 / (upper bound - lower bound)]
-  builder.addUniform("vec2", "uLerpParams");
-  const code = `
-float normalized(${getShaderType(dataType)} inputValue) {
-  float v = (float(toRaw(inputValue)) - uLerpParams[0]) * uLerpParams[1];
-  return clamp(v, 0.0, 1.0);
+// Returns the code of `float normalized(value)`, which maps a voxel value onto [0, 1]: from the full
+// range of the data type for the integer types, and from [0, 1] itself for float32.
+function defineNormalized(chunkFormat: ChunkFormat) {
+  const { dataType } = chunkFormat;
+  const scale =
+    dataType === DataType.UINT8
+      ? 1 / 0xff
+      : dataType === DataType.UINT16
+        ? 1 / 0xffff
+        : 1;
+  // GLSL has no implicit conversion, so the factor needs a decimal point.
+  const literal = Number.isInteger(scale) ? `${scale}.0` : `${scale}`;
+  return `
+float normalized(${chunkFormat.shaderType} value) {
+  return clamp(float(value) * ${literal}, 0.0, 1.0);
 }
 `;
-  return [dataTypeShaderDefinition[dataType], code];
-}
-
-function setNormalizedUniforms(shader: ShaderProgram, dataType: DataType) {
-  const [lower, upper] = dataTypeRange[dataType];
-  shader.gl.uniform2f(
-    shader.uniform("uLerpParams"),
-    lower,
-    1 / (upper - lower),
-  );
 }
 
 // ---------------------------------------------------------------------------------------------------
@@ -352,10 +319,7 @@ export interface SliceViewRenderContext {
   projectionParameters: ProjectionParameters;
 }
 
-/**
- * Draws the volume in grayscale: the data value at each point, mapped from the full range of the
- * data type onto [0, 1].
- */
+// Draws the volume in grayscale, from the full range of its data type.
 export class ImageRenderLayer extends RefCounted {
   rpcId: RpcId | null = null;
   chunkManager: ChunkManager;
@@ -411,7 +375,7 @@ export class ImageRenderLayer extends RefCounted {
         const builder = new ShaderBuilder(this.gl);
         defineVolumeShader(builder);
         chunkFormat.defineShader(builder);
-        builder.addFragmentCode(defineNormalized(builder, this.dataType));
+        builder.addFragmentCode(defineNormalized(chunkFormat));
         builder.setFragmentMain(`
   float value = normalized(getDataValue());
   emit(vec4(value, value, value, 1.0));
@@ -441,7 +405,6 @@ export class ImageRenderLayer extends RefCounted {
 
     this.vertexIdHelper.enable();
     shader.bind();
-    setNormalizedUniforms(shader, this.dataType);
     chunkFormat.beginDrawing(gl);
 
     const chunkPosition = vec3.create();

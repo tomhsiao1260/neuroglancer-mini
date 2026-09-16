@@ -14,10 +14,6 @@ import { DataType } from "#src/util/data_type.js";
 import { RefCounted } from "#src/util/disposable.js";
 import type { GL } from "#src/webgl/context.js";
 import type { ShaderBuilder, ShaderProgram } from "#src/webgl/shader.js";
-import {
-  dataTypeShaderDefinition,
-  getShaderType,
-} from "#src/webgl/shader_lib.js";
 import { setRawTexture3DParameters } from "#src/webgl/texture.js";
 
 const WebGL = WebGL2RenderingContext;
@@ -121,13 +117,16 @@ export class ChunkFormat extends RefCounted {
     this.textureFormat = textureFormats[dataType];
   }
 
+  // The GLSL type of a voxel value: an unsigned integer, or a float for float32 data.
+  get shaderType() {
+    return this.dataType === DataType.FLOAT32 ? "highp float" : "highp uint";
+  }
+
   /**
    * Defines `getDataValue()`, the value of the voxel containing `vChunkPosition` in the chunk bound
    * with `bindChunk`.  The texture is read from texture unit 0.
    */
   defineShader(builder: ShaderBuilder) {
-    const { dataType } = this;
-    const shaderType = getShaderType(dataType);
     builder.addUniform(
       `highp ${this.textureFormat.samplerPrefix}sampler3D`,
       "uVolumeChunkSampler",
@@ -137,25 +136,16 @@ export class ChunkFormat extends RefCounted {
     });
     // Texel offset of voxel (0, 0, 0), then the texel offset per voxel along x, y and z.
     builder.addUniform("highp ivec3", "uVolumeChunkStrides", 4);
-    const readValue =
-      dataType === DataType.FLOAT32
-        ? "return texelFetch(uVolumeChunkSampler, offset, 0).r;"
-        : `${shaderType} result;
-  result.value = texelFetch(uVolumeChunkSampler, offset, 0).r;
-  return result;`;
-    builder.addFragmentCode([
-      dataTypeShaderDefinition[dataType],
-      `
-${shaderType} getDataValue() {
+    builder.addFragmentCode(`
+${this.shaderType} getDataValue() {
   highp ivec3 p = ivec3(max(vec3(0.0, 0.0, 0.0), min(floor(vChunkPosition), uChunkDataSize - 1.0)));
   highp ivec3 offset = uVolumeChunkStrides[0]
                      + p.x * uVolumeChunkStrides[1]
                      + p.y * uVolumeChunkStrides[2]
                      + p.z * uVolumeChunkStrides[3];
-  ${readValue}
+  return texelFetch(uVolumeChunkSampler, offset, 0).r;
 }
-`,
-    ]);
+`);
   }
 
   // Called with the shader bound, before the chunks of this format are drawn.

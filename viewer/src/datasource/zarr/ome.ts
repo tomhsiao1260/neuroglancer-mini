@@ -1,5 +1,14 @@
 /** @license Copyright 2022 Google Inc. SPDX-License-Identifier: Apache-2.0 */
 
+/**
+ * @file The OME metadata of a `.zattrs` file: where each scale of the volume sits in the coordinate
+ * space shared by all of them.
+ *
+ * OME describes that with a list of coordinate transformations per scale.  Only `scale`, `identity`
+ * and `translation` are allowed here, so each scale reduces to one factor and one offset per
+ * dimension, which is what `OmeMultiscaleScale` holds.
+ */
+
 import {
   parseArray,
   parseFixedLengthArray,
@@ -9,12 +18,15 @@ import {
   verifyObjectProperty,
   verifyString,
 } from "#src/util/json.js";
-import * as matrix from "#src/util/matrix.js";
 
+// Where one scale sits, per zarr dimension, in voxels of the full-resolution scale.
 export interface OmeMultiscaleScale {
   // Path of the scale's array within the store, e.g. `0`.
   path: string;
-  transform: Float64Array;
+  // Size of one of its voxels.
+  scale: Float64Array;
+  // Position of its voxel (0, 0, 0).
+  translation: Float64Array;
 }
 
 export interface OmeMultiscaleMetadata {
@@ -50,142 +62,99 @@ function parseOmeAxes(axes: unknown): number {
   return names.length;
 }
 
-function parseScaleTransform(rank: number, obj: unknown) {
-  const scales = verifyObjectProperty(obj, "scale", (values) =>
+// A scale factor and offset per dimension; `apply` composes another transform on top of this one.
+interface Transform {
+  scale: Float64Array;
+  translation: Float64Array;
+}
+
+function identityTransform(rank: number): Transform {
+  return { scale: new Float64Array(rank).fill(1), translation: new Float64Array(rank) };
+}
+
+function parseVector(rank: number, obj: unknown, name: string, positive: boolean) {
+  return verifyObjectProperty(obj, name, (values) =>
     parseFixedLengthArray(
       new Float64Array(rank),
       values,
-      verifyFinitePositiveFloat,
+      positive ? verifyFinitePositiveFloat : verifyFiniteFloat,
     ),
   );
-  return matrix.createHomogeneousScaleMatrix(Float64Array, scales);
 }
 
-function parseIdentityTransform(rank: number, obj: unknown) {
-  obj;
-  return matrix.createIdentity(Float64Array, rank + 1);
-}
-
-function parseTranslationTransform(rank: number, obj: unknown) {
-  const translation = verifyObjectProperty(obj, "translation", (values) =>
-    parseFixedLengthArray(new Float64Array(rank), values, verifyFiniteFloat),
-  );
-  return matrix.createHomogeneousTranslationMatrix(Float64Array, translation);
-}
-
-const coordinateTransformParsers = new Map([
-  ["scale", parseScaleTransform],
-  ["identity", parseIdentityTransform],
-  ["translation", parseTranslationTransform],
-]);
-
-function parseOmeCoordinateTransform(
-  rank: number,
-  transformJson: unknown,
-): Float64Array {
-  verifyObject(transformJson);
-  const transformType = verifyObjectProperty(
-    transformJson,
-    "type",
-    verifyString,
-  );
-  const parser = coordinateTransformParsers.get(transformType);
-  if (parser === undefined) {
-    throw new Error(
-      `Unsupported coordinate transform type: ${JSON.stringify(transformType)}`,
-    );
-  }
-  return parser(rank, transformJson);
-}
-
+/**
+ * Folds the `coordinateTransformations` of a scale, in order, into one transform: scaling by `s`
+ * scales what came before it, while translating by `t` adds to it.
+ */
 function parseOmeCoordinateTransforms(
   rank: number,
   transforms: unknown,
-): Float64Array {
-  let transform = matrix.createIdentity(Float64Array, rank + 1);
-  if (transforms === undefined) return transform;
+): Transform {
+  const result = identityTransform(rank);
+  if (transforms === undefined) return result;
   parseArray(transforms, (transformJson) => {
-    const newTransform = parseOmeCoordinateTransform(rank, transformJson);
-    transform = matrix.multiply(
-      new Float64Array(transform.length),
-      rank + 1,
-      newTransform,
-      rank + 1,
-      transform,
-      rank + 1,
-      rank + 1,
-      rank + 1,
-      rank + 1,
-    );
+    verifyObject(transformJson);
+    const type = verifyObjectProperty(transformJson, "type", verifyString);
+    if (type === "scale") {
+      const scale = parseVector(rank, transformJson, "scale", true);
+      for (let i = 0; i < rank; ++i) {
+        result.scale[i] *= scale[i];
+        result.translation[i] *= scale[i];
+      }
+    } else if (type === "translation") {
+      const translation = parseVector(rank, transformJson, "translation", false);
+      for (let i = 0; i < rank; ++i) {
+        result.translation[i] += translation[i];
+      }
+    } else if (type !== "identity") {
+      throw new Error(
+        `Unsupported coordinate transform type: ${JSON.stringify(type)}`,
+      );
+    }
   });
-  return transform;
-}
-
-function parseMultiscaleScale(rank: number, obj: unknown): OmeMultiscaleScale {
-  const path = verifyObjectProperty(obj, "path", verifyString);
-  const transform = verifyObjectProperty(
-    obj,
-    "coordinateTransformations",
-    (x) => parseOmeCoordinateTransforms(rank, x),
-  );
-  return { path, transform };
+  return result;
 }
 
 function parseOmeMultiscale(multiscale: unknown): OmeMultiscaleMetadata {
   const rank = verifyObjectProperty(multiscale, "axes", parseOmeAxes);
-  const transform = verifyObjectProperty(
+  // A transform of the multiscale volume as a whole applies on top of each scale's own.
+  const outer = verifyObjectProperty(
     multiscale,
     "coordinateTransformations",
     (x) => parseOmeCoordinateTransforms(rank, x),
   );
   const scales = verifyObjectProperty(multiscale, "datasets", (obj) =>
-    parseArray(obj, (x) => {
-      const scale = parseMultiscaleScale(rank, x);
-      scale.transform = matrix.multiply(
-        new Float64Array((rank + 1) ** 2),
-        rank + 1,
-        transform,
-        rank + 1,
-        scale.transform,
-        rank + 1,
-        rank + 1,
-        rank + 1,
-        rank + 1,
+    parseArray(obj, (dataset): OmeMultiscaleScale => {
+      const path = verifyObjectProperty(dataset, "path", verifyString);
+      const inner = verifyObjectProperty(
+        dataset,
+        "coordinateTransformations",
+        (x) => parseOmeCoordinateTransforms(rank, x),
       );
-      return scale;
+      const scale = new Float64Array(rank);
+      const translation = new Float64Array(rank);
+      for (let i = 0; i < rank; ++i) {
+        scale[i] = outer.scale[i] * inner.scale[i];
+        translation[i] =
+          outer.scale[i] * inner.translation[i] + outer.translation[i];
+      }
+      return { path, scale, translation };
     }),
   );
   if (scales.length === 0) {
     throw new Error("At least one scale must be specified");
   }
 
-  const baseTransform = scales[0].transform;
-  // Extract the scale factor from `baseTransform`.  Only `scale`, `identity` and `translation`
-  // transforms are supported, so every transform here is a diagonal matrix with a translation, and
-  // the scale factor of a dimension is the diagonal entry.
-  const baseScales = new Float64Array(rank);
-  for (let i = 0; i < rank; ++i) {
-    baseScales[i] = baseTransform[i * (rank + 1) + i];
-  }
-
-  for (const scale of scales) {
-    const t = scale.transform;
-    // In OME's coordinate space, the origin of a voxel is its center, while in Neuroglancer it is
-    // the "lower" (in coordinates) corner.  Translate by the physical size of half a voxel in the
-    // current scale.
+  // A copy, because the loop below divides the first scale's own factors by it.
+  const baseScale = Float64Array.from(scales[0].scale);
+  for (const { scale, translation } of scales) {
     for (let i = 0; i < rank; ++i) {
-      let offset = 0;
-      for (let j = 0; j < rank; ++j) {
-        offset += t[j * (rank + 1) + i] * 0.5;
-      }
-      t[rank * (rank + 1) + i] -= offset;
-    }
-
-    // Make the scale relative to the base scale.
-    for (let i = 0; i < rank; ++i) {
-      for (let j = 0; j <= rank; ++j) {
-        t[j * (rank + 1) + i] /= baseScales[i];
-      }
+      // In OME's coordinate space, the origin of a voxel is its center, while in Neuroglancer it is
+      // the "lower" (in coordinates) corner.  Move by half a voxel of this scale.
+      translation[i] -= scale[i] * 0.5;
+      // Measure in voxels of the full-resolution scale rather than in physical units.
+      scale[i] /= baseScale[i];
+      translation[i] /= baseScale[i];
     }
   }
   return { rank, scales };

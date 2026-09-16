@@ -71,27 +71,6 @@ export class ShaderProgram extends RefCounted {
 }
 
 /**
- * GLSL code, possibly nested.  Each distinct string is emitted only once, so a definition shared by
- * several parts (e.g. a struct) can be listed in each of them.
- */
-export type ShaderCodePart = string | ShaderCodePart[];
-
-class ShaderCode {
-  code = "";
-  private parts = new Set<ShaderCodePart>();
-
-  add(x: ShaderCodePart) {
-    if (this.parts.has(x)) return;
-    this.parts.add(x);
-    if (typeof x === "string") {
-      this.code += x;
-    } else {
-      for (const y of x) this.add(y);
-    }
-  }
-}
-
-/**
  * Assembles a vertex and fragment shader from declarations and code, and builds the program.
  * Uniform and attribute locations are looked up by the names declared here.
  */
@@ -101,8 +80,8 @@ export class ShaderBuilder {
   private varyingsCodeVS = "";
   private varyingsCodeFS = "";
   private outputBufferCode = "";
-  private vertexCode = new ShaderCode();
-  private fragmentCode = new ShaderCode();
+  private vertexCode = "";
+  private fragmentCode = "";
   private vertexMain = "";
   private fragmentMain = "";
   private uniforms = new Array<string>();
@@ -133,12 +112,12 @@ export class ShaderBuilder {
     }
   }
 
-  addVertexCode(code: ShaderCodePart) {
-    this.vertexCode.add(code);
+  addVertexCode(code: string) {
+    this.vertexCode += code;
   }
 
-  addFragmentCode(code: ShaderCodePart) {
-    this.fragmentCode.add(code);
+  addFragmentCode(code: string) {
+    this.fragmentCode += code;
   }
 
   // Sets the body of the vertex shader's `main`.
@@ -163,7 +142,7 @@ precision highp int;
 ${this.uniformsCode}
 ${this.attributesCode}
 ${this.varyingsCodeVS}
-${this.vertexCode.code}
+${this.vertexCode}
 void main() {
 ${this.vertexMain}
 }
@@ -174,7 +153,7 @@ precision highp int;
 ${this.uniformsCode}
 ${this.varyingsCodeFS}
 ${this.outputBufferCode}
-${this.fragmentCode.code}
+${this.fragmentCode}
 void main() {
 ${this.fragmentMain}
 }

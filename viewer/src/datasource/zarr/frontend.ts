@@ -8,7 +8,10 @@ import {
 } from "#src/datasource/zarr/base.js";
 import type { ArrayMetadata } from "#src/datasource/zarr/metadata.js";
 import { parseV2Metadata } from "#src/datasource/zarr/metadata.js";
-import type { OmeMultiscaleMetadata } from "#src/datasource/zarr/ome.js";
+import type {
+  OmeMultiscaleMetadata,
+  OmeMultiscaleScale,
+} from "#src/datasource/zarr/ome.js";
 import { parseOmeMetadata } from "#src/datasource/zarr/ome.js";
 import type { ZarrStore, ZarrStoreSpec } from "#src/datasource/zarr/store.js";
 import { createZarrStore } from "#src/datasource/zarr/store.js";
@@ -21,7 +24,6 @@ import {
 import { DataType } from "#src/util/data_type.js";
 import type { Borrowed } from "#src/util/disposable.js";
 import { verifyObject } from "#src/util/json.js";
-import * as matrix from "#src/util/matrix.js";
 import { Signal } from "#src/util/signal.js";
 import { registerRPC } from "#src/worker/worker_rpc.js";
 
@@ -42,10 +44,7 @@ registerRPC(MISSING_CHUNK_RPC_ID, function (x) {
   source.missingChunk.dispatch(x.key, () => source.reloadChunk(x.chunk));
 });
 
-interface ZarrScaleInfo {
-  // Path of the scale's array within the store.
-  path: string;
-  transform: Float64Array;
+interface ZarrScaleInfo extends OmeMultiscaleScale {
   metadata: ArrayMetadata;
 }
 
@@ -91,34 +90,25 @@ export class MultiscaleVolumeChunkSource extends GenericMultiscaleVolumeChunkSou
         const { metadata } = scale;
         const { rank, chunkShape, shape } = metadata;
         // Zarr lists dimensions in (z, y, x) order; chunk space uses the reverse order, (x, y, z),
-        // which matches C-order voxel data where x varies fastest.
-        const permutedChunkShape = new Uint32Array(rank);
-        const permutedDataShape = new Float32Array(rank);
-        const orderTransform = new Float32Array((rank + 1) ** 2);
-        orderTransform[(rank + 1) ** 2 - 1] = 1;
+        // which matches C-order voxel data where x varies fastest.  The transform from chunk space
+        // to the viewer's coordinates therefore scales chunk dimension `i` onto zarr dimension
+        // `rank - 1 - i`; it is stored column-major, as a homogeneous matrix.
+        const chunkShapeXyz = new Uint32Array(rank);
+        const shapeXyz = new Float32Array(rank);
+        const transform = new Float32Array((rank + 1) ** 2);
+        transform[(rank + 1) ** 2 - 1] = 1;
         for (let i = 0; i < rank; ++i) {
           const zarrDim = rank - 1 - i;
-          permutedChunkShape[i] = chunkShape[zarrDim];
-          permutedDataShape[i] = shape[zarrDim];
-          orderTransform[i + zarrDim * (rank + 1)] = 1;
+          chunkShapeXyz[i] = chunkShape[zarrDim];
+          shapeXyz[i] = shape[zarrDim];
+          transform[i * (rank + 1) + zarrDim] = scale.scale[zarrDim];
+          transform[rank * (rank + 1) + zarrDim] = scale.translation[zarrDim];
         }
-        const transform = new Float32Array((rank + 1) ** 2);
-        matrix.multiply<Float32Array | Float64Array>(
-          transform,
-          rank + 1,
-          scale.transform,
-          rank + 1,
-          orderTransform,
-          rank + 1,
-          rank + 1,
-          rank + 1,
-          rank + 1,
-        );
         const spec = makeVolumeChunkSpecification({
           rank,
           dataType: metadata.dataType,
-          chunkDataSize: permutedChunkShape,
-          upperVoxelBound: permutedDataShape,
+          chunkDataSize: chunkShapeXyz,
+          upperVoxelBound: shapeXyz,
         });
         // Every call (one per view) returns the same chunk source for a scale.  A viewer's chunk
         // manager holds a single volume, so the scale's path identifies the source.
@@ -180,14 +170,14 @@ async function resolveOmeMultiscale(
     }
   }
 
-  // The volume starts at the translation of the full-resolution scale (-0.5 for OME's voxel-center
-  // convention) and spans its shape.
+  // The volume starts at the position of the full-resolution scale's first voxel (-0.5 for OME's
+  // voxel-center convention) and spans its shape.
   const lowerBounds = new Float64Array(rank);
   const upperBounds = new Float64Array(rank);
   const baseScale = multiscale.scales[0];
   const baseZarrMetadata = scaleZarrMetadata[0];
   for (let i = 0; i < rank; ++i) {
-    const lower = (lowerBounds[i] = baseScale.transform[(rank + 1) * rank + i]);
+    const lower = (lowerBounds[i] = baseScale.translation[i]);
     upperBounds[i] = lower + baseZarrMetadata.shape[i];
   }
 
@@ -197,8 +187,7 @@ async function resolveOmeMultiscale(
     upperBounds,
     dataType,
     scales: multiscale.scales.map((scale, i) => ({
-      path: scale.path,
-      transform: scale.transform,
+      ...scale,
       metadata: scaleZarrMetadata[i],
     })),
   };

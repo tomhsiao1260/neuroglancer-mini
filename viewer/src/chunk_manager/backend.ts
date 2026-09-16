@@ -90,10 +90,7 @@ export class Chunk implements Disposable {
   // Whether a view has requested it in the round of priority updates being computed.
   newRequested = false;
 
-  /**
-   * Aborts the pending download.  Set only while the state is DOWNLOADING.  This should not be
-   * accessed by code outside this module.
-   */
+  // Aborts the pending download; set only while DOWNLOADING, and only used in this module.
   downloadAbortController: AbortController | undefined = undefined;
 
   initialize(key: string) {
@@ -222,12 +219,7 @@ export class ChunkSource extends SharedObject {
     return chunk;
   }
 
-  /**
-   * Adds the specified chunk to the chunk cache.
-   *
-   * If the chunk cache was previously empty, also call this.addRef() to increment the reference
-   * count.
-   */
+  // The source holds a reference to itself while it has chunks.
   addChunk(chunk: Chunk) {
     const { chunks } = this;
     if (chunks.size === 0) {
@@ -236,11 +228,7 @@ export class ChunkSource extends SharedObject {
     chunks.set(chunk.key!, chunk);
   }
 
-  /**
-   * Remove the specified chunk from the chunk cache.
-   *
-   * If the chunk cache becomes empty, also call this.dispose() to decrement the reference count.
-   */
+  // Keeps the chunk object for reuse, and releases the source's own reference if it was the last.
   removeChunk(chunk: Chunk) {
     const { chunks, freeChunks } = this;
     chunks.delete(chunk.key!);
@@ -255,16 +243,10 @@ export class ChunkSource extends SharedObject {
 // eslint-disable-next-line @typescript-eslint/no-unsafe-declaration-merging
 export interface ChunkSource {
   /**
-   * Begin downloading the specified the chunk.  The returned promise should resolve when the
-   * downloaded data has been successfully decoded and stored in the chunk, or rejected if the
-   * download or decoding fails, which puts the chunk in the FAILED state.
-   *
-   * Note: This method must be defined by subclasses.
-   *
-   * @param chunk Chunk to download.
-   * @param abortSignal Aborted when the chunk is evicted while downloading.  The download should then
-   * stop, and must not modify `chunk` any more: the chunk object may already be reused for another
-   * chunk.
+   * Defined by the data source: stores the chunk's decoded data in it, or rejects, which puts the
+   * chunk in the FAILED state.  `abortSignal` is aborted when the chunk is evicted while
+   * downloading; the download must then stop and leave `chunk` alone, since the chunk object may
+   * already have been reused for another chunk.
    */
   download(chunk: Chunk, abortSignal: AbortSignal): Promise<void>;
 }
@@ -302,14 +284,10 @@ function cancelChunkDownload(chunk: Chunk) {
  * tiers, and a linked list (most recently added first) for the RECENT tier.
  */
 class ChunkPriorityQueue {
-  /**
-   * Heap roots for VISIBLE and PREFETCH priority tiers.
-   */
+  // Heap root of the VISIBLE and PREFETCH tiers.
   private heapRoots: (Chunk | null)[] = [null, null];
 
-  /**
-   * Head node for RECENT linked list.
-   */
+  // Head of the RECENT list, which is not a chunk itself.
   private recentHead = new Chunk();
   constructor(
     private heapOperations: PairingHeap<Chunk>,
@@ -378,10 +356,6 @@ class ChunkPriorityQueue {
     }
   }
 
-  /**
-   * Deletes a chunk from this priority queue.
-   * @param chunk The chunk to delete from the priority queue.
-   */
   delete(chunk: Chunk) {
     const priorityTier = chunk.priorityTier;
     if (priorityTier === ChunkPriorityTier.RECENT) {
@@ -412,11 +386,8 @@ function makeChunkPriorityQueue1(compare: ComparisonFunction<Chunk>) {
   );
 }
 
-/**
- * Evicts candidates until `capacity` has room for one item of `size` bytes.  Returns false, without
- * evicting further, once the next candidate has a priority at least as high as the chunk to be
- * promoted.
- */
+// Evicts candidates until `capacity` has room for one item of `size` bytes.  Stops, and returns
+// false, once the next candidate is not worth less than the chunk waiting to be promoted.
 function tryToFreeCapacity(
   size: number,
   capacity: AvailableCapacity,
@@ -436,9 +407,6 @@ function tryToFreeCapacity(
       evictionTier < priorityTier ||
       (evictionTier === priorityTier && evictionCandidate.priority >= priority)
     ) {
-      // Lowest priority eviction candidate has priority >= highest
-      // priority promotion candidate.  No more promotions are
-      // possible.
       return false;
     }
     evict(evictionCandidate);
@@ -489,36 +457,25 @@ export class ChunkQueueManager extends SharedObjectCounterpart {
   // Incremented whenever a chunk is copied to the GPU or freed from it.
   private gpuMemoryGeneration = 0;
 
-  /**
-   * Contains all chunks in QUEUED state pending download.
-   */
+  // Chunks waiting to be downloaded (QUEUED).
   private queuedDownloadPromotionQueue = makeChunkPriorityQueue1(
     Chunk.priorityGreater,
   );
 
-  /**
-   * Contains all chunks in DOWNLOADING state.
-   */
+  // Chunks being downloaded, whose downloads can be given up.
   private downloadEvictionQueue = makeChunkPriorityQueue1(Chunk.priorityLess);
 
-  /**
-   * Contains all chunks that take up memory (DOWNLOADING, SYSTEM_MEMORY,
-   * GPU_MEMORY).
-   */
+  // Chunks that take up memory: DOWNLOADING, SYSTEM_MEMORY(_WORKER) or GPU_MEMORY.
   private systemMemoryEvictionQueue = makeChunkPriorityQueue0(
     Chunk.priorityLess,
   );
 
-  /**
-   * Contains all chunks in SYSTEM_MEMORY state not in RECENT priority tier.
-   */
+  // Requested chunks whose data is in memory, waiting to be copied to the GPU.
   private gpuMemoryPromotionQueue = makeChunkPriorityQueue1(
     Chunk.priorityGreater,
   );
 
-  /**
-   * Contains all chunks in GPU_MEMORY state.
-   */
+  // Chunks on the GPU, which can be freed from it again.
   private gpuMemoryEvictionQueue = makeChunkPriorityQueue1(Chunk.priorityLess);
 
   // Should be `number|null`, but marked `any` to work around @types/node being pulled in.
@@ -730,11 +687,8 @@ export class ChunkQueueManager extends SharedObjectCounterpart {
     }
   }
 
-  /**
-   * Frees the chunk's data wherever it is (being downloaded, in the worker, on the main thread or on
-   * the GPU) and puts the chunk back in the download queue.  It is downloaded again if it is still
-   * requested, and deleted otherwise.
-   */
+  // Frees the chunk's data wherever it is and puts the chunk back in the download queue, where it
+  // is downloaded again if still requested, and deleted otherwise.
   evictChunk(chunk: Chunk) {
     switch (chunk.state) {
       case ChunkState.DOWNLOADING:
@@ -815,15 +769,10 @@ export class ChunkQueueManager extends SharedObjectCounterpart {
 export class ChunkManager extends SharedObjectCounterpart {
   queueManager: ChunkQueueManager;
 
-  /**
-   * Array of chunks within each existing priority tier.
-   */
+  // The chunks currently in the VISIBLE and PREFETCH tiers.
   private existingTierChunks: Chunk[][] = [[], []];
 
-  /**
-   * Array of chunks whose new priorities have not yet been reflected in the
-   * queue states.
-   */
+  // The chunks requested in the round being computed, not yet reflected in the queues.
   private newTierChunks: Chunk[] = [];
 
   // Should be `number|null`, but marked `any` to workaround `@types/node` being pulled in.
@@ -874,13 +823,8 @@ export class ChunkManager extends SharedObjectCounterpart {
     this.updateQueueState();
   }
 
-  /**
-   * Requests `chunk` in GPU memory for this round of priority updates.
-   *
-   * @param chunk
-   * @param tier New priority tier.  Must not equal ChunkPriorityTier.RECENT.
-   * @param priority Priority within tier.
-   */
+  // Requests `chunk` on the GPU for this round of priority updates, in `tier` (not RECENT, which
+  // means "no longer requested") with `priority` within it.
   requestChunk(chunk: Chunk, tier: ChunkPriorityTier, priority: number) {
     if (Number.isNaN(priority)) {
       return;
@@ -902,11 +846,8 @@ export class ChunkManager extends SharedObjectCounterpart {
     }
   }
 
-  /**
-   * Updates the queues to the priorities just requested.  A chunk that was in the VISIBLE or
-   * PREFETCH tier and has not been requested again moves to the RECENT tier, and is removed if it
-   * had not started downloading.
-   */
+  // Updates the queues to the priorities just requested.  A chunk that is no longer requested moves
+  // to the RECENT tier, and is removed if it had not started downloading.
   private updateQueueState() {
     const existingTierChunks = this.existingTierChunks;
     const queueManager = this.queueManager;
@@ -929,10 +870,8 @@ export class ChunkManager extends SharedObjectCounterpart {
   }
 }
 
-/**
- * Mixin for adding a `parameters` member to a ChunkSource, and for registering the shared object
- * type based on the `RPC_ID` member of the Parameters class.
- */
+// Adds a `parameters` member to a chunk source, and registers the shared object type under the
+// `RPC_ID` of the parameters class.
 export function WithParameters<
   Parameters,
   TBase extends { new (...args: any[]): SharedObject },
@@ -952,10 +891,7 @@ export function WithParameters<
   return C;
 }
 
-/**
- * Mixin that adds a `chunkManager` property, for shared objects that request chunks, initialized
- * from the RPC-supplied options.
- */
+// Adds a `chunkManager` property, taken from the options, for shared objects that request chunks.
 export function withChunkManager<
   T extends { new (...args: any[]): SharedObject },
 >(Base: T) {

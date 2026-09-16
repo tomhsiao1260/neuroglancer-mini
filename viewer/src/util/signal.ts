@@ -1,17 +1,10 @@
 /** @license Copyright 2016 Google Inc. SPDX-License-Identifier: Apache-2.0 */
 
 /**
- * @file Simple signal dispatch mechanism.
+ * @file Signals: `dispatch` calls every handler that was added, in the order they were added.  A
+ * handler added while `dispatch` runs is called before it returns.
  */
 
-/**
- * This class provides a simple signal dispatch mechanism.  Handlers can be added, and then the
- * `dispatch` method calls all of them.
- *
- * If specified, Callable should be an interface containing only a callable signature returning
- * void.  Due to limitations in TypeScript, any interface containing a callable signature will be
- * accepted by the compiler, but the resultant signature of `dispatch` will not be correct.
- */
 export class Signal<Callable extends Function = () => void> {
   private handlers = new Set<Callable>();
 
@@ -25,14 +18,7 @@ export class Signal<Callable extends Function = () => void> {
     });
   }
 
-  /**
-   * Add a handler function.  If `dispatch` is currently be called, then the new handler will be
-   * called before `dispatch` returns.
-   *
-   * @param handler The handler function to add.
-   *
-   * @return A function that unregisters the handler.
-   */
+  // Returns a function that removes the handler again.
   add(handler: Callable): () => boolean {
     this.handlers.add(handler);
     return () => {
@@ -40,32 +26,18 @@ export class Signal<Callable extends Function = () => void> {
     };
   }
 
-  /**
-   * Remove a handler function.  If `dispatch` is currently be called and the new handler has not
-   * yet been called, then it will not be called.
-   *
-   * @param handler Handler to remove.
-   * @return `true` if the handler was present, `false` otherwise.
-   */
+  // Returns whether the handler was there.  A handler removed during `dispatch` is not called.
   remove(handler: Callable): boolean {
     return this.handlers.delete(handler);
   }
 
-  /**
-   * Invokes each handler function with the same parameters (including `this`) with which it is
-   * called.  Handlers are invoked in the order in which they were added.
-   */
+  // Calls the handlers with the arguments (and `this`) it is called with.
   dispatch: Callable;
 
-  /**
-   * Disposes of resources.  No methods, including `dispatch`, may be invoked afterwards.
-   */
+  // Nothing may be called afterwards, `dispatch` included.
   dispose() {
     this.handlers = <any>undefined;
   }
 }
 
-/**
- * Simple specialization of Signal for the common case of a nullary handler signature.
- */
 export class NullarySignal extends Signal<() => void> {}

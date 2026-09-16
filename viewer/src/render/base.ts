@@ -21,7 +21,6 @@ import {
   transformVectorByMat4,
   vec3,
 } from "#src/util/geom.js";
-import * as matrix from "#src/util/matrix.js";
 import { kEmptyFloat32Vec } from "#src/util/vector.js";
 import { SharedObject } from "#src/worker/worker_rpc.js";
 
@@ -88,35 +87,23 @@ export function projectionParametersEqual(
  * chunk coordinates to global voxel coordinates.
  */
 export class ChunkLayout {
-  /**
-   * Size of each chunk in "chunk" coordinates.
-   */
+  // Size of a chunk, in chunk coordinates.
   size: vec3;
 
-  /**
-   * Transform from local "chunk" coordinates to global voxel coordinates.
-   */
+  // Chunk coordinates (voxels of this scale) to global voxel coordinates, and back.
   transform: mat4;
-
-  /**
-   * Inverse of transform.  Transform from global voxel coordinates to "chunk" coordinates.
-   */
   invTransform: mat4;
 
-  /**
-   * Size of one voxel of this scale in global voxels, which decides the zoom levels at which the
-   * scale is shown (see `filterVisibleSources`).  This is an approximation of the voxel size (exact
-   * only for permutation/scaling transforms).  It would be better to model the voxel as an
-   * ellipsiod and find the lengths of the axes.
-   */
+  // Size of one voxel of this scale in global voxels, which decides the zoom levels at which the
+  // scale is shown (see `filterVisibleSources`).  Exact only for transforms that scale and permute
+  // the axes, which is what a multiscale zarr volume has.
   effectiveVoxelSize: vec3;
 
   constructor(size: vec3, transform: mat4) {
     this.size = vec3.clone(size);
     this.transform = mat4.clone(transform);
     const invTransform = mat4.create();
-    const det = matrix.inverse(invTransform, 4, transform, 4, 4);
-    if (det === 0) {
+    if (mat4.invert(invTransform, transform) === null) {
       throw new Error("Transform is singular");
     }
     this.invTransform = invTransform;
@@ -137,9 +124,6 @@ export class ChunkLayout {
     return new ChunkLayout(msg.size, msg.transform);
   }
 
-  /**
-   * Transform global spatial coordinates to local spatial coordinates.
-   */
   globalToLocalSpatial(out: vec3, globalSpatial: vec3): vec3 {
     return vec3.transformMat4(out, globalSpatial, this.invTransform);
   }
@@ -296,10 +280,7 @@ export function* filterVisibleSources<T extends TransformedSource<any>>(
   // The voxel size of the finest scale is the base voxel size.
   const smallestVoxelSize = sources[0].chunkLayout.effectiveVoxelSize;
 
-  /**
-   * Determines whether we should continue to look for a finer-resolution source *after* one
-   * with the specified voxelSize.
-   */
+  // Whether a finer scale than one with `voxelSize` is worth looking for.
   const canImproveOnVoxelSize = (voxelSize: vec3) => {
     const targetSize = pixelSize * renderScaleTarget;
     for (let i = 0; i < 3; ++i) {
