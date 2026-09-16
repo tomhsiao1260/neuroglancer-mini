@@ -4,7 +4,6 @@ import { DataType } from "#src/util/data_type.js";
 import {
   parseArray,
   parseFixedLengthArray,
-  verifyConstant,
   verifyObject,
   verifyObjectProperty,
   verifyOptionalObjectProperty,
@@ -71,7 +70,9 @@ export function parseV2Metadata(obj: unknown): ArrayMetadata {
   try {
     verifyObject(obj);
     verifyObjectProperty(obj, "zarr_format", (value) => {
-      verifyConstant(value, 2);
+      if (value !== 2) {
+        throw new Error(`Expected 2, but received: ${JSON.stringify(value)}`);
+      }
     });
     const shape = verifyObjectProperty(obj, "shape", parseShape);
     const rank = shape.length;

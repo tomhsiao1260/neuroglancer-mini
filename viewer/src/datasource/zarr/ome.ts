@@ -7,11 +7,9 @@ import {
   verifyFinitePositiveFloat,
   verifyObject,
   verifyObjectProperty,
-  verifyOptionalObjectProperty,
   verifyString,
 } from "#src/util/json.js";
 import * as matrix from "#src/util/matrix.js";
-import { allSiPrefixes } from "#src/util/si_units.js";
 
 export interface OmeMultiscaleScale {
   // Path of the scale's array within the store, e.g. `0`.
@@ -27,60 +25,29 @@ export interface OmeMultiscaleMetadata {
 
 const SUPPORTED_OME_MULTISCALE_VERSIONS = new Set(["0.4", "0.5-dev"]);
 
-const OME_UNITS = new Map<string, { unit: string; scale: number }>([
-  ["angstrom", { unit: "m", scale: 1e-10 }],
-  ["foot", { unit: "m", scale: 0.3048 }],
-  ["inch", { unit: "m", scale: 0.0254 }],
-  ["mile", { unit: "m", scale: 1609.34 }],
-  // eslint-disable-next-line @typescript-eslint/no-loss-of-precision
-  ["parsec", { unit: "m", scale: 3.0856775814913673e16 }],
-  ["yard", { unit: "m", scale: 0.9144 }],
-  ["minute", { unit: "s", scale: 60 }],
-  ["hour", { unit: "s", scale: 60 * 60 }],
-  ["day", { unit: "s", scale: 60 * 60 * 24 }],
-]);
+// The axes the viewer shows, in the order zarr lists them.
+const AXIS_NAMES = ["z", "y", "x"];
 
-for (const unit of ["meter", "second"]) {
-  for (const siPrefix of allSiPrefixes) {
-    const { longPrefix } = siPrefix;
-    if (longPrefix === undefined) continue;
-    OME_UNITS.set(`${longPrefix}${unit}`, {
-      unit: unit[0],
-      scale: 10 ** siPrefix.exponent,
-    });
-  }
-}
-
-interface Axis {
-  name: string;
-  unit: string;
-  scale: number;
-  type: string | undefined;
-}
-
-function parseOmeAxis(axis: unknown): Axis {
-  verifyObject(axis);
-  const name = verifyObjectProperty(axis, "name", verifyString);
-  const type = verifyOptionalObjectProperty(axis, "type", verifyString);
-  const parsedUnit = verifyOptionalObjectProperty(
-    axis,
-    "unit",
-    (unit) => {
-      const x = OME_UNITS.get(unit);
-      if (x === undefined) {
-        throw new Error(`Unsupported unit: ${JSON.stringify(unit)}`);
-      }
-      return x;
-    },
-    { unit: "", scale: 1 },
-  );
-  return { name, unit: parsedUnit.unit, scale: parsedUnit.scale, type };
-}
-
-// Checks the axes and returns their number.  The viewer works in voxels, so axis names and units are
-// not used further.
+/**
+ * Checks that the volume has the three spatial axes the viewer shows, and returns their number.
+ *
+ * The viewer works in voxels rather than physical units, so the scale and unit of each axis are not
+ * needed; but it does show the axes in a fixed order, so a volume with other axes (a time or channel
+ * axis, say) is rejected here rather than displayed with its axes mixed up.
+ */
 function parseOmeAxes(axes: unknown): number {
-  return parseArray(axes, parseOmeAxis).length;
+  const names = parseArray(axes, (axis) =>
+    verifyObjectProperty(verifyObject(axis), "name", verifyString),
+  );
+  if (
+    names.length !== AXIS_NAMES.length ||
+    names.some((name, i) => name !== AXIS_NAMES[i])
+  ) {
+    throw new Error(
+      `Expected axes (${AXIS_NAMES.join(", ")}), but received: (${names.join(", ")})`,
+    );
+  }
+  return names.length;
 }
 
 function parseScaleTransform(rank: number, obj: unknown) {
@@ -193,10 +160,9 @@ function parseOmeMultiscale(multiscale: unknown): OmeMultiscaleMetadata {
   }
 
   const baseTransform = scales[0].transform;
-  // Extract the scale factor from `baseTransform`.
-  //
-  // TODO(jbms): If coordinate transformations other than `scale` and `translation` are supported,
-  // this will need to be modified.
+  // Extract the scale factor from `baseTransform`.  Only `scale`, `identity` and `translation`
+  // transforms are supported, so every transform here is a diagonal matrix with a translation, and
+  // the scale factor of a dimension is the diagonal entry.
   const baseScales = new Float64Array(rank);
   for (let i = 0; i < rank; ++i) {
     baseScales[i] = baseTransform[i * (rank + 1) + i];
@@ -225,35 +191,30 @@ function parseOmeMultiscale(multiscale: unknown): OmeMultiscaleMetadata {
   return { rank, scales };
 }
 
-export function parseOmeMetadata(
-  attrs: any,
-): OmeMultiscaleMetadata | undefined {
-  const multiscales = attrs.multiscales;
-  if (!Array.isArray(multiscales)) return undefined;
-  const errors: string[] = [];
-  for (const multiscale of multiscales) {
-    if (
-      typeof multiscale !== "object" ||
-      multiscale == null ||
-      Array.isArray(multiscale)
-    ) {
-      // Not valid OME multiscale spec.
-      return undefined;
-    }
-    const version = multiscale.version;
-    if (version === undefined) return undefined;
-    if (!SUPPORTED_OME_MULTISCALE_VERSIONS.has(version)) {
-      errors.push(
-        `OME multiscale metadata version ${JSON.stringify(
-          version,
-        )} is not supported`,
-      );
-      continue;
-    }
-    return parseOmeMultiscale(multiscale);
+/**
+ * Returns the multiscale volume described by the OME metadata of a `.zattrs` file.  A `.zattrs` file
+ * may describe several multiscale volumes; the viewer shows the first one.
+ */
+export function parseOmeMetadata(attrs: any): OmeMultiscaleMetadata {
+  if (attrs.multiscales === undefined) {
+    throw new Error(
+      "No OME multiscale metadata found: `.zattrs` has no `multiscales` property",
+    );
   }
-  if (errors.length !== 0) {
-    throw new Error(errors[0]);
+  const multiscale = verifyObjectProperty(attrs, "multiscales", (value) => {
+    const multiscales = parseArray(value, verifyObject);
+    if (multiscales.length === 0) {
+      throw new Error("At least one multiscale volume must be specified");
+    }
+    return multiscales[0];
+  });
+  const version = verifyObjectProperty(multiscale, "version", verifyString);
+  if (!SUPPORTED_OME_MULTISCALE_VERSIONS.has(version)) {
+    throw new Error(
+      `OME multiscale metadata version ${JSON.stringify(
+        version,
+      )} is not supported`,
+    );
   }
-  return undefined;
+  return parseOmeMultiscale(multiscale);
 }

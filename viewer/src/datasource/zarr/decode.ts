@@ -26,7 +26,7 @@ export async function decodeChunk(
   const expectedBytes = numElements * bytesPerElement;
   if (encoded.byteLength !== expectedBytes) {
     throw new Error(
-      `Raw-format chunk is ${encoded.byteLength} bytes, ` +
+      `Chunk is ${encoded.byteLength} bytes after decoding, ` +
         `but ${numElements} * ${bytesPerElement} = ${expectedBytes} bytes are expected.`,
     );
   }

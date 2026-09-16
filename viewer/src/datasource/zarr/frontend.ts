@@ -213,11 +213,9 @@ export async function loadZarrVolume(
   storeSpec: ZarrStoreSpec,
 ): Promise<MultiscaleVolumeChunkSource> {
   const store = createZarrStore(storeSpec);
-  const zattrs = verifyObject(await readJson(store, ".zattrs"));
-  const multiscale = parseOmeMetadata(zattrs);
-  if (multiscale === undefined) {
-    throw new Error("No OME multiscale metadata found");
-  }
+  const multiscale = parseOmeMetadata(
+    verifyObject(await readJson(store, ".zattrs")),
+  );
   return new MultiscaleVolumeChunkSource(
     chunkManager,
     await resolveOmeMultiscale(storeSpec, store, multiscale),

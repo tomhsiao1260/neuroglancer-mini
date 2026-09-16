@@ -1,26 +1,23 @@
 /** @license Copyright 2016 Google Inc. SPDX-License-Identifier: Apache-2.0 */
 
+/**
+ * @file Checks on values parsed from JSON metadata.  Each function returns the value if it has the
+ * expected form, and throws otherwise; `verifyObjectProperty` names the property in the message, so
+ * that a failure deep in a `.zarray` or `.zattrs` file reads as e.g.
+ * `Error parsing "dtype" property: ...`.
+ */
+
 import type { WritableArrayLike } from "#src/util/array.js";
 
-export function verifyFloat(obj: any): number {
-  const t = typeof obj;
-  if (t === "number" || t === "string") {
-    const x = parseFloat("" + obj);
-    if (!Number.isNaN(x)) {
-      return x;
-    }
+export function verifyFiniteFloat(obj: any): number {
+  if (typeof obj === "number" && Number.isFinite(obj)) {
+    return obj;
   }
   throw new Error(
-    `Expected floating-point number, but received: ${JSON.stringify(obj)}.`,
+    `Expected finite floating-point number, but received: ${JSON.stringify(
+      obj,
+    )}.`,
   );
-}
-
-export function verifyFiniteFloat(obj: any): number {
-  const x = verifyFloat(obj);
-  if (Number.isFinite(x)) {
-    return x;
-  }
-  throw new Error(`Expected finite floating-point number, but received: ${x}.`);
 }
 
 export function verifyFinitePositiveFloat(obj: any): number {
@@ -96,38 +93,14 @@ export function verifyObjectProperty<T>(
   }
 }
 
-export function verifyOptionalObjectProperty<T>(
-  obj: any,
-  propertyName: string,
-  validator: (value: any) => T,
-): T | undefined;
-
+// Like `verifyObjectProperty`, but a property that is not there gets `defaultValue`.
 export function verifyOptionalObjectProperty<T>(
   obj: any,
   propertyName: string,
   validator: (value: any) => T,
   defaultValue: T,
-): T;
-
-export function verifyOptionalObjectProperty<T>(
-  obj: any,
-  propertyName: string,
-  validator: (value: any) => T,
-  defaultValue?: any,
-) {
+): T {
   return verifyObjectProperty(obj, propertyName, (x) =>
     x === undefined ? defaultValue : validator(x),
   );
 }
-
-export function verifyConstant<T>(actual: unknown, expected: T) {
-  if (actual !== expected) {
-    throw new Error(
-      `Expected ${JSON.stringify(expected)}, but received: ${JSON.stringify(
-        actual,
-      )}`,
-    );
-  }
-  return expected;
-}
-
