@@ -114,8 +114,8 @@ export class SharedObject extends RefCounted {
   rpc: RPC | null = null;
   rpcId: RpcId | null = null;
   isOwner: boolean | undefined;
-  unreferencedGeneration: number;
-  referencedGeneration: number;
+  unreferencedGeneration!: number;
+  referencedGeneration!: number;
 
   initializeSharedObject(rpc: RPC, rpcId = rpc.newId()) {
     this.rpc = rpc;

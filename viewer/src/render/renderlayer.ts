@@ -251,12 +251,11 @@ function beginSource(
   gl: GL,
   shader: ShaderProgram,
   sliceView: SliceView,
-  dataToDeviceMatrix: mat4,
   tsource: TransformedSource,
 ) {
   const { chunkLayout } = tsource;
   const projectionParameters = sliceView.projectionParameters.value;
-  const { centerDataPosition } = projectionParameters;
+  const { centerDataPosition, viewProjectionMat } = projectionParameters;
 
   setBoundingBoxCrossSectionShaderViewportPlane(
     shader,
@@ -270,7 +269,7 @@ function beginSource(
   gl.uniformMatrix4fv(
     shader.uniform("uProjectionMatrix"),
     false,
-    mat4.multiply(tempMat4, dataToDeviceMatrix, chunkLayout.transform),
+    mat4.multiply(tempMat4, viewProjectionMat, chunkLayout.transform),
   );
 
   // Every chunk of a scale has the same size, since zarr pads the chunks at the upper edge of the
@@ -413,13 +412,7 @@ export class ImageRenderLayer extends RefCounted {
       const chunks = source.chunks;
       const chunkSize = chunkLayout.size;
 
-      beginSource(
-        gl,
-        shader,
-        sliceView,
-        projectionParameters.viewProjectionMat,
-        transformedSource,
-      );
+      beginSource(gl, shader, sliceView, transformedSource);
       let newSource = true;
       sliceView.forEachVisibleChunk(transformedSource, (key) => {
         const chunk = chunks.get(key);

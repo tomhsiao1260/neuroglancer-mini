@@ -61,6 +61,8 @@ export class ChunkQueueManager extends SharedObject {
   chunkUpdateDeadline: number | null = null;
   // Whether views also request the chunks they are likely to need soon (see `render/backend.ts`).
   enablePrefetch = new WatchableValue(true);
+  // Whether the worker logs how many chunks are in each state after every update.
+  logStatistics = new WatchableValue(false);
 
   constructor(
     rpc: RPC,
@@ -78,6 +80,9 @@ export class ChunkQueueManager extends SharedObject {
       downloadCapacity: capacities.download,
       enablePrefetch: this.registerDisposer(
         SharedWatchableValue.makeFromExisting(rpc, this.enablePrefetch),
+      ).rpcId,
+      logStatistics: this.registerDisposer(
+        SharedWatchableValue.makeFromExisting(rpc, this.logStatistics),
       ).rpcId,
     });
   }

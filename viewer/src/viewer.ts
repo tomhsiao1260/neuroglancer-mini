@@ -234,6 +234,19 @@ export class Viewer extends RefCounted {
     return view;
   }
 
+  /**
+   * Whether every view that is drawn shows its data with nothing still loading (see
+   * `SliceView.isReady`).  `await viewer.loaded` first, since a viewer with no volume is not ready.
+   */
+  isReady() {
+    for (const panel of this.display.panels) {
+      if (panel.visibility.value === Number.NEGATIVE_INFINITY) continue;
+      panel.ensureBoundsUpdated();
+      if (!panel.sliceView.isReady()) return false;
+    }
+    return true;
+  }
+
   private reportPointer() {
     const { view, clientX, clientY } = this.pointer!;
     const coordinates = view.pointAt(clientX, clientY);

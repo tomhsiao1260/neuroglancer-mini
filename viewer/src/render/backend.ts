@@ -291,8 +291,8 @@ registerRPC(SLICEVIEW_SET_LAYER_RPC_ID, function (x) {
 export class VolumeChunk extends Chunk {
   source: VolumeChunkSource | null = null;
   // Position of the chunk in the chunk grid.
-  chunkGridPosition: Float32Array;
-  data: ArrayBufferView | null;
+  chunkGridPosition!: Float32Array;
+  data!: ArrayBufferView | null;
 
   initializeVolumeChunk(key: string, chunkGridPosition: Float32Array) {
     super.initialize(key);
@@ -331,7 +331,7 @@ export class VolumeChunk extends Chunk {
  */
 export class VolumeChunkSource extends ChunkSource {
   spec: VolumeChunkSpecification;
-  chunks: Map<string, VolumeChunk>;
+  chunks!: Map<string, VolumeChunk>;
 
   constructor(rpc: RPC, options: any) {
     super(rpc, options);
@@ -352,7 +352,7 @@ export class VolumeChunkSource extends ChunkSource {
 
 @registerSharedObject(SLICEVIEW_RENDERLAYER_RPC_ID)
 export class SliceViewRenderLayerBackend extends SharedObjectCounterpart {
-  rpcId: number;
+  rpcId!: number;
   renderScaleTarget: SharedWatchableValue<number>;
 
   constructor(rpc: RPC, options: any) {

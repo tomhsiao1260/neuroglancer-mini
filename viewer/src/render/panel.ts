@@ -4,6 +4,7 @@ import type { ChunkManager } from "#src/chunk_manager/frontend.js";
 import { RenderViewport } from "#src/render/base.js";
 import { SliceView } from "#src/render/frontend.js";
 import type { ImageRenderLayer } from "#src/render/renderlayer.js";
+import type { NavigationState } from "#src/state/navigation_state.js";
 import type { WatchableValueInterface } from "#src/state/trackable_value.js";
 import { WatchableValue } from "#src/state/trackable_value.js";
 import { animationFrameDebounce } from "#src/util/animation_frame_debounce.js";
@@ -109,6 +110,8 @@ export interface SliceViewerState {
 }
 
 const tempVec3 = vec3.create();
+const tempMat4 = mat4.create();
+const tempOffset = new Float32Array(2);
 
 function hasNoModifiers(event: MouseEvent) {
   return !event.ctrlKey && !event.altKey && !event.metaKey && !event.shiftKey;
@@ -175,7 +178,7 @@ export class SliceViewPanel extends RefCounted {
 
   constructor(
     public element: HTMLElement,
-    public navigationState: any,
+    public navigationState: NavigationState,
     public viewer: SliceViewerState,
   ) {
     super();
@@ -331,22 +334,30 @@ export class SliceViewPanel extends RefCounted {
     this.sliceView.projectionParameters.setViewport(this.renderViewport);
   }
 
+  // Position on the page, as an offset in viewport pixels from the center of the panel.
+  private offsetFromCenter(clientX: number, clientY: number) {
+    const { element, renderViewport } = this;
+    const bounds = element.getBoundingClientRect();
+    tempOffset[0] =
+      clientX - (bounds.left + element.clientLeft) - renderViewport.width / 2;
+    tempOffset[1] =
+      clientY - (bounds.top + element.clientTop) - renderViewport.height / 2;
+    return tempOffset;
+  }
+
   /**
    * Returns the point, in the viewer's (z, y, x) coordinates, shown at `clientX`, `clientY` on the
    * page, or `undefined` before the volume has loaded.  Computed from the navigation state rather than
    * the projection parameters, which are updated after a delay.
    */
   pointAt(clientX: number, clientY: number) {
-    const { navigationState, element, renderViewport } = this;
+    const { navigationState } = this;
     if (!navigationState.valid) return undefined;
-    const invViewMatrix = mat4.create();
-    navigationState.toMat4(invViewMatrix);
-    const bounds = element.getBoundingClientRect();
-    const x = clientX - (bounds.left + element.clientLeft) - renderViewport.width / 2;
-    const y = clientY - (bounds.top + element.clientTop) - renderViewport.height / 2;
+    navigationState.toMat4(tempMat4);
+    const [x, y] = this.offsetFromCenter(clientX, clientY);
     const point = new Float32Array(3);
     for (let i = 0; i < 3; ++i) {
-      point[i] = invViewMatrix[i] * x + invViewMatrix[4 + i] * y + invViewMatrix[12 + i];
+      point[i] = tempMat4[i] * x + tempMat4[4 + i] * y + tempMat4[12 + i];
     }
     return point;
   }
@@ -360,14 +371,8 @@ export class SliceViewPanel extends RefCounted {
     if (!navigationState.valid) {
       return;
     }
-    const { element, sliceView } = this;
-    const { width, height, invViewMatrix } =
-      sliceView.projectionParameters.value;
-    const bounds = element.getBoundingClientRect();
-    const mouseX =
-      event.clientX - (bounds.left + element.clientLeft) - width / 2;
-    const mouseY =
-      event.clientY - (bounds.top + element.clientTop) - height / 2;
+    const { invViewMatrix } = this.sliceView.projectionParameters.value;
+    const [mouseX, mouseY] = this.offsetFromCenter(event.clientX, event.clientY);
     // Desired invariance:
     //
     // invViewMatrixLinear * [mouseX, mouseY, 0]^T + [oldX, oldY, oldZ]^T =

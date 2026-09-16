@@ -416,7 +416,7 @@ class AvailableCapacity {
   currentSize = 0;
   currentItems = 0;
 
-  constructor(private limits: Capacity) {}
+  constructor(readonly limits: Capacity) {}
 
   // Records that `items` chunks of `size` bytes in total have been added, or removed if negative.
   adjust(items: number, size: number) {
@@ -440,6 +440,10 @@ export class ChunkQueueManager extends SharedObjectCounterpart {
 
   // Whether views request the chunks they are likely to need soon as PREFETCH.
   enablePrefetch: SharedWatchableValue<boolean>;
+  // Whether `logCounts` runs after every update.
+  logStatistics: SharedWatchableValue<boolean>;
+  // Number of chunks in each state, kept up to date by `adjustCapacitiesForChunk`.
+  private chunkCountByState = new Array<number>(ChunkState.EXPIRED + 1).fill(0);
 
   // Dispatched after an update that copied chunks to the GPU or freed them from it.
   gpuMemoryChanged = new NullarySignal();
@@ -478,6 +482,7 @@ export class ChunkQueueManager extends SharedObjectCounterpart {
     );
     this.downloadCapacity = new AvailableCapacity(options.downloadCapacity);
     this.enablePrefetch = rpc.get(options.enablePrefetch);
+    this.logStatistics = rpc.get(options.logStatistics);
   }
 
   scheduleUpdate() {
@@ -514,6 +519,7 @@ export class ChunkQueueManager extends SharedObjectCounterpart {
 
   adjustCapacitiesForChunk(chunk: Chunk, add: boolean) {
     const factor = add ? 1 : -1;
+    this.chunkCountByState[chunk.state] += factor;
     switch (chunk.state) {
       case ChunkState.DOWNLOADING:
         this.downloadCapacity.adjust(factor, factor * chunk.systemMemoryBytes);
@@ -677,7 +683,8 @@ export class ChunkQueueManager extends SharedObjectCounterpart {
         break;
       case ChunkState.GPU_MEMORY:
         this.freeChunkGPUMemory(chunk);
-      // fallthrough
+        this.freeChunkSystemMemory(chunk);
+        break;
       case ChunkState.SYSTEM_MEMORY_WORKER:
       case ChunkState.SYSTEM_MEMORY:
         this.freeChunkSystemMemory(chunk);
@@ -743,6 +750,33 @@ export class ChunkQueueManager extends SharedObjectCounterpart {
     if (this.gpuMemoryGeneration !== gpuMemoryGeneration) {
       this.gpuMemoryChanged.dispatch();
     }
+    if (this.logStatistics.value) {
+      this.logCounts();
+    }
+  }
+
+  /**
+   * Logs where the chunks are and how full the capacities are, e.g.
+   *
+   *   chunks: gpu_memory 74, downloading 4, queued 132 | downloads 4/100 |
+   *   system 0.03/2.00 GB | gpu 0.02/1.00 GB
+   *
+   * Turn it on with `viewer.chunkManager.chunkQueueManager.logStatistics.value = true`.
+   */
+  private logCounts() {
+    const counts = this.chunkCountByState
+      .map((count, state) =>
+        count === 0 ? "" : `${ChunkState[state].toLowerCase()} ${count}`,
+      )
+      .filter((text) => text !== "");
+    const gb = (bytes: number) => (bytes / 1e9).toFixed(2);
+    const { downloadCapacity, systemMemoryCapacity, gpuMemoryCapacity } = this;
+    console.log(
+      `chunks: ${counts.join(", ")} | ` +
+        `downloads ${downloadCapacity.currentItems}/${downloadCapacity.limits.itemLimit} | ` +
+        `system ${gb(systemMemoryCapacity.currentSize)}/${gb(systemMemoryCapacity.limits.sizeLimit)} GB | ` +
+        `gpu ${gb(gpuMemoryCapacity.currentSize)}/${gb(gpuMemoryCapacity.limits.sizeLimit)} GB`,
+    );
   }
 }
 

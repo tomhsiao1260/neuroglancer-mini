@@ -446,14 +446,25 @@ export function forEachPlaneIntersectingVolumetricChunk(
   mat4.invert(invModelViewProjection, modelViewProjection);
   const lower = tempVisibleVolumetricChunkLower;
   const upper = tempVisibleVolumetricChunkUpper;
-  const epsilon = 1e-3;
+  const { upperChunkBound } = transformedSource.source.spec;
+  const BIAS_EPSILON = 1e-4;
+  const BOUND_EPSILON = 1e-3;
   for (let i = 0; i < 3; ++i) {
-    // Add small offset of `epsilon` voxels to bias towards the higher coordinate if very close to a
-    // voxel boundary.
-    const c = invModelViewProjection[12 + i] + epsilon / chunkSize[i];
+    // Bias towards the higher coordinate if the center is very close to a chunk boundary.
+    const c = invModelViewProjection[12 + i] + BIAS_EPSILON / chunkSize[i];
     const xCoeff = Math.abs(invModelViewProjection[i]);
     const yCoeff = Math.abs(invModelViewProjection[4 + i]);
-    lower[i] = Math.floor(c - xCoeff - yCoeff);
+    const bound = upperChunkBound[i];
+    let lowerValue = c - xCoeff - yCoeff;
+    if (lowerValue >= bound && lowerValue < bound + BOUND_EPSILON) {
+      // The lower edge of the viewport landed a hair past the last chunk, which would leave the
+      // range empty.  Keep showing the last chunk instead of going blank at the far face of the
+      // volume.
+      lowerValue = bound - 1;
+    } else {
+      lowerValue = Math.floor(lowerValue);
+    }
+    lower[i] = lowerValue;
     upper[i] = Math.floor(c + xCoeff + yCoeff + 1);
   }
 
