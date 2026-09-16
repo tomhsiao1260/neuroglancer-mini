@@ -1,18 +1,4 @@
-/**
- * @license
- * Copyright 2016 Google Inc.
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
+/** @license Copyright 2016 Google Inc. SPDX-License-Identifier: Apache-2.0 */
 
 /**
  * Where a chunk is.  States with lower numbers are closer to being drawn; code compares states
@@ -48,17 +34,18 @@ export enum ChunkState {
  * kept in least-recently-used order until evicted.
  */
 export enum ChunkPriorityTier {
-  FIRST_TIER = 0,
-  // eslint-disable-next-line @typescript-eslint/no-duplicate-enum-values
-  FIRST_ORDERED_TIER = 0,
-  // eslint-disable-next-line @typescript-eslint/no-duplicate-enum-values
   VISIBLE = 0,
   PREFETCH = 1,
-  // eslint-disable-next-line @typescript-eslint/no-duplicate-enum-values
-  LAST_ORDERED_TIER = 1,
   RECENT = 2,
-  // eslint-disable-next-line @typescript-eslint/no-duplicate-enum-values
-  LAST_TIER = 2,
+}
+
+/**
+ * Limits on what may be in one place (GPU memory, system memory, or downloading) at a time: a
+ * number of chunks and a total number of bytes.
+ */
+export interface Capacity {
+  itemLimit: number;
+  sizeLimit: number;
 }
 
 export const CHUNK_QUEUE_MANAGER_RPC_ID = "ChunkQueueManager";

@@ -1,26 +1,52 @@
-/**
- * @license
- * Copyright 2016 Google Inc.
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
+/** @license Copyright 2016 Google Inc. SPDX-License-Identifier: Apache-2.0 */
 
-export interface LinkedListOperations<T> {
-  insertAfter: (head: T, x: T) => void;
-  pop: (head: T) => T;
-  insertBefore: (head: T, x: T) => void;
-  front: (head: T) => T | null;
-  back: (head: T) => T | null;
-  iterator: (head: T) => Iterator<T>;
-  reverseIterator: (head: T) => Iterator<T>;
-  initializeHead: (head: T) => void;
+/**
+ * Circular doubly linked list whose nodes link themselves through two of their own fields, named
+ * when the list is created (e.g. `next0`, `prev0`).  A node can be in two lists at once if the lists
+ * use different fields.  The list hangs off a head node that is not an element.
+ */
+export class LinkedList<T> {
+  constructor(
+    private next: string,
+    private prev: string,
+  ) {}
+
+  initializeHead(head: T) {
+    (head as any)[this.next] = (head as any)[this.prev] = head;
+  }
+
+  // Inserts `x` at the front of the list.
+  insertAfter(head: T, x: T) {
+    const { next, prev } = this;
+    const h = head as any;
+    const n = x as any;
+    const first = h[next];
+    n[next] = first;
+    n[prev] = head;
+    h[next] = x;
+    first[prev] = x;
+  }
+
+  front(head: T): T | null {
+    const first = (head as any)[this.next];
+    return first === head ? null : first;
+  }
+
+  back(head: T): T | null {
+    const last = (head as any)[this.prev];
+    return last === head ? null : last;
+  }
+
+  // Removes `x` from the list it is in.
+  pop(x: T) {
+    const { next, prev } = this;
+    const n = x as any;
+    const nextNode = n[next];
+    const prevNode = n[prev];
+    nextNode[prev] = prevNode;
+    prevNode[next] = nextNode;
+    n[next] = null;
+    n[prev] = null;
+    return x;
+  }
 }

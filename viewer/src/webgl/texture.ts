@@ -1,52 +1,8 @@
-/**
- * @license
- * Copyright 2016 Google Inc.
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
-
-import type { GL } from "#src/webgl/context.js";
+/** @license Copyright 2016 Google Inc. SPDX-License-Identifier: Apache-2.0 */
 
 /**
- * Sets parameters to make a texture suitable for use as a raw array: NEAREST
- * filtering, clamping.
+ * Sets parameters to make a texture suitable for use as a raw array: NEAREST filtering, clamping.
  */
-export function setRawTextureParameters(gl: WebGL2RenderingContext) {
-  gl.texParameteri(
-    WebGL2RenderingContext.TEXTURE_2D,
-    WebGL2RenderingContext.TEXTURE_MIN_FILTER,
-    WebGL2RenderingContext.NEAREST,
-  );
-  gl.texParameteri(
-    WebGL2RenderingContext.TEXTURE_2D,
-    WebGL2RenderingContext.TEXTURE_MAG_FILTER,
-    WebGL2RenderingContext.NEAREST,
-  );
-  // Prevents s-coordinate wrapping (repeating).  Repeating not
-  // permitted for non-power-of-2 textures.
-  gl.texParameteri(
-    WebGL2RenderingContext.TEXTURE_2D,
-    WebGL2RenderingContext.TEXTURE_WRAP_S,
-    WebGL2RenderingContext.CLAMP_TO_EDGE,
-  );
-  // Prevents t-coordinate wrapping (repeating).  Repeating not
-  // permitted for non-power-of-2 textures.
-  gl.texParameteri(
-    WebGL2RenderingContext.TEXTURE_2D,
-    WebGL2RenderingContext.TEXTURE_WRAP_T,
-    WebGL2RenderingContext.CLAMP_TO_EDGE,
-  );
-}
-
 export function setRawTexture3DParameters(gl: WebGL2RenderingContext) {
   gl.texParameteri(
     WebGL2RenderingContext.TEXTURE_3D,
@@ -77,31 +33,5 @@ export function setRawTexture3DParameters(gl: WebGL2RenderingContext) {
     WebGL2RenderingContext.TEXTURE_WRAP_R,
     WebGL2RenderingContext.CLAMP_TO_EDGE,
   );
-}
-
-export function resizeTexture(
-  gl: GL,
-  texture: WebGLTexture | null,
-  width: number,
-  height: number,
-  internalFormat: number = WebGL2RenderingContext.RGBA8,
-  format: number = WebGL2RenderingContext.RGBA,
-  dataType: number = WebGL2RenderingContext.UNSIGNED_BYTE,
-) {
-  gl.activeTexture(WebGL2RenderingContext.TEXTURE0 + gl.tempTextureUnit);
-  gl.bindTexture(WebGL2RenderingContext.TEXTURE_2D, texture);
-  setRawTextureParameters(gl);
-  gl.texImage2D(
-    WebGL2RenderingContext.TEXTURE_2D,
-    0,
-    /*internalformat=*/ internalFormat,
-    /*width=*/ width,
-    /*height=*/ height,
-    /*border=*/ 0,
-    /*format=*/ format,
-    dataType,
-    <any>null,
-  );
-  gl.bindTexture(WebGL2RenderingContext.TEXTURE_2D, null);
 }
 

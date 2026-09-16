@@ -1,18 +1,4 @@
-/**
- * @license
- * Copyright 2016 Google Inc.
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
+/** @license Copyright 2016 Google Inc. SPDX-License-Identifier: Apache-2.0 */
 
 import { RefCounted } from "#src/util/disposable.js";
 import type { GL } from "#src/webgl/context.js";
@@ -35,14 +21,12 @@ export class ShaderProgram extends RefCounted {
   vertexShader: WebGLShader;
   fragmentShader: WebGLShader;
   uniforms = new Map<string, WebGLUniformLocation | null>();
-  attributes = new Map<string, number>();
 
   constructor(
     public gl: GL,
     vertexSource: string,
     fragmentSource: string,
     uniformNames: string[],
-    attributeNames: string[],
   ) {
     super();
     const vertexShader = (this.vertexShader = compileShader(
@@ -68,17 +52,10 @@ export class ShaderProgram extends RefCounted {
     for (const name of uniformNames) {
       this.uniforms.set(name, gl.getUniformLocation(program, name));
     }
-    for (const name of attributeNames) {
-      this.attributes.set(name, gl.getAttribLocation(program, name));
-    }
   }
 
   uniform(name: string): WebGLUniformLocation {
     return this.uniforms.get(name)!;
-  }
-
-  attribute(name: string): number {
-    return this.attributes.get(name)!;
   }
 
   bind() {
@@ -94,27 +71,6 @@ export class ShaderProgram extends RefCounted {
 }
 
 /**
- * GLSL code, possibly nested.  Each distinct string is emitted only once, so a definition shared by
- * several parts (e.g. a struct) can be listed in each of them.
- */
-export type ShaderCodePart = string | ShaderCodePart[];
-
-class ShaderCode {
-  code = "";
-  private parts = new Set<ShaderCodePart>();
-
-  add(x: ShaderCodePart) {
-    if (this.parts.has(x)) return;
-    this.parts.add(x);
-    if (typeof x === "string") {
-      this.code += x;
-    } else {
-      for (const y of x) this.add(y);
-    }
-  }
-}
-
-/**
  * Assembles a vertex and fragment shader from declarations and code, and builds the program.
  * Uniform and attribute locations are looked up by the names declared here.
  */
@@ -124,22 +80,18 @@ export class ShaderBuilder {
   private varyingsCodeVS = "";
   private varyingsCodeFS = "";
   private outputBufferCode = "";
-  private vertexCode = new ShaderCode();
-  private fragmentCode = new ShaderCode();
+  private vertexCode = "";
+  private fragmentCode = "";
   private vertexMain = "";
   private fragmentMain = "";
   private uniforms = new Array<string>();
-  private attributes = new Array<string>();
   private initializers = new Array<(shader: ShaderProgram) => void>();
 
   constructor(public gl: GL) {}
 
-  addAttribute(typeName: string, name: string, location?: number) {
-    this.attributes.push(name);
-    if (location !== undefined) {
-      this.attributesCode += `layout(location = ${location})`;
-    }
-    this.attributesCode += `in ${typeName} ${name};\n`;
+  // Attribute locations are fixed with `layout(location = ...)`, so they are never looked up.
+  addAttribute(typeName: string, name: string, location: number) {
+    this.attributesCode += `layout(location = ${location}) in ${typeName} ${name};\n`;
   }
 
   addVarying(typeName: string, name: string) {
@@ -147,11 +99,8 @@ export class ShaderBuilder {
     this.varyingsCodeFS += `in ${typeName} ${name};\n`;
   }
 
-  addOutputBuffer(typeName: string, name: string, location: number | null) {
-    if (location !== null) {
-      this.outputBufferCode += `layout(location = ${location}) `;
-    }
-    this.outputBufferCode += `out ${typeName} ${name};\n`;
+  addOutputBuffer(typeName: string, name: string, location: number) {
+    this.outputBufferCode += `layout(location = ${location}) out ${typeName} ${name};\n`;
   }
 
   addUniform(typeName: string, name: string, extent?: number) {
@@ -163,12 +112,12 @@ export class ShaderBuilder {
     }
   }
 
-  addVertexCode(code: ShaderCodePart) {
-    this.vertexCode.add(code);
+  addVertexCode(code: string) {
+    this.vertexCode += code;
   }
 
-  addFragmentCode(code: ShaderCodePart) {
-    this.fragmentCode.add(code);
+  addFragmentCode(code: string) {
+    this.fragmentCode += code;
   }
 
   // Sets the body of the vertex shader's `main`.
@@ -193,7 +142,7 @@ precision highp int;
 ${this.uniformsCode}
 ${this.attributesCode}
 ${this.varyingsCodeVS}
-${this.vertexCode.code}
+${this.vertexCode}
 void main() {
 ${this.vertexMain}
 }
@@ -204,7 +153,7 @@ precision highp int;
 ${this.uniformsCode}
 ${this.varyingsCodeFS}
 ${this.outputBufferCode}
-${this.fragmentCode.code}
+${this.fragmentCode}
 void main() {
 ${this.fragmentMain}
 }
@@ -214,7 +163,6 @@ ${this.fragmentMain}
       vertexSource,
       fragmentSource,
       this.uniforms,
-      this.attributes,
     );
     const { initializers } = this;
     if (initializers.length > 0) {

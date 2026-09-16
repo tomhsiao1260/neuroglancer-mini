@@ -1,36 +1,16 @@
-/**
- * @license
- * Copyright 2016 Google Inc.
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
+/** @license Copyright 2016 Google Inc. SPDX-License-Identifier: Apache-2.0 */
 
 import { debounce } from "es-toolkit";
 import { ChunkState } from "#src/chunk_manager/base.js";
 import type { ChunkManager } from "#src/chunk_manager/frontend.js";
 import { Chunk, ChunkSource } from "#src/chunk_manager/frontend.js";
-import type {
-  DisplayDimensionRenderInfo,
-  NavigationState,
-} from "#src/state/navigation_state.js";
+import type { NavigationState } from "#src/state/navigation_state.js";
 import type {
   WatchableValueChangeInterface,
   WatchableValueInterface,
 } from "#src/state/trackable_value.js";
 import type {
-  SliceViewChunkSource as SliceViewChunkSourceInterface,
-  SliceViewChunkSpecification,
   TransformedSource,
-  VisibleLayerSources,
   VolumeChunkSpecification,
 } from "#src/render/base.js";
 import {
@@ -42,11 +22,9 @@ import {
   projectionParametersEqual,
   RenderViewport,
   renderViewportsEqual,
-  SLICEVIEW_ADD_VISIBLE_LAYER_RPC_ID,
   SLICEVIEW_RPC_ID,
+  SLICEVIEW_SET_LAYER_RPC_ID,
   SliceViewBase,
-  SliceViewProjectionParameters,
-  updateProjectionParametersFromInverseViewAndProjection,
 } from "#src/render/base.js";
 import {
   ChunkFormat,
@@ -58,10 +36,11 @@ import type { TypedArray } from "#src/util/array.js";
 import type { DataType } from "#src/util/data_type.js";
 import type { Borrowed, Disposer, Owned } from "#src/util/disposable.js";
 import { invokeDisposers, RefCounted } from "#src/util/disposable.js";
-import { kOneVec, mat4, vec3 } from "#src/util/geom.js";
+import { mat4, vec3 } from "#src/util/geom.js";
 import { NullarySignal, Signal } from "#src/util/signal.js";
+import { SharedWatchableValue } from "#src/worker/shared_watchable_value.js";
+import { kEmptyFloat32Vec } from "#src/util/vector.js";
 import type { GL } from "#src/webgl/context.js";
-import { OffscreenFramebuffer } from "#src/webgl/offscreen.js";
 import type { RPC } from "#src/worker/worker_rpc.js";
 import {
   registerSharedObjectOwner,
@@ -72,45 +51,40 @@ import {
  * Projection parameters of a panel, recomputed (debounced) whenever the navigation state or the
  * viewport changes.  `changed` fires only if the result differs from the previous value.
  */
-export class DerivedProjectionParameters<
-    Parameters extends ProjectionParameters = ProjectionParameters,
-  >
+export class DerivedProjectionParameters
   extends RefCounted
-  implements WatchableValueChangeInterface<Parameters>
+  implements WatchableValueChangeInterface<ProjectionParameters>
 {
-  private oldValue_: Parameters;
-  private value_: Parameters;
+  // Two objects are swapped on each change, so the previous value stays available to listeners.
+  private oldValue_ = new ProjectionParameters();
+  private value_ = new ProjectionParameters();
   private renderViewport = new RenderViewport();
 
-  changed = new Signal<(oldValue: Parameters, newValue: Parameters) => void>();
-  constructor(options: {
-    navigationState: Borrowed<NavigationState>;
-    update: (out: Parameters, navigationState: NavigationState) => void;
-    isEqual?: (a: Parameters, b: Parameters) => boolean;
-    parametersConstructor?: { new (): Parameters };
-  }) {
+  changed = new Signal<
+    (oldValue: ProjectionParameters, newValue: ProjectionParameters) => void
+  >();
+  constructor(
+    navigationState: Borrowed<NavigationState>,
+    update: (out: ProjectionParameters, navigationState: NavigationState) => void,
+  ) {
     super();
-    const {
-      parametersConstructor = ProjectionParameters as { new (): Parameters },
-      navigationState,
-      update,
-      isEqual = projectionParametersEqual,
-    } = options;
-    this.oldValue_ = new parametersConstructor();
-    this.value_ = new parametersConstructor();
     const performUpdate = () => {
       const { oldValue_, value_ } = this;
-      oldValue_.displayDimensionRenderInfo = navigationState.displayDimensionRenderInfo;
       Object.assign(oldValue_, this.renderViewport);
       let { globalPosition } = oldValue_;
-      const newGlobalPosition = navigationState.position.value;
+      // Until the volume has loaded, there is no position yet.  The worker's velocity estimator then
+      // starts afresh at the first real position, instead of taking the jump from (0, 0, 0) to the
+      // center of the volume for a fast motion.
+      const newGlobalPosition = navigationState.position.valid
+        ? navigationState.position.value
+        : kEmptyFloat32Vec;
       const rank = newGlobalPosition.length;
       if (globalPosition.length !== rank) {
         oldValue_.globalPosition = globalPosition = new Float32Array(rank);
       }
       globalPosition.set(newGlobalPosition);
       update(oldValue_, navigationState);
-      if (isEqual(oldValue_, value_)) return;
+      if (projectionParametersEqual(oldValue_, value_)) return;
       this.value_ = oldValue_;
       this.oldValue_ = value_;
       this.changed.dispatch(value_, oldValue_);
@@ -141,15 +115,10 @@ export class DerivedProjectionParameters<
  * `backend.ts`), at most every `updateInterval` milliseconds.
  */
 @registerSharedObjectOwner(PROJECTION_PARAMETERS_RPC_ID)
-export class SharedProjectionParameters<
-  T extends ProjectionParameters = ProjectionParameters,
-> extends SharedObject {
-  private prevDisplayDimensionRenderInfo:
-    | undefined
-    | DisplayDimensionRenderInfo = undefined;
+export class SharedProjectionParameters extends SharedObject {
   constructor(
     rpc: RPC,
-    public base: WatchableValueChangeInterface<T>,
+    public base: WatchableValueChangeInterface<ProjectionParameters>,
     public updateInterval = 10,
   ) {
     super();
@@ -162,88 +131,46 @@ export class SharedProjectionParameters<
   }
 
   private update = this.registerCancellable(
-    debounce((_oldValue: T, newValue: T) => {
-      // Note: Because we are using debouce, we cannot rely on `_oldValue`, since
-      // `DerivedProjectionParameters` reuses the objects.
-      let valueUpdate: any;
-      if (
-        newValue.displayDimensionRenderInfo !==
-        this.prevDisplayDimensionRenderInfo
-      ) {
-        valueUpdate = newValue;
-        this.prevDisplayDimensionRenderInfo =
-          newValue.displayDimensionRenderInfo;
-      } else {
-        const { displayDimensionRenderInfo, ...remainder } = newValue;
-        valueUpdate = remainder;
-      }
+    debounce((_oldValue: ProjectionParameters, newValue: ProjectionParameters) => {
+      // Note: Because we are using debounce, we cannot rely on `_oldValue`, since
+      // `DerivedProjectionParameters` reuses the objects.  A copy is sent, in case the message is
+      // queued until the worker is ready.
       this.rpc!.invoke(PROJECTION_PARAMETERS_CHANGED_RPC_METHOD_ID, {
         id: this.rpcId,
-        value: valueUpdate,
+        value: { ...newValue },
       });
     }, this.updateInterval),
   );
 }
 
-interface FrontendVisibleLayerSources
-  extends VisibleLayerSources<
-    ImageRenderLayer,
-    SliceViewChunkSource,
-    TransformedSource<ImageRenderLayer, SliceViewChunkSource>
-  > {
-  disposers: Disposer[];
-}
-
+// The message for `deserializeTransformedSource` in `backend.ts`; adds a worker reference to the
+// chunk source.
 function serializeTransformedSource(
-  tsource: TransformedSource<ImageRenderLayer, SliceViewChunkSource>,
+  tsource: TransformedSource<VolumeChunkSource>,
 ) {
   return {
     source: tsource.source.addCounterpartRef(),
-    effectiveVoxelSize: tsource.effectiveVoxelSize,
-    layerRank: tsource.layerRank,
-    lowerClipBound: tsource.lowerClipBound,
-    upperClipBound: tsource.upperClipBound,
-    lowerClipDisplayBound: tsource.lowerClipDisplayBound,
-    upperClipDisplayBound: tsource.upperClipDisplayBound,
-    chunkDisplayDimensionIndices: tsource.chunkDisplayDimensionIndices,
-    lowerChunkDisplayBound: tsource.lowerChunkDisplayBound,
-    upperChunkDisplayBound: tsource.upperChunkDisplayBound,
-    combinedGlobalLocalToChunkTransform:
-      tsource.combinedGlobalLocalToChunkTransform,
     chunkLayout: tsource.chunkLayout.toObject(),
   };
 }
 
-export function serializeAllTransformedSources(
-  allSources: TransformedSource<ImageRenderLayer, SliceViewChunkSource>[][],
-) {
-  return allSources.map((scales) => scales.map(serializeTransformedSource));
-}
-
 /**
- * Main-thread side of one cross-section view.  Sends its layers' sources and the projection
+ * Main-thread side of one cross-section view.  Sends the volume's sources and the projection
  * parameters to its worker counterpart (`SliceViewBackend`), which requests the visible chunks,
- * and draws the chunks that have reached the GPU into `offscreenFramebuffer`.
+ * and draws the chunks that have reached the GPU.
  */
 @registerSharedObjectOwner(SLICEVIEW_RPC_ID)
-export class SliceView extends SliceViewBase {
+export class SliceView extends SliceViewBase<VolumeChunkSource> {
   gl = this.chunkManager.gl;
+  // Dispatched when the view needs to be drawn again.
   viewChanged = new NullarySignal();
-  renderingStale = true;
-  visibleLayerList = new Array<ImageRenderLayer>();
-  visibleLayers: Map<ImageRenderLayer, FrontendVisibleLayerSources>;
+  // The render layer being drawn, once `renderLayer` has a value.
+  layer: ImageRenderLayer | undefined;
+  private layerDisposers: Disposer[] = [];
 
-  offscreenFramebuffer = this.registerDisposer(
-    new OffscreenFramebuffer(this.gl),
-  );
+  projectionParameters!: Owned<DerivedProjectionParameters>;
 
-  projectionParameters: Owned<
-    DerivedProjectionParameters<SliceViewProjectionParameters>
-  >;
-
-  sharedProjectionParameters: Owned<
-    SharedProjectionParameters<SliceViewProjectionParameters>
-  >;
+  sharedProjectionParameters: Owned<SharedProjectionParameters>;
 
   flushBackendProjectionParameters() {
     this.sharedProjectionParameters.flush();
@@ -254,39 +181,47 @@ export class SliceView extends SliceViewBase {
     // The render layer to draw; `undefined` until the volume has loaded.
     public renderLayer: WatchableValueInterface<ImageRenderLayer | undefined>,
     public navigationState: Owned<NavigationState>,
+    // How much the view's chunks are worth loading (see `render/panel.ts`).
+    visibility: WatchableValueInterface<number>,
   ) {
     super(
-      new DerivedProjectionParameters({
-        parametersConstructor: SliceViewProjectionParameters,
-        navigationState,
-        update: (out, navigationState) => {
-          const { invViewMatrix, centerDataPosition } = out;
-          navigationState.toMat4(invViewMatrix);
-          for (let i = 0; i < 3; ++i) {
-            centerDataPosition[i] = invViewMatrix[12 + i];
-          }
-          const {
-            logicalWidth,
-            logicalHeight,
-            projectionMat,
-            viewportNormalInGlobalCoordinates,
-          } = out;
-          const relativeDepthRange = 10;
-          mat4.ortho(
-            projectionMat,
-            -logicalWidth / 2,
-            logicalWidth / 2,
-            logicalHeight / 2,
-            -logicalHeight / 2,
-            -relativeDepthRange,
-            relativeDepthRange,
-          );
-          updateProjectionParametersFromInverseViewAndProjection(out);
-          const { viewMatrix } = out;
-          for (let i = 0; i < 3; ++i) {
-            viewportNormalInGlobalCoordinates[i] = viewMatrix[i * 4 + 2];
-          }
-        },
+      new DerivedProjectionParameters(navigationState, (out, navigationState) => {
+        const { invViewMatrix, centerDataPosition } = out;
+        navigationState.toMat4(invViewMatrix);
+        for (let i = 0; i < 3; ++i) {
+          centerDataPosition[i] = invViewMatrix[12 + i];
+        }
+        const {
+          width,
+          height,
+          projectionMat,
+          viewMatrix,
+          viewProjectionMat,
+          viewportNormalInGlobalCoordinates,
+        } = out;
+        const relativeDepthRange = 10;
+        mat4.ortho(
+          projectionMat,
+          -width / 2,
+          width / 2,
+          height / 2,
+          -height / 2,
+          -relativeDepthRange,
+          relativeDepthRange,
+        );
+        mat4.invert(viewMatrix, invViewMatrix);
+        mat4.multiply(viewProjectionMat, projectionMat, viewMatrix);
+        for (let i = 0; i < 3; ++i) {
+          viewportNormalInGlobalCoordinates[i] = viewMatrix[i * 4 + 2];
+        }
+        // Size of a screen pixel, in voxels: the length of a view axis in voxel coordinates.
+        // `filterVisibleSources` compares it with the voxel size of each scale to choose the
+        // scales to draw and to load.
+        let pixelSize = 0;
+        for (let i = 0; i < 3; ++i) {
+          pixelSize += invViewMatrix[i] ** 2;
+        }
+        out.pixelSize = Math.sqrt(pixelSize);
       }),
     );
     const rpc = this.chunkManager.rpc!;
@@ -297,55 +232,53 @@ export class SliceView extends SliceViewBase {
     this.initializeCounterpart(rpc, {
       chunkManager: chunkManager.rpcId,
       projectionParameters: sharedProjectionParameters.rpcId,
+      visibility: this.registerDisposer(
+        SharedWatchableValue.makeFromExisting(rpc, visibility),
+      ).rpcId,
     });
     this.registerDisposer(
       renderLayer.changed.add(() => {
-        this.updateVisibleLayers();
+        this.updateLayer();
       }),
     );
 
-    this.viewChanged.add(() => {
-      this.renderingStale = true;
-    });
     this.registerDisposer(
       chunkManager.chunkQueueManager.visibleChunksChanged.add(
         this.viewChanged.dispatch,
       ),
     );
     this.registerDisposer(navigationState);
-    this.updateVisibleLayers();
+    this.updateLayer();
   }
 
   // Releases the render layer and the projection parameters, and stops listening to them.
   disposed() {
-    for (const [renderLayer, layerInfo] of this.visibleLayers) {
-      invokeDisposers(layerInfo.disposers);
-      renderLayer.dispose();
+    const { layer } = this;
+    if (layer !== undefined) {
+      invokeDisposers(this.layerDisposers);
+      layer.dispose();
+      this.layer = undefined;
     }
-    this.visibleLayers.clear();
-    this.visibleLayerList.length = 0;
     this.projectionParameters.dispose();
     super.disposed();
   }
 
   forEachVisibleChunk(
     tsource: TransformedSource,
-    chunkLayout: ChunkLayout,
     callback: (key: string) => void,
   ) {
     forEachPlaneIntersectingVolumetricChunk(
       this.projectionParameters.value,
       tsource,
-      chunkLayout,
       () => {
         callback(tsource.curPositionInChunks.join());
       },
     );
   }
 
-  private updateVisibleLayers = this.registerCancellable(
+  private updateLayer = this.registerCancellable(
     debounce(() => {
-      this.updateVisibleLayersNow();
+      this.updateLayerNow();
     }, 0),
   );
 
@@ -354,65 +287,32 @@ export class SliceView extends SliceViewBase {
     this.viewChanged.dispatch();
   }
 
-  private bindVisibleRenderLayer(
-    renderLayer: ImageRenderLayer,
-    disposers: Disposer[],
-  ) {
-    disposers.push(
-      renderLayer.localPosition.changed.add(() =>
-        this.invalidateVisibleChunks(),
-      ),
-    );
-    disposers.push(
-      renderLayer.renderScaleTarget.changed.add(() =>
-        this.invalidateVisibleSources(),
-      ),
-    );
-  }
-
-  // Registers the render layer once it exists, and sends its sources to the worker.
-  private updateVisibleLayersNow() {
+  // Once the render layer exists, places the volume's scales in the view and sends them to the
+  // worker.
+  private updateLayerNow() {
     if (this.wasDisposed) {
-      return false;
+      return;
     }
-    const { visibleLayers, visibleLayerList } = this;
-    const { displayDimensionRenderInfo } = this.projectionParameters.value;
-    const rpc = this.rpc!;
-    const rpcMessage: any = { id: this.rpcId };
-    let changed = false;
-    visibleLayerList.length = 0;
     const renderLayer = this.renderLayer.value;
-    if (renderLayer !== undefined) {
-      visibleLayerList.push(renderLayer);
-      if (!visibleLayers.has(renderLayer)) {
-        const disposers: Disposer[] = [];
-        const layerInfo: FrontendVisibleLayerSources = {
-          allSources: getVolumetricTransformedSources(
-            renderLayer.getSources(),
-            renderLayer,
-          ),
-          visibleSources: [],
-          disposers,
-          displayDimensionRenderInfo,
-        };
-        visibleLayers.set(renderLayer.addRef(), layerInfo);
-        this.bindVisibleRenderLayer(renderLayer, disposers);
-        rpcMessage.layerId = renderLayer.rpcId;
-        rpcMessage.sources = serializeAllTransformedSources(
-          layerInfo.allSources,
-        );
-        this.flushBackendProjectionParameters();
-        rpc.invoke(SLICEVIEW_ADD_VISIBLE_LAYER_RPC_ID, rpcMessage);
-        changed = true;
-      }
-    }
-    if (changed) {
+    if (renderLayer !== undefined && this.layer === undefined) {
+      this.sources = getVolumetricTransformedSources(renderLayer.getSources());
+      this.layer = renderLayer.addRef();
+      this.renderScaleTarget = renderLayer.renderScaleTarget;
+      this.layerDisposers.push(
+        renderLayer.renderScaleTarget.changed.add(() =>
+          this.invalidateVisibleSources(),
+        ),
+      );
+      const sources = this.sources.map(serializeTransformedSource);
+      this.flushBackendProjectionParameters();
+      this.rpc!.invoke(SLICEVIEW_SET_LAYER_RPC_ID, {
+        id: this.rpcId,
+        layerId: renderLayer.rpcId,
+        sources,
+      });
       this.visibleSourcesStale = true;
     }
-    // Unconditionally call viewChanged, because layers may have been reordered even if the set of
-    // sources is the same.
     this.viewChanged.dispatch();
-    return changed;
   }
 
   invalidateVisibleChunks() {
@@ -424,156 +324,76 @@ export class SliceView extends SliceViewBase {
     return this.navigationState.valid;
   }
 
-  updateRendering() {
+  /**
+   * Whether every chunk this view would draw is already on the GPU, i.e. the view shows its data
+   * with nothing still loading.  Tests and screenshots poll it instead of waiting a fixed time.  A
+   * chunk whose download failed never becomes ready.
+   */
+  isReady() {
+    const { width, height } = this.projectionParameters.value;
+    if (!this.valid || width === 0 || height === 0) return false;
+    this.updateLayer.flush();
+    this.updateVisibleSources();
+    for (const tsource of this.visibleSources) {
+      const { chunks } = tsource.source;
+      let ready = true;
+      this.forEachVisibleChunk(tsource, (key) => {
+        if (chunks.get(key)?.state !== ChunkState.GPU_MEMORY) ready = false;
+      });
+      if (!ready) return false;
+    }
+    return true;
+  }
+
+  // Draws the slice into the current viewport, which the panel has set to its part of the canvas.
+  draw() {
     const projectionParameters = this.projectionParameters.value;
     const { width, height } = projectionParameters;
-    if (!this.renderingStale || !this.valid || width === 0 || height === 0) {
+    if (width === 0 || height === 0) {
       return;
     }
-    this.renderingStale = false;
-    this.updateVisibleLayers.flush();
+    this.updateLayer.flush();
     this.updateVisibleSources();
 
-    const { gl, offscreenFramebuffer } = this;
-
-    offscreenFramebuffer.bind(width, height);
-    gl.disable(gl.SCISSOR_TEST);
-
-    gl.clearColor(0, 0, 0, 0);
-    gl.colorMask(true, true, true, true);
+    const { gl } = this;
+    // Pixels where no chunk is drawn are gray.
+    gl.clearColor(0.5, 0.5, 0.5, 1);
     gl.clear(WebGL2RenderingContext.COLOR_BUFFER_BIT);
-    const renderContext = {
-      sliceView: this,
-      projectionParameters,
-    };
-    // The viewer has a single render layer, so nothing is blended over another layer.
-    for (const renderLayer of this.visibleLayerList) {
+    const { layer } = this;
+    if (layer !== undefined) {
+      // The depth buffer keeps coarser scales from being drawn over finer ones (see
+      // `renderlayer.ts`).
       gl.enable(WebGL2RenderingContext.DEPTH_TEST);
       gl.depthFunc(WebGL2RenderingContext.LESS);
       gl.clearDepth(1);
       gl.clear(WebGL2RenderingContext.DEPTH_BUFFER_BIT);
       gl.disable(WebGL2RenderingContext.BLEND);
-      renderLayer.draw(renderContext);
+      layer.draw({ sliceView: this, projectionParameters });
     }
-    gl.disable(WebGL2RenderingContext.BLEND);
     gl.disable(WebGL2RenderingContext.DEPTH_TEST);
-    offscreenFramebuffer.unbind();
   }
 }
 
-export interface SliceViewChunkSourceOptions<
-  Spec extends SliceViewChunkSpecification = SliceViewChunkSpecification,
-> {
-  spec: Spec;
-}
-
-// eslint-disable-next-line @typescript-eslint/no-unsafe-declaration-merging
-export abstract class SliceViewChunkSource<
-    Spec extends SliceViewChunkSpecification = SliceViewChunkSpecification,
-    ChunkType extends SliceViewChunk = SliceViewChunk,
-  >
-  extends ChunkSource
-  implements SliceViewChunkSourceInterface
-{
-  chunks: Map<string, ChunkType>;
-
-  OPTIONS: SliceViewChunkSourceOptions<Spec>;
-
-  spec: Spec;
-
-  constructor(
-    chunkManager: ChunkManager,
-    options: SliceViewChunkSourceOptions<Spec>,
-  ) {
-    super(chunkManager, options);
-    this.spec = options.spec;
-  }
-
-  static encodeSpec(spec: SliceViewChunkSpecification) {
-    return {
-      chunkDataSize: Array.from(spec.chunkDataSize),
-      lowerVoxelBound: Array.from(spec.lowerVoxelBound),
-      upperVoxelBound: Array.from(spec.upperVoxelBound),
-    };
-  }
-
-  static encodeOptions(options: SliceViewChunkSourceOptions): any {
-    const encoding = ChunkSource.encodeOptions(options);
-    encoding.spec = SliceViewChunkSource.encodeSpec(options.spec);
-    return encoding;
-  }
-
-  initializeCounterpart(rpc: RPC, options: any) {
-    options.spec = this.spec;
-    super.initializeCounterpart(rpc, options);
-  }
-}
-
-// eslint-disable-next-line @typescript-eslint/no-unsafe-declaration-merging
-export interface SliceViewChunkSource {
-  // TODO(jbms): Move this declaration to the class definition above and declare abstract once
-  // TypeScript supports mixins with abstact classes.
-  getChunk(x: any): any;
-}
-
-export class SliceViewChunk extends Chunk {
-  chunkGridPosition: vec3;
-  source: SliceViewChunkSource;
-
-  constructor(source: SliceViewChunkSource, x: any) {
-    super(source);
-    this.chunkGridPosition = x.chunkGridPosition;
-    this.state = ChunkState.SYSTEM_MEMORY;
-  }
-}
-
-export interface SliceViewSingleResolutionSource<
-  Source extends SliceViewChunkSource = SliceViewChunkSource,
-> {
-  chunkSource: Source;
-
-  /**
-   * (rank + 1)*(rank + 1) homogeneous transformation matrix from the "chunk" coordinate space to
-   * the MultiscaleSliceViewChunkSource space.
-   */
+// One scale of the volume: its chunk source, and the homogeneous transform ((rank + 1) squared,
+// column-major) from its chunk space (x, y, z voxels of the scale) to the viewer's coordinates.
+export interface SliceViewSingleResolutionSource {
+  chunkSource: VolumeChunkSource;
   chunkToMultiscaleTransform: Float32Array;
 }
 
-export abstract class MultiscaleSliceViewChunkSource<
-  Source extends SliceViewChunkSource = SliceViewChunkSource,
-> {
-  abstract get rank(): number;
-
-  /**
-   * @return Chunk sources for each scale, ordered by increasing minVoxelSize.  Outer array indexes
-   * over alternative chunk orientations.  The inner array indexes over scale.
-   *
-   * Every chunk source must have rank equal to `this.rank`.
-   */
-  abstract getSources(): SliceViewSingleResolutionSource<Source>[][];
-
-  constructor(public chunkManager: Borrowed<ChunkManager>) {}
-}
-
-/**
- * Computes, for every scale, where its chunk grid lies in the view: the chunk layout (chunk size
- * and chunk-to-view transform), the chunk and voxel bounds, and the effective voxel size used to
- * choose which scales to show.  Chunk dimension `i` is shown along view dimension `i`.
- */
+// Places every scale's chunk grid in the view.  Chunk dimension `i` is shown along view dimension
+// `i`, so the chunk layout is the only thing each scale needs.
 export function getVolumetricTransformedSources(
-  allSources: SliceViewSingleResolutionSource<SliceViewChunkSource>[][],
-  layer: ImageRenderLayer,
-): TransformedSource<ImageRenderLayer, SliceViewChunkSource>[][] {
+  scales: SliceViewSingleResolutionSource[],
+): TransformedSource<VolumeChunkSource>[] {
   const rank = 3;
 
   const getTransformedSource = (
     singleResolutionSource: SliceViewSingleResolutionSource,
-  ): TransformedSource<ImageRenderLayer, SliceViewChunkSource> => {
+  ): TransformedSource<VolumeChunkSource> => {
     const { chunkSource: source, chunkToMultiscaleTransform } =
       singleResolutionSource;
     const { spec } = source;
-    const lowerClipBound = spec.lowerVoxelBound;
-    const upperClipBound = spec.upperVoxelBound;
     // Chunk-to-view transform: the first three rows of `chunkToMultiscaleTransform` (4x4,
     // column-major), with (0, 0, 0, 1) as the last row.
     const chunkToViewTransform = mat4.create();
@@ -583,54 +403,28 @@ export function getVolumetricTransformedSources(
           chunkToMultiscaleTransform[col * 4 + row];
       }
     }
-    const lowerChunkDisplayBound = vec3.create();
-    const upperChunkDisplayBound = vec3.create();
-    const lowerClipDisplayBound = vec3.create();
-    const upperClipDisplayBound = vec3.create();
-    // Size of chunk in "display" coordinate space.
-    const chunkDisplaySize = vec3.create();
+    // Size of a chunk in the chunk coordinate space, i.e. in voxels of this scale.
+    const chunkSize = vec3.create();
     for (let i = 0; i < rank; ++i) {
-      chunkDisplaySize[i] = spec.chunkDataSize[i];
-      lowerChunkDisplayBound[i] = spec.lowerChunkBound[i];
-      upperChunkDisplayBound[i] = spec.upperChunkBound[i];
-      lowerClipDisplayBound[i] = lowerClipBound[i];
-      upperClipDisplayBound[i] = upperClipBound[i];
+      chunkSize[i] = spec.chunkDataSize[i];
     }
-    const chunkLayout = new ChunkLayout(chunkDisplaySize, chunkToViewTransform);
-    // This is an approximation of the voxel size (exact only for permutation/scaling
-    // transforms).  It would be better to model the voxel as an ellipsiod and find the
-    // lengths of the axes.
-    const effectiveVoxelSize = chunkLayout.localSpatialVectorToGlobal(
-      vec3.create(),
-      /*baseVoxelSize=*/ kOneVec,
-    );
     return {
-      layerRank: rank,
-      lowerClipBound,
-      upperClipBound,
-      renderLayer: layer,
       source,
-      lowerChunkDisplayBound,
-      upperChunkDisplayBound,
-      lowerClipDisplayBound,
-      upperClipDisplayBound,
-      effectiveVoxelSize,
-      chunkLayout,
-      chunkDisplayDimensionIndices: [0, 1, 2],
+      chunkLayout: new ChunkLayout(chunkSize, chunkToViewTransform),
       curPositionInChunks: new Float32Array(rank),
-      // Maps a change of global position to chunk coordinates, for prefetching.  It is never filled
-      // in, so it stays all zero and the worker's prefetching sees no motion.
-      combinedGlobalLocalToChunkTransform: new Float32Array((rank + 1) * rank),
-      fixedPositionWithinChunk: new Uint32Array(rank),
     };
   };
-  return allSources.map((scales) => scales.map(getTransformedSource));
+  return scales.map(getTransformedSource);
 }
 
-export class VolumeChunkSource extends SliceViewChunkSource<
-  VolumeChunkSpecification,
-  VolumeChunk
-> {
+/**
+ * Main-thread side of the chunk source of one scale.  Its chunks arrive from the worker in
+ * `Chunk.update` messages (see `chunk_manager/frontend.ts`) and are uploaded to textures of
+ * `chunkFormat`.
+ */
+export class VolumeChunkSource extends ChunkSource {
+  chunks!: Map<string, VolumeChunk>;
+  spec: VolumeChunkSpecification;
   chunkFormat: ChunkFormat;
   // Layout of the texture of each chunk of this source.
   textureLayout: TextureLayout;
@@ -641,20 +435,24 @@ export class VolumeChunkSource extends SliceViewChunkSource<
     options: { spec: VolumeChunkSpecification },
   ) {
     super(chunkManager, options);
+    this.spec = options.spec;
     const { gl } = chunkManager.chunkQueueManager;
-    const { chunkDataSize, dataType } = this.spec;
-    let numDims = 0;
-    for (const x of chunkDataSize) {
-      if (x > 1) ++numDims;
-    }
-    const textureDims = numDims >= 3 ? 3 : 2;
-    this.chunkFormat = this.registerDisposer(
-      ChunkFormat.get(gl, dataType, textureDims),
-    );
-    this.textureLayout = new TextureLayout(gl, chunkDataSize, textureDims);
+    const { chunkDataSize, dataType, fillValue } = this.spec;
+    this.chunkFormat = this.registerDisposer(ChunkFormat.get(gl, dataType));
+    this.textureLayout = new TextureLayout(gl, chunkDataSize);
     this.fillValueTexture = this.registerDisposer(
-      FillValueTexture.get(gl, this.chunkFormat, chunkDataSize.length),
+      FillValueTexture.get(
+        gl,
+        this.chunkFormat,
+        chunkDataSize.length,
+        fillValue,
+      ),
     );
+  }
+
+  initializeCounterpart(rpc: RPC, options: any) {
+    options.spec = this.spec;
+    super.initializeCounterpart(rpc, options);
   }
 
   getChunk(x: any): VolumeChunk {
@@ -667,20 +465,19 @@ export class VolumeChunkSource extends SliceViewChunkSource<
   }
 }
 
-/**
- * Main-thread copy of a volume chunk.  Its data is uploaded to a texture while the chunk is in GPU
- * memory; a chunk with no data uses the source's fill value texture instead.
- */
-export class VolumeChunk extends SliceViewChunk {
-  source: VolumeChunkSource;
-  chunkDataSize: Uint32Array;
+// Main-thread copy of a volume chunk: its data lives in a texture while the chunk is in GPU memory.
+// A chunk with no data uses the source's fill value texture instead.
+export class VolumeChunk extends Chunk {
+  source!: VolumeChunkSource;
+  // Position of the chunk in the chunk grid.
+  chunkGridPosition: vec3;
   data: TypedArray | null;
   texture: WebGLTexture | null = null;
   textureLayout: TextureLayout | null = null;
 
   constructor(source: VolumeChunkSource, x: any) {
-    super(source, x);
-    this.chunkDataSize = x.chunkDataSize || source.spec.chunkDataSize;
+    super(source);
+    this.chunkGridPosition = x.chunkGridPosition;
     this.data = x.data;
   }
 
@@ -689,10 +486,10 @@ export class VolumeChunk extends SliceViewChunk {
     if (this.data === null) return;
     const { chunkFormat, textureLayout } = this.source;
     const texture = (this.texture = gl.createTexture());
-    gl.bindTexture(chunkFormat.textureTarget, texture);
+    gl.bindTexture(WebGL2RenderingContext.TEXTURE_3D, texture);
     this.textureLayout = textureLayout;
     chunkFormat.setTextureData(gl, textureLayout, this.data);
-    gl.bindTexture(chunkFormat.textureTarget, null);
+    gl.bindTexture(WebGL2RenderingContext.TEXTURE_3D, null);
   }
 
   freeGPUMemory(gl: GL) {
@@ -704,6 +501,12 @@ export class VolumeChunk extends SliceViewChunk {
   }
 }
 
-export abstract class MultiscaleVolumeChunkSource extends MultiscaleSliceViewChunkSource<VolumeChunkSource> {
+// A volume stored at several scales (see `datasource/zarr/frontend.ts`).
+export abstract class MultiscaleVolumeChunkSource {
   abstract dataType: DataType;
+
+  // Returns the chunk source of each scale, finest first.
+  abstract getSources(): SliceViewSingleResolutionSource[];
+
+  constructor(public chunkManager: Borrowed<ChunkManager>) {}
 }

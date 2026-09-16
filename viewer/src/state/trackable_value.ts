@@ -1,9 +1,9 @@
-import type { NullaryReadonlySignal } from "#src/util/signal.js";
-import { neverSignal, NullarySignal, Signal } from "#src/util/signal.js";
+/** @license Copyright 2016 Google Inc. SPDX-License-Identifier: Apache-2.0 */
+import { NullarySignal, Signal } from "#src/util/signal.js";
 
 export interface WatchableValueInterface<T> {
   value: T;
-  changed: NullaryReadonlySignal;
+  changed: NullarySignal;
 }
 
 export interface WatchableValueChangeInterface<T> {
@@ -24,12 +24,3 @@ export class WatchableValue<T> implements WatchableValueInterface<T> {
   changed = new NullarySignal();
   constructor(protected value_: T) {}
 }
-
-
-export function constantWatchableValue<T>(
-  value: T,
-): WatchableValueInterface<T> {
-  return { changed: neverSignal, value };
-}
-
-

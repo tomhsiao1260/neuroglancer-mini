@@ -1,18 +1,4 @@
-/**
- * @license
- * Copyright 2016 Google Inc.
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
+/** @license Copyright 2016 Google Inc. SPDX-License-Identifier: Apache-2.0 */
 
 /**
  * @file The viewer: one zarr volume shown in any number of cross-section views.
@@ -35,7 +21,6 @@
  */
 
 import {
-  CapacitySpecification,
   ChunkManager,
   ChunkQueueManager,
 } from "#src/chunk_manager/frontend.js";
@@ -44,7 +29,7 @@ import type { ZarrStoreSpec } from "#src/datasource/zarr/store.js";
 import { DisplayContext, SliceViewPanel } from "#src/render/panel.js";
 import { ImageRenderLayer } from "#src/render/renderlayer.js";
 import {
-  makeCombinedCoordinateSpace,
+  makeCoordinateSpace,
   TrackableCoordinateSpace,
 } from "#src/state/coordinate_transform.js";
 import {
@@ -123,12 +108,8 @@ export class Viewer extends RefCounted {
     new Position(this.coordinateSpace),
   );
   private sharedZoom = this.registerDisposer(new TrackableZoom());
-  // Position in the image's local coordinate space, which spans the volume like the global
-  // coordinate space.  It is shared with the worker by the render layer.
-  private localCoordinateSpace = new TrackableCoordinateSpace();
-  private localPosition = this.registerDisposer(
-    new Position(this.localCoordinateSpace),
-  );
+  // Preferred size of a voxel of the chosen scale, in screen pixels (1: pick the scale whose voxels
+  // are closest to one pixel).  It is shared with the worker by the render layer.
   private renderScaleTarget = new WatchableValue(1);
   // The pointer's last position over a view, if it is over one.
   private pointer:
@@ -147,23 +128,29 @@ export class Viewer extends RefCounted {
     const rpc = new RPC(this.worker, true);
     const chunkQueueManager = this.registerDisposer(
       new ChunkQueueManager(rpc, this.display.gl, {
-        gpuMemory: new CapacitySpecification({
-          defaultItemLimit: 1e6,
-          defaultSizeLimit: 1e9,
-        }),
-        systemMemory: new CapacitySpecification({
-          defaultItemLimit: 1e7,
-          defaultSizeLimit: 2e9,
-        }),
-        download: new CapacitySpecification({
-          defaultItemLimit: 100,
-          defaultSizeLimit: Number.POSITIVE_INFINITY,
-        }),
+        gpuMemory: { itemLimit: 1e6, sizeLimit: 1e9 },
+        systemMemory: { itemLimit: 1e7, sizeLimit: 2e9 },
+        download: { itemLimit: 100, sizeLimit: Number.POSITIVE_INFINITY },
       }),
     );
     chunkQueueManager.registerDisposer(() => this.worker.terminate());
     this.chunkManager = this.registerDisposer(
       new ChunkManager(chunkQueueManager),
+    );
+
+    // While the view moves, chunk uploads to the GPU make way for drawing: after a change of the
+    // view they may only start within the next 10 ms, and then wait until a frame has started.
+    this.registerDisposer(
+      this.onViewChanged(() => {
+        if (chunkQueueManager.chunkUpdateDeadline === null) {
+          chunkQueueManager.chunkUpdateDeadline = Date.now() + 10;
+        }
+      }),
+    );
+    this.registerDisposer(
+      this.display.updateStarted.add(() => {
+        chunkQueueManager.chunkUpdateDeadline = null;
+      }),
     );
 
     // When the view moves under a still pointer, the point under the pointer changes.
@@ -224,7 +211,7 @@ export class Viewer extends RefCounted {
     const navigationState = new NavigationState(
       this.sharedPosition.addRef(),
       this.sharedZoom.addRef(),
-      { orientation: viewRotations[orientation]() },
+      viewRotations[orientation](),
     );
     const view = new SliceViewPanel(element, navigationState, this);
 
@@ -245,6 +232,19 @@ export class Viewer extends RefCounted {
       onPointerLeave();
     });
     return view;
+  }
+
+  /**
+   * Whether every view that is drawn shows its data with nothing still loading (see
+   * `SliceView.isReady`).  `await viewer.loaded` first, since a viewer with no volume is not ready.
+   */
+  isReady() {
+    for (const panel of this.display.panels) {
+      if (panel.visibility.value === Number.NEGATIVE_INFINITY) continue;
+      panel.ensureBoundsUpdated();
+      if (!panel.sliceView.isReady()) return false;
+    }
+    return true;
   }
 
   private reportPointer() {
@@ -282,13 +282,13 @@ export class Viewer extends RefCounted {
       });
     }
 
-    const { modelSpace } = volume;
-    this.coordinateSpace.value = makeCombinedCoordinateSpace(modelSpace);
-    this.localCoordinateSpace.value = makeCombinedCoordinateSpace(modelSpace);
+    this.coordinateSpace.value = makeCoordinateSpace(
+      volume.lowerBounds,
+      volume.upperBounds,
+    );
 
     this.renderLayer.value = new ImageRenderLayer(volume, {
       renderScaleTarget: this.renderScaleTarget,
-      localPosition: this.localPosition,
     });
   }
 }

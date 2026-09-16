@@ -1,188 +1,114 @@
 # Neuroglancer Mini
 
-This is a trimmed-down version of the original Neuroglancer source code, designed to make its core logic more accessible and easier to understand. This is not a new implementation, but rather a carefully curated subset of the original codebase (~115,510 lines) that has been reduced to about 10,100 lines by retaining only the minimal core functionality needed for the program to run, reducing npm dependencies, and simplifying the build process. This lightweight version serves as a learning demo, allowing developers to grasp the core concepts and architecture of Neuroglancer without being overwhelmed by the complexity of the original implementation.
+A reduced copy of the [Neuroglancer](https://github.com/google/neuroglancer) source that views one OME-Zarr volume as cross-sections: about 138,000 lines of TypeScript and JavaScript under its `src/` (tests excluded) down to about 6,750 lines. `viewer/` is the library, `example/` is a demo page that uses it.
 
-<img width="1193" alt="img2" src="https://github.com/user-attachments/assets/c69a9014-3250-4d05-8350-abb96975b64c" />
+The chunk state machine, priority tiers, multiscale selection, prefetching, the worker split and the WebGL slice rendering are all still there. What is not needed to put one volume on the screen is gone. At this size the whole path can be read end to end: which chunks are downloaded, in what order, and how they reach a texture.
 
-Note: This is not an officially maintained version of Neuroglancer. Neuroglancer and Neuroglancer Mini are two independently developed projects, but this project is based on a reduced version of the original Neuroglancer source code.
+I packaged the reduced code as a library rather than an application, so it has no interface of its own. You give it a container and the elements to draw into, and it does the loading and the rendering. The interface is left to whatever is built on top: a labelling tool, a segmentation browser, a downloader that fetches only what is on screen. The [forward branch](https://github.com/tomhsiao1260/neuroglancer-mini/tree/forward) is one of those.
+
+This is my own fork, not a Neuroglancer official release. The code in `viewer/` stays under Apache 2.0 (see [License](#license)).
 
 ## Motivation
 
-When I first tried to understand Neuroglancer's source code, I found it challenging due to its complexity and numerous abstract layers. I was particularly interested in understanding:
+I wanted to know how Neuroglancer loads the data: what it downloads, in what order, and how a slice ends up on the screen. Reading the original is frustrated because the loading path runs through layers of abstraction that exist for segmentations, meshes, annotations and a dozen data sources. So I removed the rest, one verifiable step at a time, and documented what was left.
 
-- How data is loaded in batches
-- The rendering mechanisms
-- Core visualization principles
-
-To address these challenges, I created Neuroglancer Mini by:
-
-- Keeping only essential code for basic functionality
-- Removing complex interface and data transfer logic
-- Simplifying the build process
-- Focusing on core visualization features
-
-This project serves as a learning resource for developers who want to understand Neuroglancer's fundamental codebase.
-
-## Branches
-
-- **backward** (this README, merged into `main`): the reduced Neuroglancer code, packaged as the `viewer/` library, plus a small example page that uses it. This is where the code is reduced and explained.
-- **[forward](https://github.com/tomhsiao1260/neuroglancer-mini/tree/forward)**: an app built on the same `viewer/` folder, with a Node server that downloads only the parts of a scroll you look at and keeps them locally, coordinate display, positions in the URL and a list of missing chunks. See [its README](https://github.com/tomhsiao1260/neuroglancer-mini/tree/forward#readme) for its features and setup.
-
-## Getting Started
-
-Please use Chrome or Edge.
-
-<img width="1193" alt="img1" src="https://github.com/user-attachments/assets/42784acc-39cc-4585-948b-0b2d4a971ee1" />
-
-### Option 1: Online Demo
-
-Visit [neuroglancer-mini.vercel.app](https://neuroglancer-mini.vercel.app) and click "Open local folder" to open a local `.zarr` folder, enter the URL of a `.zarr` folder, or open a scroll straight from the Vesuvius Challenge data server:
-
-[neuroglancer-mini.vercel.app/?zarr=https://dl.ash2txt.org/full-scrolls/Scroll1/PHercParis4.volpkg/volumes_zarr_standardized/54keV_7.91um_Scroll1A.zarr](https://neuroglancer-mini.vercel.app/?zarr=https://dl.ash2txt.org/full-scrolls/Scroll1/PHercParis4.volpkg/volumes_zarr_standardized/54keV_7.91um_Scroll1A.zarr)
-
-The demo is built from `example/` (see `vercel.json`).
-
-### Option 2: Local Development
-
-Install and start the development server. `npm install` also installs the packages of `viewer/`.
+## Usage
 
 ```bash
-git checkout backward
 cd example
-npm install
-npm run dev
+npm install          # also installs viewer/
+npm run dev          # http://localhost:3000
 ```
 
-Then open `http://localhost:3000`.
+"Open local folder" reads a `.zarr` folder from disk (File System Access API, Chrome or Edge). To read it over HTTP instead, serve the folder and pass its URL as `?zarr=`:
 
-### Supported Data
+```bash
+npx http-server <folder containing scroll.zarr> -p 9000 --cors
+# http://localhost:3000/?zarr=http://localhost:9000/scroll.zarr
+```
 
-The viewer opens one OME-Zarr multiscale volume stored as Zarr v2. The example page's URL parameters choose where it comes from:
+Left drag pans, the wheel steps one voxel along the viewing direction, Ctrl + wheel zooms at the cursor.
 
-- No parameters: the start screen. Click "Open local folder" and pick the `.zarr` folder itself (the one containing `.zattrs`); this uses the File System Access API. Or enter a URL, which opens the page with `?zarr=<url>`.
-- `?zarr=<url>`: read the files over HTTP, where `<url>` is the URL of the `.zarr` folder. Any server that returns the files (and 404 for missing ones) works if it allows cross-origin requests (CORS): the Vesuvius Challenge data server, a static server such as `npx http-server <folder containing scroll.zarr> -p 9000 --cors`, or the server of the forward branch.
+A build of `example/` also runs at [neuroglancer-mini.vercel.app](https://neuroglancer-mini.vercel.app) and takes the same `?zarr=` parameter, so a volume on a remote server can be opened without installing anything. Pointing it at a full scroll on the data server is slow and still untested, so local data is the better way to try it for now.
 
-What is supported:
-
-- Metadata: `.zattrs` with OME `multiscales`, and a `.zarray` for each scale (C order).
-- Compressors: blosc and null (raw).
-- Data types: uint8, int8, uint16, int16, uint32, int32, uint64 (8-byte integers are read as unsigned) and float32, little or big endian.
-- Chunk keys may use either `.` or `/` as the dimension separator. Chunks missing from the store are shown as 0.
-
-The volume is shown in three cross-section views (XY, YZ and XZ) that share one position and zoom. Drag with the left mouse button to pan, use the wheel to step one voxel through the slice, and hold Ctrl while using the wheel to zoom around the cursor.
-
-## Using the Viewer
+## Library
 
 ```ts
 import { Viewer } from "viewer";
 
-const viewer = new Viewer({
-  container: document.querySelector<HTMLDivElement>("#container")!,
-  store: { kind: "http", url: "http://localhost:9000/scroll.zarr" },
-});
-viewer.addView(document.querySelector<HTMLDivElement>("#left")!, "xy");
-viewer.addView(document.querySelector<HTMLDivElement>("#right")!, "yz");
+const viewer = new Viewer({ container, store: { kind: "http", url } });
+viewer.addView(leftElement, "xy");
+viewer.addView(rightElement, "yz");
+await viewer.loaded;
+viewer.setPosition({ x: 3000, y: 3000, z: 7000 });
 ```
 
-- `new Viewer({ container, store })` creates the canvas, the worker and the chunk manager and loads the volume; `viewer.loaded` resolves once it has loaded (and rejects if it could not). `store` is `{ kind: "http", url }` or `{ kind: "directory", handle }` (a `FileSystemDirectoryHandle`).
-- `viewer.addView(element, "xy" | "xz" | "yz")` shows a cross-section in `element`, which can be placed anywhere inside the container with CSS, and returns the view; `view.dispose()` removes it. All views share one position and zoom.
-- `viewer.position` / `viewer.setPosition({ x, y, z })` and `viewer.zoom` / `viewer.setZoom(voxelsPerPixel)` read and change the view; `viewer.onViewChanged(callback)` and `viewer.onPointerMove(callback)` report changes of the view and of the point under the pointer. Points are in full-resolution voxels, with `x`, `y`, `z` along the last, middle and first zarr dimensions; voxel `(i, j, k)` is centered on `{ x: i, y: j, z: k }`.
-- `new Viewer({ ..., onMissingChunk })` is called with `{ key }` (e.g. `0/52/24/18`) for each chunk whose file is not in the store, once per chunk while the viewer is open. If it returns (or resolves to) `true`, the file is assumed to have been added and the chunk is downloaded again; otherwise the chunk is shown as empty. A downloader can be plugged in here without changing the viewer; the forward branch does this with its server.
+- `new Viewer({ container, store, onMissingChunk? })` creates the canvas, the worker and the chunk manager and starts loading. `store` is `{ kind: "http", url }` or `{ kind: "directory", handle }`. `viewer.loaded` resolves when the metadata is read.
+- `addView(element, "xy" | "xz" | "yz")` draws a cross-section where the element is on the page; any CSS layout works as long as the element is inside the container. Views can be added and removed at runtime and share one position and zoom. `view.dispose()` removes one.
+- `position` / `setPosition({ x, y, z })`, `zoom` / `setZoom(voxelsPerPixel)`, `onViewChanged(cb)`, `onPointerMove(cb)`. Points are in full-resolution voxels; `x`, `y`, `z` are the last, middle and first zarr dimensions, and voxel `(i, j, k)` is centered on `{ x: i, y: j, z: k }`.
+- `onMissingChunk({ key })` is called once per chunk file that is not in the store. Return `true` once the file has been added and the chunk is fetched again. The forward branch uses this to download a scroll lazily.
+- `isReady()` is true when every view has all of its chunks on the GPU. `chunkManager.chunkQueueManager.enablePrefetch.value = false` requests only what is visible, and `logStatistics.value = true` logs chunk counts and memory use from the worker.
 
-To use the viewer in another Vite app, place `viewer/` next to the app and copy the configuration of `example/`:
+For another Vite app, put `viewer/` next to it and copy from `example/`: the `viewer` alias plus `server.fs.allow: [".."]` and `worker.format: "es"` in `vite.config.ts`, the same `paths` entry in `tsconfig.json`, and `"postinstall": "npm install --prefix ../viewer"`.
 
-- `vite.config.ts`: the `viewer` alias to `../viewer/src/index.ts`, `server.fs.allow: [".."]` (the viewer lies outside the app folder) and `worker.format: "es"`.
-- `tsconfig.json`: the same `paths` entry.
-- `package.json`: `"postinstall": "npm install --prefix ../viewer"`, which installs the viewer's own packages.
+## Data
 
-## Project Structure
+One OME-Zarr 0.4 multiscale volume, zarr v2:
 
-The code is split between two threads. The **main thread** owns the WebGL canvas, the views and mouse input. A **worker** (`viewer/src/worker/chunk_worker.bundle.js`) decides which chunks are needed, reads and decodes them, and keeps them within memory limits. Most modules therefore come in pairs: `frontend.ts` runs on the main thread, `backend.ts` runs in the worker, and `base.ts` holds what both use. Paired objects talk through `SharedObject`s in `viewer/src/worker/worker_rpc.ts`.
+- Axes `z`, `y`, `x` in that order; `scale`, `translation` and `identity` transforms.
+- `|u1`, `<u2`, `<f4` (float32 is shown over [0, 1]), C order, blosc or no compressor, `.` or `/` separator.
+- Read over HTTP (CORS required) or from a local folder.
 
-### How a chunk gets to the screen
+This covers the scroll and fragment volumes on the data server, and float32 surface data such as tifxyz. Anything else fails with an error instead of being drawn wrongly.
 
-1. **Start-up** (`example/src/main.ts`, `viewer/src/viewer.ts`): the page chooses the store to read from: a local folder picked with the button, or the HTTP URL given as `?zarr=`. It is described by a `ZarrStoreSpec`, which is also sent to the worker. `Viewer` creates the canvas, the worker and its RPC channel, and the chunk manager, with these limits: 100 simultaneous downloads, 2 GB of system memory and 1 GB of GPU memory. The page then adds three views.
-2. **Loading the volume** (`viewer/src/viewer.ts`, `viewer/src/datasource/zarr/frontend.ts`): the viewer reads the metadata of every scale, creates one chunk source per scale, sets the coordinate spaces from the volume bounds and creates the render layer.
-3. **Choosing chunks** (`viewer/src/render/backend.ts`): for each view, the worker picks the scales that match the current zoom. It then finds the chunks the cross-section plane cuts through and requests them as `VISIBLE`. The prefetching code, which would request chunks ahead of the current motion as `PREFETCH`, currently requests nothing: the transform it uses to turn motion into chunk coordinates (`combinedGlobalLocalToChunkTransform`) is never filled in.
-4. **Queueing** (`viewer/src/chunk_manager/backend.ts`): chunks are ordered by tier and priority. The highest-priority chunks are downloaded while capacity allows, and lower-priority chunks are evicted to make room.
-5. **Downloading** (`viewer/src/datasource/zarr/backend.ts`, `decode.ts`): the worker reads the chunk file from the store and decodes it. A missing file is reported to the main thread (`onMissingChunk`).
-6. **Upload** (`viewer/src/chunk_manager/frontend.ts`, `viewer/src/render/frontend.ts`): the chunk data is transferred to the main thread in a `Chunk.update` message. The main thread applies these updates in 30 ms time slices and uploads each chunk to a texture.
-7. **Drawing** (`viewer/src/render/panel.ts`, `viewer/src/render/renderlayer.ts`): on each animation frame, every view renders its slice into an offscreen texture and then draws that texture into its part of the canvas. Only chunks already on the GPU are drawn, and finer scales are drawn over coarser ones.
+A chunk file that is missing is drawn with the array's `fill_value` and reported through `onMissingChunk`. A chunk that cannot be read or decoded fails, and the coarser scale under it shows through.
 
-### Files
+## How it works
 
-#### `example/`
+Two threads. The main thread owns the canvas, the views and mouse input. A worker decides which chunks are needed, reads and decodes them and keeps them within the memory limits; it hands blosc decompression to a pool of further workers. Modules come in pairs: `frontend.ts` on the main thread, `backend.ts` in the worker, `base.ts` for what both use, talking through `SharedObject`s (`viewer/src/worker/worker_rpc.ts`).
 
-- `index.html`, `src/style.css`: the start screen (folder button and URL form), loading status and styles.
-- `src/main.ts`: chooses the store (`?zarr=<url>` or the folder picker), creates the viewer and lays out three views side by side. Start here to try the viewer API.
-- `vite.config.ts`, `tsconfig.json`, `package.json`: build configuration (dev server on port 3000) and the `viewer` import described in [Using the Viewer](#using-the-viewer).
+1. **Start-up** (`viewer/src/viewer.ts`). The store is described by a `ZarrStoreSpec`, which is also sent to the worker. Limits: 100 simultaneous downloads, 2 GB system memory, 1 GB GPU memory.
+2. **Metadata** (`datasource/zarr/frontend.ts`, `ome.ts`). Each scale's OME transforms become a voxel size and an origin in full-resolution voxels, and each scale becomes one chunk source, shared by all views.
+3. **Chunk selection** (`render/backend.ts`). Per view, `filterVisibleSources` picks the scales for the current pixel size; the chunks the plane cuts through are requested as `VISIBLE`, coarsest scale first and nearest the center of the view first. A velocity estimate (`util/velocity_estimation.ts`, `util/erf.ts`) adds the chunks the view is likely to reach within two seconds as `PREFETCH`. A view that is off screen and not near its container requests nothing; one that is only near it requests at the `PREFETCH` tier.
+4. **Queueing** (`chunk_manager/backend.ts`). Chunks carry a tier (`VISIBLE`, `PREFETCH`, `RECENT`) and a priority, and move through `QUEUED → DOWNLOADING → SYSTEM_MEMORY_WORKER → GPU_MEMORY` while capacity allows, evicting lower-priority chunks. Chunks that are no longer requested drop to `RECENT` and are kept in LRU order. Priorities are recomputed on every view change and every 200 ms while chunks keep moving to or from the GPU, so the velocity estimate decays when the view stops.
+5. **Download** (`datasource/zarr/backend.ts`, `store.ts`). One chunk file per request; 429, 503 and 504 are retried with increasing delays. A cancelled download is aborted at the network level and leaves the chunk object alone, since it may already have been recycled.
+6. **Upload** (`chunk_manager/frontend.ts`). Chunk data is transferred to the main thread in a `Chunk.update` message and uploaded to a 3-D texture in 30 ms time slices. While the view moves, uploads start only within 10 ms of a change and otherwise wait for the next frame.
+7. **Draw** (`render/renderlayer.ts`). Per chunk on the GPU, the vertex shader computes the polygon where the plane cuts the chunk's box and the fragment shader samples the texture. Finer scales draw over coarser ones, with the depth buffer keeping the coarse fill-in behind them.
 
-`vercel.json` at the top level builds this folder for the online demo.
+## Code map
 
-#### `viewer/`
+- `render/`: cross-section views. `base.ts` (projection parameters, chunk layout, chunk specification, scale selection, plane–chunk iteration), `frontend.ts` (`SliceView`, textures), `backend.ts` (chunk requests), `chunk_format.ts` (chunk as a 3-D texture; missing chunks share one fill-value texture), `renderlayer.ts` (the shaders), `panel.ts` (shared canvas, one view's region, mouse input, visibility).
+- `chunk_manager/`: `base.ts` (states, tiers, capacities), `backend.ts` (`Chunk`, `ChunkSource`, the queues, priority recomputation), `frontend.ts` (`Chunk.update` handling, shared chunk sources). `README.md` is the original Neuroglancer note on states and tiers.
+- `datasource/zarr/`: `ome.ts`, `metadata.ts`, `frontend.ts`, `backend.ts`, `decode.ts`, `store.ts` (`HttpStore`, `DirectoryStore`).
+- `worker/`: `chunk_worker.bundle.js`, the decode pool (`decode_pool.ts`, `decode_blosc.ts`, `decode_worker.bundle.js`, up to `min(12, cores)` workers), `worker_rpc.ts`, `shared_watchable_value.ts`.
+- `state/`: position, zoom, orientation, coordinate space. `webgl/`: context, shader building, textures, buffers. `util/`: pairing heap and linked list for the queues, velocity estimation, geometry, JSON validation, reference counting, signals.
 
-- `src/index.ts`: what the library exports: `Viewer` and its types.
-- `src/viewer.ts`: `Viewer`, which connects the rest of the code (see [Using the Viewer](#using-the-viewer)).
-- `package.json`: dependencies (`gl-matrix`, `numcodecs` for blosc, `es-toolkit`) and the `#src/...` import paths used inside the library.
-- `tsconfig.json`: TypeScript configuration. The library needs `experimentalDecorators` and `useDefineForClassFields: false`.
+## Not included
 
-#### `viewer/src/render/`: cross-section views
+Segmentation, annotation, mesh and skeleton layers, 3-D volume rendering, the user interface and shareable state, the Python integration, the other data sources and codecs, and the abstractions that supported them: multiple layers per viewer, per-layer coordinate transforms, the generic chunk-source machinery.
 
-- `base.ts` (main thread and worker): `ProjectionParameters` (a view's viewport plus view and projection matrices), `ChunkLayout` (the chunk grid in view coordinates), chunk specifications, `filterVisibleSources` (which scales to draw) and `forEachPlaneIntersectingVolumetricChunk` (which chunks the plane cuts through).
-- `frontend.ts` (main thread): `SliceView` sends its layer and projection to the worker and draws the visible GPU chunks into an offscreen framebuffer. `DerivedProjectionParameters` recomputes a view's projection from its navigation state and viewport, and `SharedProjectionParameters` sends it to the worker. `getVolumetricTransformedSources` places each scale's chunk grid in the view. `VolumeChunkSource` and `VolumeChunk` upload chunk data to textures and free them again.
-- `backend.ts` (worker): `SliceViewBackend` requests the visible chunks, using the projection received by `SharedProjectionParametersBackend`. The worker-side `VolumeChunk` holds downloaded data until it is sent to the main thread.
-- `chunk_format.ts`: how a chunk is stored as a texture (one texel per voxel) and read in the fragment shader. Missing chunks share one texture filled with 0.
-- `renderlayer.ts`: `ImageRenderLayer`. For each chunk it draws the polygon where the plane cuts the chunk's box (computed in the vertex shader) and maps the data value to gray.
-- `panel.ts`: `DisplayContext`, the canvas and WebGL context shared by all views, which redraws them on an animation frame; and `SliceViewPanel`, which draws its slice into its region of the canvas and handles mouse input.
+Three places are deliberately narrower than the original:
 
-#### `viewer/src/chunk_manager/`: chunk lifecycle
+- The axes must be exactly `(z, y, x)`; a time or channel axis is rejected rather than mapped wrongly.
+- A network or CORS error fails the chunk. In the original an unreadable file is an empty chunk; here "missing" means the store answered 404, so `onMissingChunk` means the file is not there.
+- One volume in one layer per viewer.
 
-- `base.ts`: chunk states (`QUEUED`, `DOWNLOADING`, `SYSTEM_MEMORY_WORKER`, `SYSTEM_MEMORY`, `GPU_MEMORY`, ...) and priority tiers (`VISIBLE`, `PREFETCH`, `RECENT`).
-- `backend.ts` (worker): `Chunk` and `ChunkSource`; `ChunkQueueManager`, which keeps the download, system memory and GPU memory queues and moves chunks between states within capacity; and `ChunkManager`, which recomputes chunk priorities when the view changes.
-- `frontend.ts` (main thread): `ChunkQueueManager` applies `Chunk.update` messages from the worker. `ChunkManager` creates each chunk source once, together with its worker counterpart.
-- `README.md`: notes from the original Neuroglancer on chunk states and priority tiers.
+The three orientations are a limit of the example API, not of the code: views are built from a rotation and the rendering path handles an arbitrary plane.
 
-#### `viewer/src/datasource/zarr/`: reading OME-Zarr
+## Development
 
-- `ome.ts`: parses the OME `multiscales` metadata in `.zattrs` (scales, coordinate transforms, units).
-- `metadata.ts`: parses `.zarray` (shape, chunk shape, data type, compressor, dimension separator).
-- `frontend.ts`: `loadZarrVolume` and `MultiscaleVolumeChunkSource`, which creates one chunk source per scale and maps zarr's (z, y, x) axis order to chunk order.
-- `backend.ts` (worker): `ZarrVolumeChunkSource.download` reads one chunk file and decodes it.
-- `decode.ts`: blosc or raw decoding, size check and endianness conversion.
-- `store.ts`: `ZarrStore`, where the store's files are read from: `HttpStore` (any HTTP server) or `DirectoryStore` (a local folder through the File System Access API). A `ZarrStoreSpec` describes the store so that the worker can create its own.
-- `base.ts`: chunk source parameters sent to the worker (store, path of the scale's array, and metadata).
+```bash
+cd viewer && npx tsc --noEmit    # clean
+cd example && npm run build
+```
 
-`viewer/src/datasource/file_protocols.md` and `viewer/src/datasource/zarr/README.md` are notes from the original Neuroglancer and describe more protocols and formats than this version supports.
+Each reduction step kept the picture and the set of requested chunk files identical to the step before it, checked in headless Chrome against scroll data. The same rule is worth keeping: compare screenshots and requested files with prefetching off, using `isReady()` to know when a view is complete.
 
-#### `viewer/src/worker/`: threads
+## Branches
 
-- `chunk_worker.bundle.js`: worker entry. It loads the zarr backend and starts the RPC channel.
-- `worker_rpc.ts`: `RPC` (messages between threads) and `SharedObject` (an object with a counterpart on the other thread), plus the `registerSharedObject` decorators.
-- `shared_watchable_value.ts`: a value mirrored from the main thread to the worker (e.g. capacity limits).
+- **backward** (this readme, merged into `main`): the reduced code and the example page.
+- **[forward](https://github.com/tomhsiao1260/neuroglancer-mini/tree/forward)**: an app on the same `viewer/` folder, with a Node server that downloads only the parts of a scroll you look at, coordinate display, positions in the URL and a list of missing chunks. Its [notes on a board of cross-section cards](https://github.com/tomhsiao1260/neuroglancer-mini/blob/forward/docs/whiteboard.md) record which parts of `viewer/` that direction depends on; worth reading before reducing the code further.
 
-#### `viewer/src/state/`: navigation and coordinates
+## License
 
-- `navigation_state.ts`: `Position`, `TrackableZoom` and `NavigationState` (position, orientation and zoom, with pan, step and zoom operations).
-- `coordinate_transform.ts`: `CoordinateSpace` and its bounds (voxel centers sit at integer coordinates).
-- `trackable_value.ts`: `WatchableValue`, a value with a change signal.
-
-#### `viewer/src/webgl/`: WebGL helpers
-
-- `context.ts`: WebGL2 context setup and `gl.memoize` for shared GPU objects.
-- `shader.ts`: `ShaderBuilder` and `ShaderProgram`.
-- `shader_lib.ts`: GLSL types for each voxel data type.
-- `texture.ts`: texture parameters and resizing.
-- `buffer.ts`: vertex buffer.
-- `offscreen.ts`: `OffscreenFramebuffer` (color and depth textures).
-- `vertex_id.ts`: dummy vertex attribute needed by Firefox.
-
-#### `viewer/src/util/`
-
-- Data: `data_type.ts`, `numpy_dtype.ts`, `endian.ts`, `array.ts`.
-- `json.ts`: metadata validation and `stableStringify`.
-- Priority queues for the chunk manager:
-  - `pairing_heap.ts` and `linked_list.ts`: the interfaces.
-  - `pairing_heap.0.ts` / `.1.ts` and `linked_list.0.ts` / `.1.ts`: two copies of each with different link fields (`next0` vs `next1`), so one chunk can sit in the system memory eviction queue and in a download or GPU queue at the same time.
-- Math: `geom.ts` (gl-matrix plus helpers), `matrix.ts` (n-dimensional matrices), `vector.ts`, `erf.ts`, `velocity_estimation.ts` (motion estimate used for prefetching).
-- Lifetime and events: `disposable.ts` (`RefCounted`), `signal.ts`, `memoize.ts`, `object_id.ts`, `cancellation.ts`, `animation_frame_debounce.ts`.
-- `si_units.ts`: unit prefixes for OME units.
+`viewer/` is derived from Neuroglancer and licensed under the Apache License 2.0 (`viewer/LICENSE`). Each derived file keeps its copyright line in a one-line header; `viewer/NOTICE` describes the changes.

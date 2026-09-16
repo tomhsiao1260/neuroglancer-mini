@@ -1,59 +1,57 @@
-/**
- * @license
- * Copyright 2020 Google Inc.
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
+/** @license Copyright 2020 Google Inc. SPDX-License-Identifier: Apache-2.0 */
 
 import type { ChunkManager } from "#src/chunk_manager/frontend.js";
-import { WithParameters } from "#src/chunk_manager/frontend.js";
-import type { CoordinateSpace } from "#src/state/coordinate_transform.js";
-import {
-  makeCoordinateSpace,
-  makeIdentityTransformedBoundingBox,
-} from "#src/state/coordinate_transform.js";
 import {
   MISSING_CHUNK_RPC_ID,
   VolumeChunkSourceParameters,
 } from "#src/datasource/zarr/base.js";
 import type { ArrayMetadata } from "#src/datasource/zarr/metadata.js";
 import { parseV2Metadata } from "#src/datasource/zarr/metadata.js";
-import type { OmeMultiscaleMetadata } from "#src/datasource/zarr/ome.js";
+import type {
+  OmeMultiscaleMetadata,
+  OmeMultiscaleScale,
+} from "#src/datasource/zarr/ome.js";
 import { parseOmeMetadata } from "#src/datasource/zarr/ome.js";
 import type { ZarrStore, ZarrStoreSpec } from "#src/datasource/zarr/store.js";
 import { createZarrStore } from "#src/datasource/zarr/store.js";
-import { makeDefaultVolumeChunkSpecifications } from "#src/render/base.js";
+import type { VolumeChunkSpecification } from "#src/render/base.js";
+import { makeVolumeChunkSpecification } from "#src/render/base.js";
 import type { SliceViewSingleResolutionSource } from "#src/render/frontend.js";
 import {
   MultiscaleVolumeChunkSource as GenericMultiscaleVolumeChunkSource,
   VolumeChunkSource,
 } from "#src/render/frontend.js";
-import { transposeNestedArrays } from "#src/util/array.js";
 import { DataType } from "#src/util/data_type.js";
 import type { Borrowed } from "#src/util/disposable.js";
 import { verifyObject } from "#src/util/json.js";
-import * as matrix from "#src/util/matrix.js";
 import { Signal } from "#src/util/signal.js";
-import { registerRPC } from "#src/worker/worker_rpc.js";
+import type { RPC } from "#src/worker/worker_rpc.js";
+import {
+  registerRPC,
+  registerSharedObjectOwner,
+} from "#src/worker/worker_rpc.js";
 
 // Called with the store key of a chunk whose file is missing, and a function that loads the chunk
 // again.
 type MissingChunkListener = (key: string, reload: () => void) => void;
 
-class ZarrVolumeChunkSource extends WithParameters(
-  VolumeChunkSource,
-  VolumeChunkSourceParameters,
-) {
+@registerSharedObjectOwner(VolumeChunkSourceParameters.RPC_ID)
+class ZarrVolumeChunkSource extends VolumeChunkSource {
+  parameters: VolumeChunkSourceParameters;
   missingChunk = new Signal<MissingChunkListener>();
+
+  constructor(
+    chunkManager: Borrowed<ChunkManager>,
+    options: { spec: VolumeChunkSpecification; parameters: VolumeChunkSourceParameters },
+  ) {
+    super(chunkManager, options);
+    this.parameters = options.parameters;
+  }
+
+  initializeCounterpart(rpc: RPC, options: any) {
+    options.parameters = this.parameters;
+    super.initializeCounterpart(rpc, options);
+  }
 }
 
 registerRPC(MISSING_CHUNK_RPC_ID, function (x) {
@@ -62,16 +60,15 @@ registerRPC(MISSING_CHUNK_RPC_ID, function (x) {
   source.missingChunk.dispatch(x.key, () => source.reloadChunk(x.chunk));
 });
 
-interface ZarrScaleInfo {
-  // Path of the scale's array within the store.
-  path: string;
-  transform: Float64Array;
+interface ZarrScaleInfo extends OmeMultiscaleScale {
   metadata: ArrayMetadata;
 }
 
 interface ZarrMultiscaleInfo {
   store: ZarrStoreSpec;
-  coordinateSpace: CoordinateSpace;
+  // Bounds of the volume in voxels of the full-resolution scale, in zarr (z, y, x) order.
+  lowerBounds: Float64Array;
+  upperBounds: Float64Array;
   dataType: DataType;
   scales: ZarrScaleInfo[];
 }
@@ -84,13 +81,14 @@ export class MultiscaleVolumeChunkSource extends GenericMultiscaleVolumeChunkSou
     return this.multiscale.dataType;
   }
 
-  get modelSpace() {
-    return this.multiscale.coordinateSpace;
+  get lowerBounds() {
+    return this.multiscale.lowerBounds;
   }
 
-  get rank() {
-    return this.multiscale.coordinateSpace.rank;
+  get upperBounds() {
+    return this.multiscale.upperBounds;
   }
+
 
   constructor(
     chunkManager: Borrowed<ChunkManager>,
@@ -99,60 +97,50 @@ export class MultiscaleVolumeChunkSource extends GenericMultiscaleVolumeChunkSou
     super(chunkManager);
   }
 
-  // Returns, for each scale, the chunk sources that load it (one per chunk size).  The chunk
-  // sources run their `download` in the worker (see `datasource/zarr/backend.ts`).
+  // Returns the chunk source of each scale, finest first, with the transform from its chunk grid to
+  // the viewer's coordinates.  The chunk sources run their `download` in the worker (see
+  // `datasource/zarr/backend.ts`).
   getSources() {
-    return transposeNestedArrays(
-      this.multiscale.scales.map((scale) => {
+    return this.multiscale.scales.map(
+      (scale): SliceViewSingleResolutionSource => {
         const { metadata } = scale;
         const { rank, chunkShape, shape } = metadata;
         // Zarr lists dimensions in (z, y, x) order; chunk space uses the reverse order, (x, y, z),
-        // which matches C-order voxel data where x varies fastest.
-        const permutedChunkShape = new Uint32Array(rank);
-        const permutedDataShape = new Float32Array(rank);
-        const orderTransform = new Float32Array((rank + 1) ** 2);
-        orderTransform[(rank + 1) ** 2 - 1] = 1;
+        // which matches C-order voxel data where x varies fastest.  The transform from chunk space
+        // to the viewer's coordinates therefore scales chunk dimension `i` onto zarr dimension
+        // `rank - 1 - i`; it is stored column-major, as a homogeneous matrix.
+        const chunkShapeXyz = new Uint32Array(rank);
+        const shapeXyz = new Float32Array(rank);
+        const transform = new Float32Array((rank + 1) ** 2);
+        transform[(rank + 1) ** 2 - 1] = 1;
         for (let i = 0; i < rank; ++i) {
           const zarrDim = rank - 1 - i;
-          permutedChunkShape[i] = chunkShape[zarrDim];
-          permutedDataShape[i] = shape[zarrDim];
-          orderTransform[i + zarrDim * (rank + 1)] = 1;
+          chunkShapeXyz[i] = chunkShape[zarrDim];
+          shapeXyz[i] = shape[zarrDim];
+          transform[i * (rank + 1) + zarrDim] = scale.scale[zarrDim];
+          transform[rank * (rank + 1) + zarrDim] = scale.translation[zarrDim];
         }
-        const transform = new Float32Array((rank + 1) ** 2);
-        matrix.multiply<Float32Array | Float64Array>(
-          transform,
-          rank + 1,
-          scale.transform,
-          rank + 1,
-          orderTransform,
-          rank + 1,
-          rank + 1,
-          rank + 1,
-          rank + 1,
-        );
-        return makeDefaultVolumeChunkSpecifications({
+        const spec = makeVolumeChunkSpecification({
           rank,
           dataType: metadata.dataType,
-          upperVoxelBound: permutedDataShape,
-          chunkDataSizes: [permutedChunkShape],
-        }).map((spec): SliceViewSingleResolutionSource<VolumeChunkSource> => {
-          // The same chunk source is returned for the same options on every call.
-          const chunkSource = this.chunkManager.getChunkSource(
-            ZarrVolumeChunkSource,
-            {
-              spec,
-              parameters: {
-                store: this.multiscale.store,
-                path: scale.path,
-                metadata,
-              },
-            },
-          );
-          // Adding a listener that is already added has no effect.
-          chunkSource.missingChunk.add(this.missingChunk.dispatch);
-          return { chunkSource, chunkToMultiscaleTransform: transform };
+          chunkDataSize: chunkShapeXyz,
+          upperVoxelBound: shapeXyz,
+          fillValue: metadata.fillValue,
         });
-      }),
+        // Every call (one per view) returns the same chunk source for a scale.  A viewer's chunk
+        // manager holds a single volume, so the scale's path identifies the source.
+        const options = {
+          spec,
+          parameters: { store: this.multiscale.store, path: scale.path, metadata },
+        };
+        const chunkSource = this.chunkManager.getChunkSource(
+          `zarr:${scale.path}`,
+          () => new ZarrVolumeChunkSource(this.chunkManager, options),
+        );
+        // Adding a listener that is already added has no effect.
+        chunkSource.missingChunk.add(this.missingChunk.dispatch);
+        return { chunkSource, chunkToMultiscaleTransform: transform };
+      },
     );
   }
 }
@@ -176,7 +164,7 @@ async function resolveOmeMultiscale(
   );
   const dataType = scaleZarrMetadata[0].dataType;
   const numScales = scaleZarrMetadata.length;
-  const rank = multiscale.coordinateSpace.rank;
+  const { rank } = multiscale;
   for (let i = 0; i < numScales; ++i) {
     const scale = multiscale.scales[i];
     const zarrMetadata = scaleZarrMetadata[i];
@@ -199,34 +187,24 @@ async function resolveOmeMultiscale(
     }
   }
 
+  // The volume starts at the position of the full-resolution scale's first voxel (-0.5 for OME's
+  // voxel-center convention) and spans its shape.
   const lowerBounds = new Float64Array(rank);
   const upperBounds = new Float64Array(rank);
   const baseScale = multiscale.scales[0];
   const baseZarrMetadata = scaleZarrMetadata[0];
   for (let i = 0; i < rank; ++i) {
-    const lower = (lowerBounds[i] = baseScale.transform[(rank + 1) * rank + i]);
+    const lower = (lowerBounds[i] = baseScale.translation[i]);
     upperBounds[i] = lower + baseZarrMetadata.shape[i];
   }
-  const boundingBox = makeIdentityTransformedBoundingBox({
-    lowerBounds,
-    upperBounds,
-  });
-
-  const { coordinateSpace } = multiscale;
-  const resolvedCoordinateSpace = makeCoordinateSpace({
-    names: coordinateSpace.names,
-    units: coordinateSpace.units,
-    scales: coordinateSpace.scales,
-    boundingBoxes: [boundingBox],
-  });
 
   return {
     store: storeSpec,
-    coordinateSpace: resolvedCoordinateSpace,
+    lowerBounds,
+    upperBounds,
     dataType,
     scales: multiscale.scales.map((scale, i) => ({
-      path: scale.path,
-      transform: scale.transform,
+      ...scale,
       metadata: scaleZarrMetadata[i],
     })),
   };
@@ -241,11 +219,9 @@ export async function loadZarrVolume(
   storeSpec: ZarrStoreSpec,
 ): Promise<MultiscaleVolumeChunkSource> {
   const store = createZarrStore(storeSpec);
-  const zattrs = verifyObject(await readJson(store, ".zattrs"));
-  const multiscale = parseOmeMetadata(zattrs);
-  if (multiscale === undefined) {
-    throw new Error("No OME multiscale metadata found");
-  }
+  const multiscale = parseOmeMetadata(
+    verifyObject(await readJson(store, ".zattrs")),
+  );
   return new MultiscaleVolumeChunkSource(
     chunkManager,
     await resolveOmeMultiscale(storeSpec, store, multiscale),

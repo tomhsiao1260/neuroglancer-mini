@@ -1,22 +1,14 @@
-/**
- * @license
- * Copyright 2020 Google Inc.
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
+/** @license Copyright 2020 Google Inc. SPDX-License-Identifier: Apache-2.0 */
 
 /**
- * @file Workaround for Firefox requirement that at least one active vertex attribute have divisor
- * of 0.
+ * @file A vertex attribute at location 0 that is always enabled, and `gl_VertexID` redefined to use
+ * it so that it is not optimized away.
+ *
+ * The slice shader draws from `gl_VertexID` alone and needs no attributes.  Without this, Firefox
+ * draws correctly but warns that "drawing without vertex attrib 0 array enabled forces the browser
+ * to do expensive emulation work when running on desktop OpenGL platforms, for example on Mac", and
+ * advises binding an always-used attribute to location 0, which is what this does (checked in
+ * Firefox on macOS, 2026).
  *
  * https://github.com/KhronosGroup/WebGL/pull/2662
  */
@@ -67,11 +59,6 @@ export class VertexIdHelper extends RefCounted {
     gl.vertexAttribIPointer(0, 1, WebGL2RenderingContext.INT, 0, 0);
     gl.vertexAttribDivisor(0, 0);
     gl.enableVertexAttribArray(0);
-  }
-
-  disable() {
-    const { gl } = this.buffer;
-    gl.disableVertexAttribArray(0);
   }
 
   static get(gl: GL) {

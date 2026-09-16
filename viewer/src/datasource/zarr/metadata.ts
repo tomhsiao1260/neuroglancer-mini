@@ -1,33 +1,23 @@
-/**
- * @license
- * Copyright 2023 Google Inc.
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
+/** @license Copyright 2023 Google Inc. SPDX-License-Identifier: Apache-2.0 */
 
-import type { DataType } from "#src/util/data_type.js";
-import type { Endianness } from "#src/util/endian.js";
+import { DataType } from "#src/util/data_type.js";
 import {
   parseArray,
   parseFixedLengthArray,
-  verifyConstant,
   verifyObject,
   verifyObjectProperty,
   verifyOptionalObjectProperty,
   verifyString,
 } from "#src/util/json.js";
-import { parseNumpyDtype } from "#src/util/numpy_dtype.js";
 
 export type DimensionSeparator = "/" | ".";
+
+// Supported numpy dtypes.  Values are little-endian (`<`); `|` means byte order does not apply.
+const NUMPY_DATA_TYPES = new Map<string, DataType>([
+  ["|u1", DataType.UINT8],
+  ["<u2", DataType.UINT16],
+  ["<f4", DataType.FLOAT32],
+]);
 
 /**
  * The parts of a zarr v2 `.zarray` file needed to read and decode chunks.
@@ -39,7 +29,8 @@ export interface ArrayMetadata {
   // Chunk shape in voxels, in (z, y, x) order.
   chunkShape: number[];
   dataType: DataType;
-  endianness: Endianness;
+  // Value of the voxels of a chunk whose file is missing from the store.
+  fillValue: number;
   // Compression of each chunk file; `null` means chunks are stored uncompressed.
   compressor: "blosc" | null;
   // Separator between the chunk indices of a chunk key, e.g. `52/24/18`.
@@ -68,6 +59,26 @@ function parseChunkShape(obj: unknown, rank: number): number[] {
   });
 }
 
+/**
+ * A chunk whose file is missing from the store reads as this value.  zarr v2 writes it as a number,
+ * or, for floats, as one of the three strings that JSON cannot represent; `null` means zero.
+ */
+function parseFillValue(dataType: DataType, value: unknown): number {
+  if (value === null) return 0;
+  if (typeof value === "number") {
+    if (dataType !== DataType.FLOAT32 && !Number.isInteger(value)) {
+      throw new Error(`Expected integer, but received: ${value}`);
+    }
+    return value;
+  }
+  if (dataType === DataType.FLOAT32 && typeof value === "string") {
+    if (value === "NaN") return Number.NaN;
+    if (value === "Infinity") return Number.POSITIVE_INFINITY;
+    if (value === "-Infinity") return Number.NEGATIVE_INFINITY;
+  }
+  throw new Error(`Unsupported fill value: ${JSON.stringify(value)}`);
+}
+
 function parseDimensionSeparator(value: unknown): DimensionSeparator {
   if (value !== "." && value !== "/") {
     throw new Error(
@@ -81,7 +92,9 @@ export function parseV2Metadata(obj: unknown): ArrayMetadata {
   try {
     verifyObject(obj);
     verifyObjectProperty(obj, "zarr_format", (value) => {
-      verifyConstant(value, 2);
+      if (value !== 2) {
+        throw new Error(`Expected 2, but received: ${JSON.stringify(value)}`);
+      }
     });
     const shape = verifyObjectProperty(obj, "shape", parseShape);
     const rank = shape.length;
@@ -102,10 +115,19 @@ export function parseV2Metadata(obj: unknown): ArrayMetadata {
       parseDimensionSeparator,
       ".",
     );
-    const { dataType, endianness } = verifyObjectProperty(
-      obj,
-      "dtype",
-      (dtype) => parseNumpyDtype(verifyString(dtype)),
+    const dataType = verifyObjectProperty(obj, "dtype", (dtype) => {
+      const dataType = NUMPY_DATA_TYPES.get(verifyString(dtype));
+      if (dataType === undefined) {
+        throw new Error(
+          `Unsupported data type: ${JSON.stringify(dtype)} (supported: ${[
+            ...NUMPY_DATA_TYPES.keys(),
+          ].join(", ")})`,
+        );
+      }
+      return dataType;
+    });
+    const fillValue = verifyObjectProperty(obj, "fill_value", (value) =>
+      parseFillValue(dataType, value),
     );
     const compressor = verifyObjectProperty(obj, "compressor", (value) => {
       if (value === null) return null;
@@ -121,7 +143,7 @@ export function parseV2Metadata(obj: unknown): ArrayMetadata {
       shape,
       chunkShape,
       dataType,
-      endianness,
+      fillValue,
       compressor,
       dimensionSeparator,
     };

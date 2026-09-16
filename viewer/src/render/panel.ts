@@ -1,32 +1,18 @@
-/**
- * @license
- * Copyright 2016 Google Inc.
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
+/** @license Copyright 2016 Google Inc. SPDX-License-Identifier: Apache-2.0 */
 
 import type { ChunkManager } from "#src/chunk_manager/frontend.js";
 import { RenderViewport } from "#src/render/base.js";
 import { SliceView } from "#src/render/frontend.js";
 import type { ImageRenderLayer } from "#src/render/renderlayer.js";
+import type { NavigationState } from "#src/state/navigation_state.js";
 import type { WatchableValueInterface } from "#src/state/trackable_value.js";
+import { WatchableValue } from "#src/state/trackable_value.js";
 import { animationFrameDebounce } from "#src/util/animation_frame_debounce.js";
 import { RefCounted } from "#src/util/disposable.js";
 import { mat4, vec3 } from "#src/util/geom.js";
-import { Buffer } from "#src/webgl/buffer.js";
+import { NullarySignal } from "#src/util/signal.js";
 import type { GL } from "#src/webgl/context.js";
 import { initializeWebGL } from "#src/webgl/context.js";
-import type { ShaderProgram } from "#src/webgl/shader.js";
-import { ShaderBuilder } from "#src/webgl/shader.js";
 
 /**
  * The canvas shared by all panels, covering `container`.  After `scheduleRedraw`, `draw` runs on
@@ -42,6 +28,8 @@ export class DisplayContext extends RefCounted {
   boundsGeneration = -1;
   // Where the canvas is on the page, as of the last bounds update.
   canvasRect = new DOMRect();
+  // Dispatched when a frame starts drawing.
+  updateStarted = new NullarySignal();
   private resizeObserver = new ResizeObserver(() => this.handleResize());
 
   constructor(public container: HTMLElement) {
@@ -93,10 +81,12 @@ export class DisplayContext extends RefCounted {
 
   draw() {
     const { gl } = this;
+    this.updateStarted.dispatch();
     this.ensureBoundsUpdated();
     gl.clearColor(0.0, 0.0, 0.0, 0.0);
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
     for (const panel of this.panels) {
+      if (panel.visibility.value === Number.NEGATIVE_INFINITY) continue;
       panel.ensureBoundsUpdated();
       const { renderViewport } = panel;
       if (renderViewport.width === 0 || renderViewport.height === 0) continue;
@@ -119,64 +109,9 @@ export interface SliceViewerState {
   renderLayer: WatchableValueInterface<ImageRenderLayer | undefined>;
 }
 
-/**
- * Draws the texture a `SliceView` rendered into over the current viewport.  Pixels where no chunk
- * was drawn (alpha 0) are shown gray.
- */
-class SliceViewTextureRenderer extends RefCounted {
-  private shader: ShaderProgram;
-  private vertexBuffer: Buffer;
-
-  constructor(public gl: GL) {
-    super();
-    const builder = new ShaderBuilder(gl);
-    builder.addAttribute("vec4", "aVertexPosition");
-    builder.addVarying("vec2", "vTexCoord");
-    builder.addUniform("sampler2D", "uSampler");
-    builder.addInitializer((shader) => {
-      gl.uniform1i(shader.uniform("uSampler"), 0);
-    });
-    builder.addOutputBuffer("vec4", "out_fragColor", null);
-    builder.setVertexMain(`
-vTexCoord = 0.5 * (aVertexPosition.xy + 1.0);
-gl_Position = aVertexPosition;
-`);
-    builder.setFragmentMain(`
-vec4 sampledColor = texture(uSampler, vTexCoord);
-if (sampledColor.a == 0.0) {
-  sampledColor = vec4(0.5, 0.5, 0.5, 1.0);
-}
-out_fragColor = sampledColor;
-`);
-    this.shader = this.registerDisposer(builder.build());
-    // Corners of the square covering the viewport, in clip coordinates.
-    this.vertexBuffer = this.registerDisposer(
-      Buffer.fromData(gl, new Float32Array([-1, -1, -1, 1, 1, 1, 1, -1])),
-    );
-  }
-
-  draw(texture: WebGLTexture | null) {
-    const { gl, shader } = this;
-    shader.bind();
-    gl.activeTexture(gl.TEXTURE0);
-    gl.bindTexture(gl.TEXTURE_2D, texture);
-    gl.disable(WebGL2RenderingContext.BLEND);
-    const aVertexPosition = shader.attribute("aVertexPosition");
-    this.vertexBuffer.bindToVertexAttrib(aVertexPosition, /*components=*/ 2);
-    gl.drawArrays(gl.TRIANGLE_FAN, 0, 4);
-    gl.disableVertexAttribArray(aVertexPosition);
-    gl.bindTexture(gl.TEXTURE_2D, null);
-  }
-
-  static get(gl: GL) {
-    return gl.memoize.get(
-      "SliceViewTextureRenderer",
-      () => new SliceViewTextureRenderer(gl),
-    );
-  }
-}
-
 const tempVec3 = vec3.create();
+const tempMat4 = mat4.create();
+const tempOffset = new Float32Array(2);
 
 function hasNoModifiers(event: MouseEvent) {
   return !event.ctrlKey && !event.altKey && !event.metaKey && !event.shiftKey;
@@ -185,6 +120,9 @@ function hasNoModifiers(event: MouseEvent) {
 function hasOnlyControl(event: MouseEvent) {
   return event.ctrlKey && !event.altKey && !event.metaKey && !event.shiftKey;
 }
+
+// How far outside the container a panel still counts as about to be seen (see `visibility`).
+const NEAR_SCREEN_MARGIN = "200px";
 
 // Zoom factor for one wheel event: e^(deltaY / 200) when the delta is in pixels.
 function getWheelZoomAmount(event: WheelEvent) {
@@ -204,8 +142,8 @@ function getWheelZoomAmount(event: WheelEvent) {
 }
 
 /**
- * One cross-section view.  Its `SliceView` renders into a texture, which is drawn into the part of
- * the shared canvas covered by `element`.  Mouse input on `element` becomes navigation:
+ * One cross-section view.  Its `SliceView` draws into the part of the shared canvas covered by
+ * `element`.  Mouse input on `element` becomes navigation:
  *
  *   - left drag: pan
  *   - wheel: move one voxel along the viewing direction
@@ -225,15 +163,22 @@ export class SliceViewPanel extends RefCounted {
 
   renderViewport = new RenderViewport();
 
-  private textureRenderer = this.registerDisposer(
-    SliceViewTextureRenderer.get(this.gl),
-  );
+  /**
+   * How much this panel's chunks are worth loading: `POSITIVE_INFINITY` while the panel is on
+   * screen, `0` while it is only near its container (scrolled just out of a board of views, say),
+   * and `NEGATIVE_INFINITY` once it is neither, in which case it is not drawn and its chunks are
+   * not requested at all (see `render/backend.ts`).  Panels start out visible, so that the first
+   * frame is not delayed by waiting for the observers below.
+   */
+  visibility = new WatchableValue(Number.POSITIVE_INFINITY);
+  private onScreen = true;
+  private nearScreen = true;
 
-  sliceView: any;
+  sliceView: SliceView;
 
   constructor(
     public element: HTMLElement,
-    public navigationState: any,
+    public navigationState: NavigationState,
     public viewer: SliceViewerState,
   ) {
     super();
@@ -241,8 +186,36 @@ export class SliceViewPanel extends RefCounted {
     display.addPanel(this);
     this.registerDisposer(() => display.removePanel(this));
 
+    const updateVisibility = () => {
+      this.visibility.value = this.onScreen
+        ? Number.POSITIVE_INFINITY
+        : this.nearScreen
+          ? 0
+          : Number.NEGATIVE_INFINITY;
+    };
+    const observe = (
+      options: IntersectionObserverInit,
+      set: (intersecting: boolean) => void,
+    ) => {
+      const observer = new IntersectionObserver((entries) => {
+        set(entries[entries.length - 1].isIntersecting);
+        updateVisibility();
+      }, options);
+      observer.observe(element);
+      this.registerDisposer(() => observer.disconnect());
+    };
+    // Whether the panel is on screen at all, and whether it is at least close to its place in the
+    // container.  The second observer measures against the container rather than the window,
+    // because a container that clips (a scrolling board of views) hides the panel from the window
+    // long before it is far away.
+    observe({}, (intersecting) => (this.onScreen = intersecting));
+    observe(
+      { root: display.container, rootMargin: NEAR_SCREEN_MARGIN },
+      (intersecting) => (this.nearScreen = intersecting),
+    );
+
     this.sliceView = this.registerDisposer(
-      new SliceView(chunkManager, renderLayer, navigationState),
+      new SliceView(chunkManager, renderLayer, navigationState, this.visibility),
     );
 
     this.registerDisposer(
@@ -318,19 +291,16 @@ export class SliceViewPanel extends RefCounted {
     });
   }
 
-  draw(): boolean {
+  draw() {
     const { sliceView } = this;
     if (!sliceView.valid) {
-      return false;
+      return;
     }
-    sliceView.updateRendering();
     this.setGLClippedViewport();
-    this.textureRenderer.draw(sliceView.offscreenFramebuffer.colorTexture);
-    return true;
+    sliceView.draw();
   }
 
-  // Sets the viewport to the clipped viewport.  Any drawing must take
-  // `visible{Left,Top,Width,Height}Fraction` into account.
+  // Limits drawing to the part of the canvas under the panel's element.
   setGLClippedViewport() {
     const {
       gl,
@@ -360,14 +330,19 @@ export class SliceViewPanel extends RefCounted {
     const viewport = this.renderViewport;
     viewport.width = width - 1;
     viewport.height = height;
-    viewport.logicalWidth = width - 1;
-    viewport.logicalHeight = height;
-    viewport.visibleLeftFraction = 0;
-    viewport.visibleTopFraction = 0;
-    viewport.visibleWidthFraction = 1;
-    viewport.visibleHeightFraction = 1;
 
     this.sliceView.projectionParameters.setViewport(this.renderViewport);
+  }
+
+  // Position on the page, as an offset in viewport pixels from the center of the panel.
+  private offsetFromCenter(clientX: number, clientY: number) {
+    const { element, renderViewport } = this;
+    const bounds = element.getBoundingClientRect();
+    tempOffset[0] =
+      clientX - (bounds.left + element.clientLeft) - renderViewport.width / 2;
+    tempOffset[1] =
+      clientY - (bounds.top + element.clientTop) - renderViewport.height / 2;
+    return tempOffset;
   }
 
   /**
@@ -376,16 +351,13 @@ export class SliceViewPanel extends RefCounted {
    * the projection parameters, which are updated after a delay.
    */
   pointAt(clientX: number, clientY: number) {
-    const { navigationState, element, renderViewport } = this;
+    const { navigationState } = this;
     if (!navigationState.valid) return undefined;
-    const invViewMatrix = mat4.create();
-    navigationState.toMat4(invViewMatrix);
-    const bounds = element.getBoundingClientRect();
-    const x = clientX - (bounds.left + element.clientLeft) - renderViewport.width / 2;
-    const y = clientY - (bounds.top + element.clientTop) - renderViewport.height / 2;
+    navigationState.toMat4(tempMat4);
+    const [x, y] = this.offsetFromCenter(clientX, clientY);
     const point = new Float32Array(3);
     for (let i = 0; i < 3; ++i) {
-      point[i] = invViewMatrix[i] * x + invViewMatrix[4 + i] * y + invViewMatrix[12 + i];
+      point[i] = tempMat4[i] * x + tempMat4[4 + i] * y + tempMat4[12 + i];
     }
     return point;
   }
@@ -399,28 +371,17 @@ export class SliceViewPanel extends RefCounted {
     if (!navigationState.valid) {
       return;
     }
-    const { element, sliceView } = this;
-    const {
-      width,
-      height,
-      invViewMatrix,
-      displayDimensionRenderInfo: { displayDimensionIndices, displayRank },
-    } = sliceView.projectionParameters.value;
-    const bounds = element.getBoundingClientRect();
-    const mouseX =
-      event.clientX - (bounds.left + element.clientLeft) - width / 2;
-    const mouseY =
-      event.clientY - (bounds.top + element.clientTop) - height / 2;
+    const { invViewMatrix } = this.sliceView.projectionParameters.value;
+    const [mouseX, mouseY] = this.offsetFromCenter(event.clientX, event.clientY);
     // Desired invariance:
     //
     // invViewMatrixLinear * [mouseX, mouseY, 0]^T + [oldX, oldY, oldZ]^T =
     // invViewMatrixLinear * factor * [mouseX, mouseY, 0]^T + [newX, newY, newZ]^T
 
     const position = navigationState.position.value;
-    for (let i = 0; i < displayRank; ++i) {
-      const dim = displayDimensionIndices[i];
+    for (let i = 0; i < 3; ++i) {
       const f = invViewMatrix[i] * mouseX + invViewMatrix[4 + i] * mouseY;
-      position[dim] += f * (1 - factor);
+      position[i] += f * (1 - factor);
     }
     navigationState.position.changed.dispatch();
     navigationState.zoomBy(factor);
