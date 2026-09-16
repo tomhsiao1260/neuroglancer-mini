@@ -5,6 +5,8 @@ viewer library lives in `viewer/`, the same folder as in the
 [backward branch](https://github.com/tomhsiao1260/neuroglancer-mini/tree/backward), where it is
 explained; this branch keeps a copy of it and adds `client/` and `server/` around it.
 
+<img width="1424" height="805" alt="volumen" src="https://github.com/user-attachments/assets/7c377f97-7134-4b89-bd64-369cdd45a446" />
+
 ## What it does
 
 - **A board of cards.** Double click the board to add a card; each card is a cross-section with its
