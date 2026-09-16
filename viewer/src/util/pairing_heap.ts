@@ -12,7 +12,7 @@ export interface ComparisonFunction<T> {
 export class PairingHeap<T> {
   constructor(
     // Returns true iff a < b.
-    public compare: ComparisonFunction<T>,
+    private compare: ComparisonFunction<T>,
     private child: string,
     private next: string,
     private prev: string,

@@ -22,7 +22,7 @@ export type RpcId = number;
 
 const IS_WORKER = !(typeof Window !== "undefined" && self instanceof Window);
 
-export const READY_ID = "rpc.ready";
+const READY_ID = "rpc.ready";
 
 const handlers = new Map<string, RPCHandler>();
 
@@ -194,7 +194,7 @@ export class SharedObject extends RefCounted {
    * Should be set to a constant specifying the SharedObject type identifier on the prototype of
    * final derived owner classes.  It is not used on counterpart (non-owner) classes.
    */
-  RPC_TYPE_ID: string;
+  declare RPC_TYPE_ID: string;
 }
 
 export function initializeSharedObjectCounterpart(

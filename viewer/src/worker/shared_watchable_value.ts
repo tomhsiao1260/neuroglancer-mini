@@ -44,16 +44,14 @@ export class SharedWatchableValue<T>
   private setupChangedHandler() {
     this.registerDisposer(
       this.base.changed.add(() => {
-        if (this.updatingValue_) {
-          this.updatingValue_ = false;
-        } else {
-          const { rpc } = this;
-          if (rpc !== null) {
-            rpc.invoke(CHANGED_RPC_METHOD_ID, {
-              id: this.rpcId,
-              value: this.value,
-            });
-          }
+        // A change that came from the other side is not sent back to it.
+        if (this.updatingValue_) return;
+        const { rpc } = this;
+        if (rpc !== null) {
+          rpc.invoke(CHANGED_RPC_METHOD_ID, {
+            id: this.rpcId,
+            value: this.value,
+          });
         }
       }),
     );

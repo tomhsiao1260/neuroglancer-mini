@@ -70,35 +70,25 @@ export class Chunk implements Disposable {
   // visible chunks when prefetching.
   markGeneration = -1;
 
-  /**
-   * Specifies existing priority within priority tier.  Only meaningful if priorityTier in
-   * CHUNK_ORDERED_PRIORITY_TIERS.  Higher numbers mean higher priority.
-   */
+  // Priority within `priorityTier`; higher numbers come first.  Meaningless in the RECENT tier,
+  // which is ordered by use instead.
   priority = 0;
-
-  /**
-   * Specifies updated priority within priority tier, not yet reflected in priority queue state.
-   * Only meaningful if newPriorityTier in CHUNK_ORDERED_PRIORITY_TIERS.
-   */
-  newPriority = 0;
-
   priorityTier = ChunkPriorityTier.RECENT;
 
-  /**
-   * Specifies updated priority tier, not yet reflected in priority queue state.
-   */
+  // The tier and priority requested in the round of priority updates being computed, which the
+  // queues do not reflect until `updatePriorityProperties`.
+  newPriority = 0;
   newPriorityTier = ChunkPriorityTier.RECENT;
 
   private systemMemoryBytes_ = 0;
   private gpuMemoryBytes_ = 0;
 
-  /**
-   * Where the chunk's requests need it: `GPU_MEMORY` while a view requests it (views draw chunks
-   * from the GPU), `NEW` otherwise.  Only requested chunks are copied to the GPU.
-   */
-  requestedState = ChunkState.NEW;
+  // Whether a view is requesting this chunk.  Only requested chunks are copied to the GPU, which
+  // is where views draw them from.
+  requested = false;
 
-  newRequestedState = ChunkState.NEW;
+  // Whether a view has requested it in the round of priority updates being computed.
+  newRequested = false;
 
   /**
    * Aborts the pending download.  Set only while the state is DOWNLOADING.  This should not be
@@ -114,23 +104,19 @@ export class Chunk implements Disposable {
     this.newPriorityTier = ChunkPriorityTier.RECENT;
     this.error = null;
     this.state = ChunkState.NEW;
-    this.requestedState = ChunkState.NEW;
-    this.newRequestedState = ChunkState.NEW;
+    this.requested = false;
+    this.newRequested = false;
   }
 
-  /**
-   * Sets this.priority{Tier,} to this.newPriority{Tier,}, and resets this.newPriorityTier to
-   * ChunkPriorityTier.RECENT.
-   *
-   * This does not actually update any queues to reflect this change.
-   */
+  // Takes the priority and request of the round just computed, and starts a new round.  The queues
+  // are updated separately, by `performChunkPriorityUpdate`.
   updatePriorityProperties() {
     this.priorityTier = this.newPriorityTier;
     this.priority = this.newPriority;
     this.newPriorityTier = ChunkPriorityTier.RECENT;
     this.newPriority = Number.NEGATIVE_INFINITY;
-    this.requestedState = this.newRequestedState;
-    this.newRequestedState = ChunkState.NEW;
+    this.requested = this.newRequested;
+    this.newRequested = false;
   }
 
   dispose() {
@@ -345,58 +331,50 @@ class ChunkPriorityQueue {
     }
   }
 
+  // Yields the chunks of one heap, lowest priority first for an eviction queue (whose heap is
+  // ordered by `priorityLess`) and highest priority first for a promotion queue.
+  private *heapChunks(tier: ChunkPriorityTier) {
+    const { heapRoots } = this;
+    while (true) {
+      const root = heapRoots[tier];
+      if (root == null) {
+        break;
+      }
+      yield root;
+    }
+  }
+
   /**
-   * Yields chunks from lowest to highest priority for eviction queues (ordered by `priorityLess`),
-   * and from highest to lowest priority for promotion queues.
+   * Yields the chunks to give up first: those no longer requested, least recently used first, then
+   * the prefetched ones and finally the visible ones, lowest priority first within each tier.
    */
-  *candidates(): Iterator<Chunk> {
-    if (this.heapOperations.compare === Chunk.priorityLess) {
-      // Start with least-recently used RECENT chunk.
-      const { linkedListOperations, recentHead } = this;
-      while (true) {
-        const chunk = linkedListOperations.back(recentHead);
-        if (chunk == null) {
-          break;
-        }
-        yield chunk;
+  *evictionCandidates(): Iterator<Chunk> {
+    const { linkedListOperations, recentHead } = this;
+    while (true) {
+      const chunk = linkedListOperations.back(recentHead);
+      if (chunk == null) {
+        break;
       }
-      const { heapRoots } = this;
-      for (
-        let tier = ChunkPriorityTier.LAST_ORDERED_TIER;
-        tier >= ChunkPriorityTier.FIRST_ORDERED_TIER;
-        --tier
-      ) {
-        while (true) {
-          const root = heapRoots[tier];
-          if (root == null) {
-            break;
-          }
-          yield root;
-        }
+      yield chunk;
+    }
+    yield* this.heapChunks(ChunkPriorityTier.PREFETCH);
+    yield* this.heapChunks(ChunkPriorityTier.VISIBLE);
+  }
+
+  /**
+   * Yields the chunks to move forward first: the visible ones, highest priority first, then the
+   * prefetched ones, and last those no longer requested, most recently used first.
+   */
+  *promotionCandidates(): Iterator<Chunk> {
+    yield* this.heapChunks(ChunkPriorityTier.VISIBLE);
+    yield* this.heapChunks(ChunkPriorityTier.PREFETCH);
+    const { linkedListOperations, recentHead } = this;
+    while (true) {
+      const chunk = linkedListOperations.front(recentHead);
+      if (chunk == null) {
+        break;
       }
-    } else {
-      const heapRoots = this.heapRoots;
-      for (
-        let tier = ChunkPriorityTier.FIRST_ORDERED_TIER;
-        tier <= ChunkPriorityTier.LAST_ORDERED_TIER;
-        ++tier
-      ) {
-        while (true) {
-          const root = heapRoots[tier];
-          if (root == null) {
-            break;
-          }
-          yield root;
-        }
-      }
-      const { linkedListOperations, recentHead } = this;
-      while (true) {
-        const chunk = linkedListOperations.front(recentHead);
-        if (chunk == null) {
-          break;
-        }
-        yield chunk;
-      }
+      yield chunk;
     }
   }
 
@@ -483,12 +461,10 @@ class AvailableCapacity extends RefCounted {
     this.registerDisposer(sizeLimit.changed.add(this.capacityChanged.dispatch));
   }
 
-  /**
-   * Adjust available capacity by the specified amounts.
-   */
+  // Records that `items` chunks of `size` bytes in total have been added, or removed if negative.
   adjust(items: number, size: number) {
-    this.currentItems -= items;
-    this.currentSize -= size;
+    this.currentItems += items;
+    this.currentSize += size;
   }
 
   get availableSize() {
@@ -586,7 +562,7 @@ export class ChunkQueueManager extends SharedObjectCounterpart {
       case ChunkState.SYSTEM_MEMORY_WORKER:
       case ChunkState.SYSTEM_MEMORY:
         yield this.systemMemoryEvictionQueue;
-        if (chunk.requestedState === ChunkState.GPU_MEMORY) {
+        if (chunk.requested) {
           yield this.gpuMemoryPromotionQueue;
         }
         break;
@@ -599,7 +575,7 @@ export class ChunkQueueManager extends SharedObjectCounterpart {
   }
 
   adjustCapacitiesForChunk(chunk: Chunk, add: boolean) {
-    const factor = add ? -1 : 1;
+    const factor = add ? 1 : -1;
     switch (chunk.state) {
       case ChunkState.DOWNLOADING:
         this.downloadCapacity.adjust(factor, factor * chunk.systemMemoryBytes);
@@ -683,16 +659,12 @@ export class ChunkQueueManager extends SharedObjectCounterpart {
   // Copies the highest-priority chunks in system memory to the GPU, evicting lower-priority chunks
   // from the GPU as needed.
   private processGPUPromotions_() {
-    const queueManager = this;
-    function evictFromGPUMemory(chunk: Chunk) {
-      queueManager.freeChunkGPUMemory(chunk);
-      chunk.source!.chunkManager.queueManager.updateChunkState(
-        chunk,
-        ChunkState.SYSTEM_MEMORY,
-      );
-    }
-    const promotionCandidates = this.gpuMemoryPromotionQueue.candidates();
-    const evictionCandidates = this.gpuMemoryEvictionQueue.candidates();
+    const evictFromGPUMemory = (chunk: Chunk) => {
+      this.freeChunkGPUMemory(chunk);
+      this.updateChunkState(chunk, ChunkState.SYSTEM_MEMORY);
+    };
+    const promotionCandidates = this.gpuMemoryPromotionQueue.promotionCandidates();
+    const evictionCandidates = this.gpuMemoryEvictionQueue.evictionCandidates();
     const capacity = this.gpuMemoryCapacity;
     while (true) {
       const promotionCandidate = promotionCandidates.next().value;
@@ -785,10 +757,11 @@ export class ChunkQueueManager extends SharedObjectCounterpart {
   private processQueuePromotions_() {
     const evict = (chunk: Chunk) => this.evictChunk(chunk);
 
-    const promotionCandidates = this.queuedDownloadPromotionQueue.candidates();
-    const evictionCandidates = this.downloadEvictionQueue.candidates();
+    const promotionCandidates =
+      this.queuedDownloadPromotionQueue.promotionCandidates();
+    const evictionCandidates = this.downloadEvictionQueue.evictionCandidates();
     const systemMemoryEvictionCandidates =
-      this.systemMemoryEvictionQueue.candidates();
+      this.systemMemoryEvictionQueue.evictionCandidates();
     while (true) {
       const promotionCandidateResult = promotionCandidates.next();
       if (promotionCandidateResult.done) {
@@ -827,10 +800,7 @@ export class ChunkQueueManager extends SharedObjectCounterpart {
     }
   }
 
-  process() {
-    if (!this.updatePending) {
-      return;
-    }
+  private process() {
     this.updatePending = null;
     const gpuMemoryGeneration = this.gpuMemoryGeneration;
     this.processGPUPromotions_();
@@ -848,7 +818,7 @@ export class ChunkManager extends SharedObjectCounterpart {
   /**
    * Array of chunks within each existing priority tier.
    */
-  private existingTierChunks: Chunk[][] = [];
+  private existingTierChunks: Chunk[][] = [[], []];
 
   /**
    * Array of chunks whose new priorities have not yet been reflected in the
@@ -887,16 +857,6 @@ export class ChunkManager extends SharedObjectCounterpart {
     );
     this.registerDisposer(() => clearTimeout(this.gpuMemoryUpdateTimer));
 
-    for (
-      let tier = ChunkPriorityTier.FIRST_TIER;
-      tier <= ChunkPriorityTier.LAST_TIER;
-      ++tier
-    ) {
-      if (tier === ChunkPriorityTier.RECENT) {
-        continue;
-      }
-      this.existingTierChunks[tier] = [];
-    }
   }
 
   scheduleUpdateChunkPriorities() {
@@ -911,10 +871,7 @@ export class ChunkManager extends SharedObjectCounterpart {
   private recomputeChunkPriorities_() {
     this.updatePending = null;
     this.recomputeChunkPriorities.dispatch();
-    this.updateQueueState([
-      ChunkPriorityTier.VISIBLE,
-      ChunkPriorityTier.PREFETCH,
-    ]);
+    this.updateQueueState();
   }
 
   /**
@@ -931,7 +888,7 @@ export class ChunkManager extends SharedObjectCounterpart {
     if (tier === ChunkPriorityTier.RECENT) {
       throw new Error("Not going to request a chunk with the RECENT tier");
     }
-    chunk.newRequestedState = ChunkState.GPU_MEMORY;
+    chunk.newRequested = true;
     if (chunk.newPriorityTier === ChunkPriorityTier.RECENT) {
       this.newTierChunks.push(chunk);
     }
@@ -946,15 +903,14 @@ export class ChunkManager extends SharedObjectCounterpart {
   }
 
   /**
-   * Update queue state to reflect updated contents of the specified priority tiers.  Existing
-   * chunks within those tiers not present in this.newTierChunks will be moved to the RECENT tier
-   * (and removed if in the QUEUED state).
+   * Updates the queues to the priorities just requested.  A chunk that was in the VISIBLE or
+   * PREFETCH tier and has not been requested again moves to the RECENT tier, and is removed if it
+   * had not started downloading.
    */
-  updateQueueState(tiers: ChunkPriorityTier[]) {
+  private updateQueueState() {
     const existingTierChunks = this.existingTierChunks;
     const queueManager = this.queueManager;
-    for (const tier of tiers) {
-      const chunks = existingTierChunks[tier];
+    for (const chunks of existingTierChunks) {
       for (const chunk of chunks) {
         if (chunk.newPriorityTier === ChunkPriorityTier.RECENT) {
           // Downgrade the priority of this chunk.

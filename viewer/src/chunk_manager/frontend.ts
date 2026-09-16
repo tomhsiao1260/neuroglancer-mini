@@ -37,10 +37,6 @@ export class Chunk {
   state = ChunkState.SYSTEM_MEMORY;
   constructor(public source: ChunkSource) {}
 
-  get gl() {
-    return this.source.gl;
-  }
-
   copyToGPU(_gl: GL) {
     this.state = ChunkState.GPU_MEMORY;
   }
@@ -164,7 +160,6 @@ export class ChunkQueueManager extends SharedObject {
     }
     const newState: number = update.state;
     if (newState === ChunkState.EXPIRED) {
-      // FIXME: maybe use freeList for chunks here
       source.deleteChunk(update.id);
     } else {
       let chunk: Chunk;
@@ -284,9 +279,7 @@ export class ChunkSource extends SharedObject {
     this.rpc!.invoke(CHUNK_RELOAD_RPC_ID, { source: this.rpcId, key });
   }
 
-  /**
-   * Default implementation for use with backendOnly chunk sources.
-   */
+  // Defined by subclasses: builds the main-thread chunk from a `Chunk.update` message.
   getChunk(_x: any): Chunk {
     throw new Error("Not implemented.");
   }

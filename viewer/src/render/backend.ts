@@ -114,6 +114,14 @@ export class SliceViewBackend extends SliceViewIntermediateBase {
 
   updateVisibleChunks() {
     const projectionParameters = this.projectionParameters.value;
+    // Nothing is shown, and the projection is not usable, until the volume has loaded (there is no
+    // position yet, see `DerivedProjectionParameters`) and the panel has been measured (a zero width
+    // or height makes the projection matrix singular).  Without this, the view would request an
+    // arbitrary block of chunks.
+    const { width, height, globalPosition } = projectionParameters;
+    if (globalPosition.length === 0 || width === 0 || height === 0) {
+      return;
+    }
     const chunkManager = this.chunkManager;
     this.updateVisibleSources();
     const { centerDataPosition } = projectionParameters;
