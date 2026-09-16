@@ -148,6 +148,21 @@ export class Viewer extends RefCounted {
       new ChunkManager(chunkQueueManager),
     );
 
+    // While the view moves, chunk uploads to the GPU make way for drawing: after a change of the
+    // view they may only start within the next 10 ms, and then wait until a frame has started.
+    this.registerDisposer(
+      this.onViewChanged(() => {
+        if (chunkQueueManager.chunkUpdateDeadline === null) {
+          chunkQueueManager.chunkUpdateDeadline = Date.now() + 10;
+        }
+      }),
+    );
+    this.registerDisposer(
+      this.display.updateStarted.add(() => {
+        chunkQueueManager.chunkUpdateDeadline = null;
+      }),
+    );
+
     // When the view moves under a still pointer, the point under the pointer changes.
     this.registerDisposer(
       this.onViewChanged(() => {

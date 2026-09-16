@@ -8,6 +8,7 @@ import type { WatchableValueInterface } from "#src/state/trackable_value.js";
 import { animationFrameDebounce } from "#src/util/animation_frame_debounce.js";
 import { RefCounted } from "#src/util/disposable.js";
 import { mat4, vec3 } from "#src/util/geom.js";
+import { NullarySignal } from "#src/util/signal.js";
 import type { GL } from "#src/webgl/context.js";
 import { initializeWebGL } from "#src/webgl/context.js";
 
@@ -25,6 +26,8 @@ export class DisplayContext extends RefCounted {
   boundsGeneration = -1;
   // Where the canvas is on the page, as of the last bounds update.
   canvasRect = new DOMRect();
+  // Dispatched when a frame starts drawing.
+  updateStarted = new NullarySignal();
   private resizeObserver = new ResizeObserver(() => this.handleResize());
 
   constructor(public container: HTMLElement) {
@@ -76,6 +79,7 @@ export class DisplayContext extends RefCounted {
 
   draw() {
     const { gl } = this;
+    this.updateStarted.dispatch();
     this.ensureBoundsUpdated();
     gl.clearColor(0.0, 0.0, 0.0, 0.0);
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);

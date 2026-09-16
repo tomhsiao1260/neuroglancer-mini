@@ -28,7 +28,8 @@ import {
   SharedObject,
 } from "#src/worker/worker_rpc.js";
 
-// Maximum time spent applying queued chunk updates before yielding to the next frame.
+// Time spent applying queued chunk updates before waiting `CHUNK_UPDATE_DELAY_MS` for the next
+// batch, unless a change of the view has set an earlier deadline (see `chunkUpdateDeadline`).
 const CHUNK_UPDATE_TIME_BUDGET_MS = 30;
 const CHUNK_UPDATE_DELAY_MS = 30;
 
@@ -71,6 +72,13 @@ export class ChunkQueueManager extends SharedObject {
   // Singly linked list (through `nextUpdate`) of `Chunk.update` messages not yet applied.
   pendingChunkUpdates: any = null;
   pendingChunkUpdatesTail: any = null;
+  /**
+   * If non-null, deadline in milliseconds since epoch after which chunk copies to the GPU may not
+   * start (until the next frame).  The viewer sets it shortly after each change of the view, so that
+   * uploads do not hold up the frame that shows the change, and clears it when a frame starts
+   * drawing.
+   */
+  chunkUpdateDeadline: number | null = null;
   // Whether views also request the chunks they are likely to need soon (see `render/backend.ts`).
   enablePrefetch = new WatchableValue(true);
 
@@ -107,15 +115,20 @@ export class ChunkQueueManager extends SharedObject {
   }
 
   scheduleChunkUpdate() {
-    setTimeout(() => this.processPendingChunkUpdates(), 0);
+    const deadline = this.chunkUpdateDeadline;
+    const delay =
+      deadline === null || Date.now() < deadline ? 0 : CHUNK_UPDATE_DELAY_MS;
+    setTimeout(() => this.processPendingChunkUpdates(), delay);
   }
 
   processPendingChunkUpdates() {
-    const deadline = Date.now() + CHUNK_UPDATE_TIME_BUDGET_MS;
+    const deadline =
+      this.chunkUpdateDeadline ?? Date.now() + CHUNK_UPDATE_TIME_BUDGET_MS;
     let visibleChunksChanged = false;
     while (true) {
       if (Date.now() > deadline) {
         // No time to perform chunk update now, we will wait some more.
+        this.chunkUpdateDeadline = null;
         setTimeout(
           () => this.processPendingChunkUpdates(),
           CHUNK_UPDATE_DELAY_MS,
