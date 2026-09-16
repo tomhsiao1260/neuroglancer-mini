@@ -10,7 +10,7 @@
  * calls `initializeCounterpart`, which creates the counterpart class registered with
  * `registerSharedObject` on the other side.  Either side can then look the object up with
  * `rpc.get(id)`.  The owner is disposed only once neither side holds a reference, which is tracked
- * with reference generations so that references sent while a release message is in flight are not
+ * with reference generations, so that a reference sent while a release message is in flight is not
  * lost.
  */
 
@@ -22,7 +22,7 @@ export type RpcId = number;
 
 const IS_WORKER = !(typeof Window !== "undefined" && self instanceof Window);
 
-export const READY_ID = "rpc.ready";
+const READY_ID = "rpc.ready";
 
 const handlers = new Map<string, RPCHandler>();
 
@@ -124,10 +124,8 @@ export class SharedObject extends RefCounted {
     rpc.set(rpcId, this);
   }
 
-  /**
-   * Makes this object the owner of a new shared object, and creates the counterpart registered for
-   * `RPC_TYPE_ID` on the other side with `options`.
-   */
+  // Makes this object the owner of a new shared object, and creates the counterpart registered for
+  // `RPC_TYPE_ID` on the other side with `options`.
   initializeCounterpart(rpc: RPC, options: any = {}) {
     this.initializeSharedObject(rpc);
     this.unreferencedGeneration = 0;
@@ -138,9 +136,7 @@ export class SharedObject extends RefCounted {
     rpc.invoke("SharedObject.new", options);
   }
 
-  /**
-   * Precondition: this.isOwner === true.
-   */
+  // Only on an owner: hands out a reference for the counterpart to hold.
   addCounterpartRef() {
     return { id: this.rpcId, gen: ++this.referencedGeneration };
   }
@@ -160,9 +156,6 @@ export class SharedObject extends RefCounted {
     }
   }
 
-  /**
-   * Precondition: this.isOwner === true.
-   */
   protected ownerDispose() {
     const { rpc, rpcId } = this;
     super.refCountReachedZero();
@@ -170,11 +163,7 @@ export class SharedObject extends RefCounted {
     rpc!.invoke("SharedObject.dispose", { id: rpcId });
   }
 
-  /**
-   * Precondition: this.isOwner === true.
-   *
-   * This should be called when the counterpart's refCount is decremented and reaches zero.
-   */
+  // Called on an owner when its counterpart has released its last reference.
   counterpartRefCountReachedZero(generation: number) {
     this.unreferencedGeneration = generation;
     if (this.refCount === 0 && generation === this.referencedGeneration) {
@@ -182,19 +171,13 @@ export class SharedObject extends RefCounted {
     }
   }
 
-  /**
-   * Called on a counterpart when its owner has been disposed: runs `disposed` and the registered
-   * disposers.
-   */
+  // Called on a counterpart once its owner has been disposed.
   disposeCounterpart() {
     super.refCountReachedZero();
   }
 
-  /**
-   * Should be set to a constant specifying the SharedObject type identifier on the prototype of
-   * final derived owner classes.  It is not used on counterpart (non-owner) classes.
-   */
-  RPC_TYPE_ID: string;
+  // Set on the prototype by the decorators below; the counterpart is looked up by it.
+  declare RPC_TYPE_ID: string;
 }
 
 export function initializeSharedObjectCounterpart(
@@ -207,9 +190,7 @@ export function initializeSharedObjectCounterpart(
   }
 }
 
-/**
- * Base class for defining a SharedObject type that will never be owned.
- */
+// A shared object that is always a counterpart, never an owner.
 export class SharedObjectCounterpart extends SharedObject {
   constructor(rpc?: RPC, options: any = {}) {
     super();
@@ -242,25 +223,15 @@ registerRPC("SharedObject.refCountReachedZero", function (x) {
 
 const sharedObjectConstructors = new Map<string, SharedObjectConstructor>();
 
-/**
- * Register a class as a SharedObject owner type under the specified identifier.
- *
- * This is intended to be used as a decorator.
- */
+// Decorator: names the type of a shared object whose counterpart lives on the other side.
 export function registerSharedObjectOwner(identifier: string) {
   return (constructorFunction: { prototype: { RPC_TYPE_ID: string } }) => {
     constructorFunction.prototype.RPC_TYPE_ID = identifier;
   };
 }
 
-/**
- * Register a class as a SharedObject counterpart type under the specified identifier.
- *
- * This is intended to be used as a decorator.
- *
- * Also register the type as a SharedObject owner, which is useful if this type is also used as a
- * SharedObject owner.
- */
+// Decorator: registers the class that `SharedObject.new` instantiates for `identifier`, and names
+// its type, in case this class is also used as an owner.
 export function registerSharedObject(identifier?: string) {
   return (constructorFunction: any) => {
     if (identifier !== undefined) {

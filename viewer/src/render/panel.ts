@@ -8,11 +8,9 @@ import type { WatchableValueInterface } from "#src/state/trackable_value.js";
 import { animationFrameDebounce } from "#src/util/animation_frame_debounce.js";
 import { RefCounted } from "#src/util/disposable.js";
 import { mat4, vec3 } from "#src/util/geom.js";
-import { Buffer } from "#src/webgl/buffer.js";
+import { NullarySignal } from "#src/util/signal.js";
 import type { GL } from "#src/webgl/context.js";
 import { initializeWebGL } from "#src/webgl/context.js";
-import type { ShaderProgram } from "#src/webgl/shader.js";
-import { ShaderBuilder } from "#src/webgl/shader.js";
 
 /**
  * The canvas shared by all panels, covering `container`.  After `scheduleRedraw`, `draw` runs on
@@ -28,6 +26,8 @@ export class DisplayContext extends RefCounted {
   boundsGeneration = -1;
   // Where the canvas is on the page, as of the last bounds update.
   canvasRect = new DOMRect();
+  // Dispatched when a frame starts drawing.
+  updateStarted = new NullarySignal();
   private resizeObserver = new ResizeObserver(() => this.handleResize());
 
   constructor(public container: HTMLElement) {
@@ -79,6 +79,7 @@ export class DisplayContext extends RefCounted {
 
   draw() {
     const { gl } = this;
+    this.updateStarted.dispatch();
     this.ensureBoundsUpdated();
     gl.clearColor(0.0, 0.0, 0.0, 0.0);
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
@@ -103,63 +104,6 @@ export interface SliceViewerState {
   chunkManager: ChunkManager;
   // The render layer that draws the volume; `undefined` until the volume has loaded.
   renderLayer: WatchableValueInterface<ImageRenderLayer | undefined>;
-}
-
-/**
- * Draws the texture a `SliceView` rendered into over the current viewport.  Pixels where no chunk
- * was drawn (alpha 0) are shown gray.
- */
-class SliceViewTextureRenderer extends RefCounted {
-  private shader: ShaderProgram;
-  private vertexBuffer: Buffer;
-
-  constructor(public gl: GL) {
-    super();
-    const builder = new ShaderBuilder(gl);
-    builder.addAttribute("vec4", "aVertexPosition");
-    builder.addVarying("vec2", "vTexCoord");
-    builder.addUniform("sampler2D", "uSampler");
-    builder.addInitializer((shader) => {
-      gl.uniform1i(shader.uniform("uSampler"), 0);
-    });
-    builder.addOutputBuffer("vec4", "out_fragColor", null);
-    builder.setVertexMain(`
-vTexCoord = 0.5 * (aVertexPosition.xy + 1.0);
-gl_Position = aVertexPosition;
-`);
-    builder.setFragmentMain(`
-vec4 sampledColor = texture(uSampler, vTexCoord);
-if (sampledColor.a == 0.0) {
-  sampledColor = vec4(0.5, 0.5, 0.5, 1.0);
-}
-out_fragColor = sampledColor;
-`);
-    this.shader = this.registerDisposer(builder.build());
-    // Corners of the square covering the viewport, in clip coordinates.
-    this.vertexBuffer = this.registerDisposer(
-      Buffer.fromData(gl, new Float32Array([-1, -1, -1, 1, 1, 1, 1, -1])),
-    );
-  }
-
-  draw(texture: WebGLTexture | null) {
-    const { gl, shader } = this;
-    shader.bind();
-    gl.activeTexture(gl.TEXTURE0);
-    gl.bindTexture(gl.TEXTURE_2D, texture);
-    gl.disable(WebGL2RenderingContext.BLEND);
-    const aVertexPosition = shader.attribute("aVertexPosition");
-    this.vertexBuffer.bindToVertexAttrib(aVertexPosition, /*components=*/ 2);
-    gl.drawArrays(gl.TRIANGLE_FAN, 0, 4);
-    gl.disableVertexAttribArray(aVertexPosition);
-    gl.bindTexture(gl.TEXTURE_2D, null);
-  }
-
-  static get(gl: GL) {
-    return gl.memoize.get(
-      "SliceViewTextureRenderer",
-      () => new SliceViewTextureRenderer(gl),
-    );
-  }
 }
 
 const tempVec3 = vec3.create();
@@ -190,8 +134,8 @@ function getWheelZoomAmount(event: WheelEvent) {
 }
 
 /**
- * One cross-section view.  Its `SliceView` renders into a texture, which is drawn into the part of
- * the shared canvas covered by `element`.  Mouse input on `element` becomes navigation:
+ * One cross-section view.  Its `SliceView` draws into the part of the shared canvas covered by
+ * `element`.  Mouse input on `element` becomes navigation:
  *
  *   - left drag: pan
  *   - wheel: move one voxel along the viewing direction
@@ -211,11 +155,7 @@ export class SliceViewPanel extends RefCounted {
 
   renderViewport = new RenderViewport();
 
-  private textureRenderer = this.registerDisposer(
-    SliceViewTextureRenderer.get(this.gl),
-  );
-
-  sliceView: any;
+  sliceView: SliceView;
 
   constructor(
     public element: HTMLElement,
@@ -304,19 +244,16 @@ export class SliceViewPanel extends RefCounted {
     });
   }
 
-  draw(): boolean {
+  draw() {
     const { sliceView } = this;
     if (!sliceView.valid) {
-      return false;
+      return;
     }
-    sliceView.updateRendering();
     this.setGLClippedViewport();
-    this.textureRenderer.draw(sliceView.offscreenFramebuffer.colorTexture);
-    return true;
+    sliceView.draw();
   }
 
-  // Sets the viewport to the clipped viewport.  Any drawing must take
-  // `visible{Left,Top,Width,Height}Fraction` into account.
+  // Limits drawing to the part of the canvas under the panel's element.
   setGLClippedViewport() {
     const {
       gl,
@@ -346,12 +283,6 @@ export class SliceViewPanel extends RefCounted {
     const viewport = this.renderViewport;
     viewport.width = width - 1;
     viewport.height = height;
-    viewport.logicalWidth = width - 1;
-    viewport.logicalHeight = height;
-    viewport.visibleLeftFraction = 0;
-    viewport.visibleTopFraction = 0;
-    viewport.visibleWidthFraction = 1;
-    viewport.visibleHeightFraction = 1;
 
     this.sliceView.projectionParameters.setViewport(this.renderViewport);
   }
@@ -386,12 +317,8 @@ export class SliceViewPanel extends RefCounted {
       return;
     }
     const { element, sliceView } = this;
-    const {
-      width,
-      height,
-      invViewMatrix,
-      displayDimensionRenderInfo: { displayDimensionIndices, displayRank },
-    } = sliceView.projectionParameters.value;
+    const { width, height, invViewMatrix } =
+      sliceView.projectionParameters.value;
     const bounds = element.getBoundingClientRect();
     const mouseX =
       event.clientX - (bounds.left + element.clientLeft) - width / 2;
@@ -403,10 +330,9 @@ export class SliceViewPanel extends RefCounted {
     // invViewMatrixLinear * factor * [mouseX, mouseY, 0]^T + [newX, newY, newZ]^T
 
     const position = navigationState.position.value;
-    for (let i = 0; i < displayRank; ++i) {
-      const dim = displayDimensionIndices[i];
+    for (let i = 0; i < 3; ++i) {
       const f = invViewMatrix[i] * mouseX + invViewMatrix[4 + i] * mouseY;
-      position[dim] += f * (1 - factor);
+      position[i] += f * (1 - factor);
     }
     navigationState.position.changed.dispatch();
     navigationState.zoomBy(factor);

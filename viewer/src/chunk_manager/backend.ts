@@ -24,19 +24,11 @@ import {
   ChunkState,
 } from "#src/chunk_manager/base.js";
 import type { SharedWatchableValue } from "#src/worker/shared_watchable_value.js";
-import type { CancellationToken } from "#src/util/cancellation.js";
-import { CancellationTokenSource } from "#src/util/cancellation.js";
 import type { Borrowed, Disposable } from "#src/util/disposable.js";
 import { RefCounted } from "#src/util/disposable.js";
-import LinkedList0 from "#src/util/linked_list.0.js";
-import LinkedList1 from "#src/util/linked_list.1.js";
-import type { LinkedListOperations } from "#src/util/linked_list.js";
-import PairingHeap0 from "#src/util/pairing_heap.0.js";
-import PairingHeap1 from "#src/util/pairing_heap.1.js";
-import type {
-  ComparisonFunction,
-  PairingHeapOperations,
-} from "#src/util/pairing_heap.js";
+import { LinkedList } from "#src/util/linked_list.js";
+import type { ComparisonFunction } from "#src/util/pairing_heap.js";
+import { PairingHeap } from "#src/util/pairing_heap.js";
 import { NullarySignal } from "#src/util/signal.js";
 import type { RPC } from "#src/worker/worker_rpc.js";
 import {
@@ -47,6 +39,9 @@ import {
   SharedObject,
   SharedObjectCounterpart,
 } from "#src/worker/worker_rpc.js";
+
+// Delay of the priority update that follows chunks moving to or from the GPU (see `ChunkManager`).
+const GPU_MEMORY_PRIORITY_UPDATE_INTERVAL_MS = 200;
 
 let nextMarkGeneration = 0;
 export function getNextMarkGeneration() {
@@ -71,45 +66,32 @@ export class Chunk implements Disposable {
 
   error: any = null;
 
-  // Used by layers for marking chunks for various purposes.
+  // Set to a value from `getNextMarkGeneration` by code that needs to mark chunks, e.g. to skip
+  // visible chunks when prefetching.
   markGeneration = -1;
 
-  /**
-   * Specifies existing priority within priority tier.  Only meaningful if priorityTier in
-   * CHUNK_ORDERED_PRIORITY_TIERS.  Higher numbers mean higher priority.
-   */
+  // Priority within `priorityTier`; higher numbers come first.  Meaningless in the RECENT tier,
+  // which is ordered by use instead.
   priority = 0;
-
-  /**
-   * Specifies updated priority within priority tier, not yet reflected in priority queue state.
-   * Only meaningful if newPriorityTier in CHUNK_ORDERED_PRIORITY_TIERS.
-   */
-  newPriority = 0;
-
   priorityTier = ChunkPriorityTier.RECENT;
 
-  /**
-   * Specifies updated priority tier, not yet reflected in priority queue state.
-   */
+  // The tier and priority requested in the round of priority updates being computed, which the
+  // queues do not reflect until `updatePriorityProperties`.
+  newPriority = 0;
   newPriorityTier = ChunkPriorityTier.RECENT;
 
   private systemMemoryBytes_ = 0;
   private gpuMemoryBytes_ = 0;
 
-  /**
-   * Specifies lowest numeric state required by any request, if `prioritTier !==
-   * ChunkPriorityTier.RECENT`, then this must be one of `GPU_MEMORY`, `SYSTEM_MEMORY`, or
-   * `SYSTEM_MEMORY_WORKER`.
-   */
-  requestedState = ChunkState.NEW;
+  // Whether a view is requesting this chunk.  Only requested chunks are copied to the GPU, which
+  // is where views draw them from.
+  requested = false;
 
-  newRequestedState = ChunkState.NEW;
+  // Whether a view has requested it in the round of priority updates being computed.
+  newRequested = false;
 
-  /**
-   * Cancellation token used to cancel the pending download.  Set to undefined except when state !==
-   * DOWNLOADING.  This should not be accessed by code outside this module.
-   */
-  downloadCancellationToken: CancellationTokenSource | undefined = undefined;
+  // Aborts the pending download; set only while DOWNLOADING, and only used in this module.
+  downloadAbortController: AbortController | undefined = undefined;
 
   initialize(key: string) {
     this.key = key;
@@ -119,23 +101,19 @@ export class Chunk implements Disposable {
     this.newPriorityTier = ChunkPriorityTier.RECENT;
     this.error = null;
     this.state = ChunkState.NEW;
-    this.requestedState = ChunkState.NEW;
-    this.newRequestedState = ChunkState.NEW;
+    this.requested = false;
+    this.newRequested = false;
   }
 
-  /**
-   * Sets this.priority{Tier,} to this.newPriority{Tier,}, and resets this.newPriorityTier to
-   * ChunkPriorityTier.RECENT.
-   *
-   * This does not actually update any queues to reflect this change.
-   */
+  // Takes the priority and request of the round just computed, and starts a new round.  The queues
+  // are updated separately, by `performChunkPriorityUpdate`.
   updatePriorityProperties() {
     this.priorityTier = this.newPriorityTier;
     this.priority = this.newPriority;
     this.newPriorityTier = ChunkPriorityTier.RECENT;
     this.newPriority = Number.NEGATIVE_INFINITY;
-    this.requestedState = this.newRequestedState;
-    this.newRequestedState = ChunkState.NEW;
+    this.requested = this.newRequested;
+    this.newRequested = false;
   }
 
   dispose() {
@@ -156,13 +134,9 @@ export class Chunk implements Disposable {
     this.queueManager.updateChunkState(this, ChunkState.FAILED);
   }
 
+  // The downloaded data stays in the worker until the chunk is copied to the GPU.
   downloadSucceeded() {
-    if (this.requestedState === ChunkState.SYSTEM_MEMORY) {
-      this.queueManager.moveChunkToFrontend(this);
-      this.queueManager.updateChunkState(this, ChunkState.SYSTEM_MEMORY);
-    } else {
-      this.queueManager.updateChunkState(this, ChunkState.SYSTEM_MEMORY_WORKER);
-    }
+    this.queueManager.updateChunkState(this, ChunkState.SYSTEM_MEMORY_WORKER);
   }
 
   freeSystemMemory() {}
@@ -245,12 +219,7 @@ export class ChunkSource extends SharedObject {
     return chunk;
   }
 
-  /**
-   * Adds the specified chunk to the chunk cache.
-   *
-   * If the chunk cache was previously empty, also call this.addRef() to increment the reference
-   * count.
-   */
+  // The source holds a reference to itself while it has chunks.
   addChunk(chunk: Chunk) {
     const { chunks } = this;
     if (chunks.size === 0) {
@@ -259,11 +228,7 @@ export class ChunkSource extends SharedObject {
     chunks.set(chunk.key!, chunk);
   }
 
-  /**
-   * Remove the specified chunk from the chunk cache.
-   *
-   * If the chunk cache becomes empty, also call this.dispose() to decrement the reference count.
-   */
+  // Keeps the chunk object for reuse, and releases the source's own reference if it was the last.
   removeChunk(chunk: Chunk) {
     const { chunks, freeChunks } = this;
     chunks.delete(chunk.key!);
@@ -278,32 +243,27 @@ export class ChunkSource extends SharedObject {
 // eslint-disable-next-line @typescript-eslint/no-unsafe-declaration-merging
 export interface ChunkSource {
   /**
-   * Begin downloading the specified the chunk.  The returned promise should resolve when the
-   * downloaded data has been successfully decoded and stored in the chunk, or rejected if the
-   * download or decoding fails.
-   *
-   * Note: This method must be defined by subclasses.
-   *
-   * @param chunk Chunk to download.
-   * @param cancellationToken If this token is canceled, the download/decoding should be aborted if
-   * possible.
+   * Defined by the data source: stores the chunk's decoded data in it, or rejects, which puts the
+   * chunk in the FAILED state.  `abortSignal` is aborted when the chunk is evicted while
+   * downloading; the download must then stop and leave `chunk` alone, since the chunk object may
+   * already have been reused for another chunk.
    */
-  download(chunk: Chunk, cancellationToken: CancellationToken): Promise<void>;
+  download(chunk: Chunk, abortSignal: AbortSignal): Promise<void>;
 }
 
 function startChunkDownload(chunk: Chunk) {
-  const downloadCancellationToken = (chunk.downloadCancellationToken =
-    new CancellationTokenSource());
-  chunk.source!.download(chunk, downloadCancellationToken).then(
+  const abortController = (chunk.downloadAbortController =
+    new AbortController());
+  chunk.source!.download(chunk, abortController.signal).then(
     () => {
-      if (chunk.downloadCancellationToken === downloadCancellationToken) {
-        chunk.downloadCancellationToken = undefined;
+      if (chunk.downloadAbortController === abortController) {
+        chunk.downloadAbortController = undefined;
         chunk.downloadSucceeded();
       }
     },
     (error: any) => {
-      if (chunk.downloadCancellationToken === downloadCancellationToken) {
-        chunk.downloadCancellationToken = undefined;
+      if (chunk.downloadAbortController === abortController) {
+        chunk.downloadAbortController = undefined;
         chunk.downloadFailed(error);
         console.log(`Error retrieving chunk ${chunk}: ${error}`);
       }
@@ -311,10 +271,12 @@ function startChunkDownload(chunk: Chunk) {
   );
 }
 
+// Aborts the chunk's download.  Whatever the download still produces is ignored, since the chunk no
+// longer holds the same abort controller.
 function cancelChunkDownload(chunk: Chunk) {
-  const token = chunk.downloadCancellationToken!;
-  chunk.downloadCancellationToken = undefined;
-  token.cancel();
+  const abortController = chunk.downloadAbortController!;
+  chunk.downloadAbortController = undefined;
+  abortController.abort();
 }
 
 /**
@@ -322,18 +284,14 @@ function cancelChunkDownload(chunk: Chunk) {
  * tiers, and a linked list (most recently added first) for the RECENT tier.
  */
 class ChunkPriorityQueue {
-  /**
-   * Heap roots for VISIBLE and PREFETCH priority tiers.
-   */
+  // Heap root of the VISIBLE and PREFETCH tiers.
   private heapRoots: (Chunk | null)[] = [null, null];
 
-  /**
-   * Head node for RECENT linked list.
-   */
+  // Head of the RECENT list, which is not a chunk itself.
   private recentHead = new Chunk();
   constructor(
-    private heapOperations: PairingHeapOperations<Chunk>,
-    private linkedListOperations: LinkedListOperations<Chunk>,
+    private heapOperations: PairingHeap<Chunk>,
+    private linkedListOperations: LinkedList<Chunk>,
   ) {
     linkedListOperations.initializeHead(this.recentHead);
   }
@@ -351,65 +309,53 @@ class ChunkPriorityQueue {
     }
   }
 
-  /**
-   * Yields chunks from lowest to highest priority for eviction queues (ordered by `priorityLess`),
-   * and from highest to lowest priority for promotion queues.
-   */
-  *candidates(): Iterator<Chunk> {
-    if (this.heapOperations.compare === Chunk.priorityLess) {
-      // Start with least-recently used RECENT chunk.
-      const { linkedListOperations, recentHead } = this;
-      while (true) {
-        const chunk = linkedListOperations.back(recentHead);
-        if (chunk == null) {
-          break;
-        }
-        yield chunk;
+  // Yields the chunks of one heap, lowest priority first for an eviction queue (whose heap is
+  // ordered by `priorityLess`) and highest priority first for a promotion queue.
+  private *heapChunks(tier: ChunkPriorityTier) {
+    const { heapRoots } = this;
+    while (true) {
+      const root = heapRoots[tier];
+      if (root == null) {
+        break;
       }
-      const { heapRoots } = this;
-      for (
-        let tier = ChunkPriorityTier.LAST_ORDERED_TIER;
-        tier >= ChunkPriorityTier.FIRST_ORDERED_TIER;
-        --tier
-      ) {
-        while (true) {
-          const root = heapRoots[tier];
-          if (root == null) {
-            break;
-          }
-          yield root;
-        }
-      }
-    } else {
-      const heapRoots = this.heapRoots;
-      for (
-        let tier = ChunkPriorityTier.FIRST_ORDERED_TIER;
-        tier <= ChunkPriorityTier.LAST_ORDERED_TIER;
-        ++tier
-      ) {
-        while (true) {
-          const root = heapRoots[tier];
-          if (root == null) {
-            break;
-          }
-          yield root;
-        }
-      }
-      const { linkedListOperations, recentHead } = this;
-      while (true) {
-        const chunk = linkedListOperations.front(recentHead);
-        if (chunk == null) {
-          break;
-        }
-        yield chunk;
-      }
+      yield root;
     }
   }
 
   /**
-   * Deletes a chunk from this priority queue.
-   * @param chunk The chunk to delete from the priority queue.
+   * Yields the chunks to give up first: those no longer requested, least recently used first, then
+   * the prefetched ones and finally the visible ones, lowest priority first within each tier.
    */
+  *evictionCandidates(): Iterator<Chunk> {
+    const { linkedListOperations, recentHead } = this;
+    while (true) {
+      const chunk = linkedListOperations.back(recentHead);
+      if (chunk == null) {
+        break;
+      }
+      yield chunk;
+    }
+    yield* this.heapChunks(ChunkPriorityTier.PREFETCH);
+    yield* this.heapChunks(ChunkPriorityTier.VISIBLE);
+  }
+
+  /**
+   * Yields the chunks to move forward first: the visible ones, highest priority first, then the
+   * prefetched ones, and last those no longer requested, most recently used first.
+   */
+  *promotionCandidates(): Iterator<Chunk> {
+    yield* this.heapChunks(ChunkPriorityTier.VISIBLE);
+    yield* this.heapChunks(ChunkPriorityTier.PREFETCH);
+    const { linkedListOperations, recentHead } = this;
+    while (true) {
+      const chunk = linkedListOperations.front(recentHead);
+      if (chunk == null) {
+        break;
+      }
+      yield chunk;
+    }
+  }
+
   delete(chunk: Chunk) {
     const priorityTier = chunk.priorityTier;
     if (priorityTier === ChunkPriorityTier.RECENT) {
@@ -424,19 +370,24 @@ class ChunkPriorityQueue {
   }
 }
 
+// A chunk can be in two queues at once: queues made by `makeChunkPriorityQueue0` link it through its
+// `0` fields, and those made by `makeChunkPriorityQueue1` through its `1` fields.
 function makeChunkPriorityQueue0(compare: ComparisonFunction<Chunk>) {
-  return new ChunkPriorityQueue(new PairingHeap0(compare), LinkedList0);
+  return new ChunkPriorityQueue(
+    new PairingHeap(compare, "child0", "next0", "prev0"),
+    new LinkedList("next0", "prev0"),
+  );
 }
 
 function makeChunkPriorityQueue1(compare: ComparisonFunction<Chunk>) {
-  return new ChunkPriorityQueue(new PairingHeap1(compare), LinkedList1);
+  return new ChunkPriorityQueue(
+    new PairingHeap(compare, "child1", "next1", "prev1"),
+    new LinkedList("next1", "prev1"),
+  );
 }
 
-/**
- * Evicts candidates until `capacity` has room for one item of `size` bytes.  Returns false, without
- * evicting further, once the next candidate has a priority at least as high as the chunk to be
- * promoted.
- */
+// Evicts candidates until `capacity` has room for one item of `size` bytes.  Stops, and returns
+// false, once the next candidate is not worth less than the chunk waiting to be promoted.
 function tryToFreeCapacity(
   size: number,
   capacity: AvailableCapacity,
@@ -456,9 +407,6 @@ function tryToFreeCapacity(
       evictionTier < priorityTier ||
       (evictionTier === priorityTier && evictionCandidate.priority >= priority)
     ) {
-      // Lowest priority eviction candidate has priority >= highest
-      // priority promotion candidate.  No more promotions are
-      // possible.
       return false;
     }
     evict(evictionCandidate);
@@ -481,12 +429,10 @@ class AvailableCapacity extends RefCounted {
     this.registerDisposer(sizeLimit.changed.add(this.capacityChanged.dispatch));
   }
 
-  /**
-   * Adjust available capacity by the specified amounts.
-   */
+  // Records that `items` chunks of `size` bytes in total have been added, or removed if negative.
   adjust(items: number, size: number) {
-    this.currentItems -= items;
-    this.currentSize -= size;
+    this.currentItems += items;
+    this.currentSize += size;
   }
 
   get availableSize() {
@@ -503,38 +449,33 @@ export class ChunkQueueManager extends SharedObjectCounterpart {
   systemMemoryCapacity: AvailableCapacity;
   downloadCapacity: AvailableCapacity;
 
+  // Whether views request the chunks they are likely to need soon as PREFETCH.
   enablePrefetch: SharedWatchableValue<boolean>;
 
-  /**
-   * Contains all chunks in QUEUED state pending download.
-   */
+  // Dispatched after an update that copied chunks to the GPU or freed them from it.
+  gpuMemoryChanged = new NullarySignal();
+  // Incremented whenever a chunk is copied to the GPU or freed from it.
+  private gpuMemoryGeneration = 0;
+
+  // Chunks waiting to be downloaded (QUEUED).
   private queuedDownloadPromotionQueue = makeChunkPriorityQueue1(
     Chunk.priorityGreater,
   );
 
-  /**
-   * Contains all chunks in DOWNLOADING state.
-   */
+  // Chunks being downloaded, whose downloads can be given up.
   private downloadEvictionQueue = makeChunkPriorityQueue1(Chunk.priorityLess);
 
-  /**
-   * Contains all chunks that take up memory (DOWNLOADING, SYSTEM_MEMORY,
-   * GPU_MEMORY).
-   */
+  // Chunks that take up memory: DOWNLOADING, SYSTEM_MEMORY(_WORKER) or GPU_MEMORY.
   private systemMemoryEvictionQueue = makeChunkPriorityQueue0(
     Chunk.priorityLess,
   );
 
-  /**
-   * Contains all chunks in SYSTEM_MEMORY state not in RECENT priority tier.
-   */
+  // Requested chunks whose data is in memory, waiting to be copied to the GPU.
   private gpuMemoryPromotionQueue = makeChunkPriorityQueue1(
     Chunk.priorityGreater,
   );
 
-  /**
-   * Contains all chunks in GPU_MEMORY state.
-   */
+  // Chunks on the GPU, which can be freed from it again.
   private gpuMemoryEvictionQueue = makeChunkPriorityQueue1(Chunk.priorityLess);
 
   // Should be `number|null`, but marked `any` to work around @types/node being pulled in.
@@ -554,8 +495,8 @@ export class ChunkQueueManager extends SharedObjectCounterpart {
     };
     this.gpuMemoryCapacity = getCapacity(options.gpuMemoryCapacity);
     this.systemMemoryCapacity = getCapacity(options.systemMemoryCapacity);
-    this.enablePrefetch = rpc.get(options.enablePrefetch);
     this.downloadCapacity = getCapacity(options.downloadCapacity);
+    this.enablePrefetch = rpc.get(options.enablePrefetch);
   }
 
   scheduleUpdate() {
@@ -578,7 +519,7 @@ export class ChunkQueueManager extends SharedObjectCounterpart {
       case ChunkState.SYSTEM_MEMORY_WORKER:
       case ChunkState.SYSTEM_MEMORY:
         yield this.systemMemoryEvictionQueue;
-        if (chunk.requestedState === ChunkState.GPU_MEMORY) {
+        if (chunk.requested) {
           yield this.gpuMemoryPromotionQueue;
         }
         break;
@@ -591,7 +532,7 @@ export class ChunkQueueManager extends SharedObjectCounterpart {
   }
 
   adjustCapacitiesForChunk(chunk: Chunk, add: boolean) {
-    const factor = add ? -1 : 1;
+    const factor = add ? 1 : -1;
     switch (chunk.state) {
       case ChunkState.DOWNLOADING:
         this.downloadCapacity.adjust(factor, factor * chunk.systemMemoryBytes);
@@ -675,16 +616,12 @@ export class ChunkQueueManager extends SharedObjectCounterpart {
   // Copies the highest-priority chunks in system memory to the GPU, evicting lower-priority chunks
   // from the GPU as needed.
   private processGPUPromotions_() {
-    const queueManager = this;
-    function evictFromGPUMemory(chunk: Chunk) {
-      queueManager.freeChunkGPUMemory(chunk);
-      chunk.source!.chunkManager.queueManager.updateChunkState(
-        chunk,
-        ChunkState.SYSTEM_MEMORY,
-      );
-    }
-    const promotionCandidates = this.gpuMemoryPromotionQueue.candidates();
-    const evictionCandidates = this.gpuMemoryEvictionQueue.candidates();
+    const evictFromGPUMemory = (chunk: Chunk) => {
+      this.freeChunkGPUMemory(chunk);
+      this.updateChunkState(chunk, ChunkState.SYSTEM_MEMORY);
+    };
+    const promotionCandidates = this.gpuMemoryPromotionQueue.promotionCandidates();
+    const evictionCandidates = this.gpuMemoryEvictionQueue.evictionCandidates();
     const capacity = this.gpuMemoryCapacity;
     while (true) {
       const promotionCandidate = promotionCandidates.next().value;
@@ -711,6 +648,7 @@ export class ChunkQueueManager extends SharedObjectCounterpart {
   }
 
   freeChunkGPUMemory(chunk: Chunk) {
+    ++this.gpuMemoryGeneration;
     this.rpc!.invoke("Chunk.update", {
       id: chunk.key,
       state: ChunkState.SYSTEM_MEMORY,
@@ -731,6 +669,7 @@ export class ChunkQueueManager extends SharedObjectCounterpart {
   }
 
   copyChunkToGPU(chunk: Chunk) {
+    ++this.gpuMemoryGeneration;
     const rpc = this.rpc!;
     if (chunk.state === ChunkState.SYSTEM_MEMORY) {
       rpc.invoke("Chunk.update", {
@@ -748,20 +687,8 @@ export class ChunkQueueManager extends SharedObjectCounterpart {
     }
   }
 
-  moveChunkToFrontend(chunk: Chunk) {
-    const rpc = this.rpc!;
-    const msg: any = {};
-    const transfers: any[] = [];
-    chunk.serialize(msg, transfers);
-    msg.state = ChunkState.SYSTEM_MEMORY;
-    rpc.invoke("Chunk.update", msg, transfers);
-  }
-
-  /**
-   * Frees the chunk's data wherever it is (being downloaded, in the worker, on the main thread or on
-   * the GPU) and puts the chunk back in the download queue.  It is downloaded again if it is still
-   * requested, and deleted otherwise.
-   */
+  // Frees the chunk's data wherever it is and puts the chunk back in the download queue, where it
+  // is downloaded again if still requested, and deleted otherwise.
   evictChunk(chunk: Chunk) {
     switch (chunk.state) {
       case ChunkState.DOWNLOADING:
@@ -784,10 +711,11 @@ export class ChunkQueueManager extends SharedObjectCounterpart {
   private processQueuePromotions_() {
     const evict = (chunk: Chunk) => this.evictChunk(chunk);
 
-    const promotionCandidates = this.queuedDownloadPromotionQueue.candidates();
-    const evictionCandidates = this.downloadEvictionQueue.candidates();
+    const promotionCandidates =
+      this.queuedDownloadPromotionQueue.promotionCandidates();
+    const evictionCandidates = this.downloadEvictionQueue.evictionCandidates();
     const systemMemoryEvictionCandidates =
-      this.systemMemoryEvictionQueue.candidates();
+      this.systemMemoryEvictionQueue.evictionCandidates();
     while (true) {
       const promotionCandidateResult = promotionCandidates.next();
       if (promotionCandidateResult.done) {
@@ -826,13 +754,14 @@ export class ChunkQueueManager extends SharedObjectCounterpart {
     }
   }
 
-  process() {
-    if (!this.updatePending) {
-      return;
-    }
+  private process() {
     this.updatePending = null;
+    const gpuMemoryGeneration = this.gpuMemoryGeneration;
     this.processGPUPromotions_();
     this.processQueuePromotions_();
+    if (this.gpuMemoryGeneration !== gpuMemoryGeneration) {
+      this.gpuMemoryChanged.dispatch();
+    }
   }
 }
 
@@ -840,15 +769,10 @@ export class ChunkQueueManager extends SharedObjectCounterpart {
 export class ChunkManager extends SharedObjectCounterpart {
   queueManager: ChunkQueueManager;
 
-  /**
-   * Array of chunks within each existing priority tier.
-   */
-  private existingTierChunks: Chunk[][] = [];
+  // The chunks currently in the VISIBLE and PREFETCH tiers.
+  private existingTierChunks: Chunk[][] = [[], []];
 
-  /**
-   * Array of chunks whose new priorities have not yet been reflected in the
-   * queue states.
-   */
+  // The chunks requested in the round being computed, not yet reflected in the queues.
   private newTierChunks: Chunk[] = [];
 
   // Should be `number|null`, but marked `any` to workaround `@types/node` being pulled in.
@@ -858,22 +782,30 @@ export class ChunkManager extends SharedObjectCounterpart {
   // need.
   recomputeChunkPriorities = new NullarySignal();
 
+  // Pending priority update after chunks moved to or from the GPU, if any.
+  private gpuMemoryUpdateTimer: any = null;
+
   constructor(rpc: RPC, options: any) {
     super(rpc, options);
     this.queueManager = (<ChunkQueueManager>(
       rpc.get(options.chunkQueueManager)
     )).addRef();
 
-    for (
-      let tier = ChunkPriorityTier.FIRST_TIER;
-      tier <= ChunkPriorityTier.LAST_TIER;
-      ++tier
-    ) {
-      if (tier === ChunkPriorityTier.RECENT) {
-        continue;
-      }
-      this.existingTierChunks[tier] = [];
-    }
+    // While chunks keep arriving, priorities are also recomputed every
+    // `GPU_MEMORY_PRIORITY_UPDATE_INTERVAL_MS`, not only when the view changes.  Each update gives
+    // the views' velocity estimators a new sample, so once the view stops, the estimated velocity
+    // decays and the chunks prefetched for the earlier motion are no longer requested.
+    this.registerDisposer(
+      this.queueManager.gpuMemoryChanged.add(() => {
+        if (this.gpuMemoryUpdateTimer !== null) return;
+        this.gpuMemoryUpdateTimer = setTimeout(() => {
+          this.gpuMemoryUpdateTimer = null;
+          this.scheduleUpdateChunkPriorities();
+        }, GPU_MEMORY_PRIORITY_UPDATE_INTERVAL_MS);
+      }),
+    );
+    this.registerDisposer(() => clearTimeout(this.gpuMemoryUpdateTimer));
+
   }
 
   scheduleUpdateChunkPriorities() {
@@ -888,31 +820,19 @@ export class ChunkManager extends SharedObjectCounterpart {
   private recomputeChunkPriorities_() {
     this.updatePending = null;
     this.recomputeChunkPriorities.dispatch();
-    this.updateQueueState([
-      ChunkPriorityTier.VISIBLE,
-      ChunkPriorityTier.PREFETCH,
-    ]);
+    this.updateQueueState();
   }
 
-  /**
-   * @param chunk
-   * @param tier New priority tier.  Must not equal ChunkPriorityTier.RECENT.
-   * @param priority Priority within tier.
-   * @param requestedState Indicates requested chunk state.
-   */
-  requestChunk(
-    chunk: Chunk,
-    tier: ChunkPriorityTier,
-    priority: number,
-    requestedState: ChunkState = ChunkState.GPU_MEMORY,
-  ) {
+  // Requests `chunk` on the GPU for this round of priority updates, in `tier` (not RECENT, which
+  // means "no longer requested") with `priority` within it.
+  requestChunk(chunk: Chunk, tier: ChunkPriorityTier, priority: number) {
     if (Number.isNaN(priority)) {
       return;
     }
     if (tier === ChunkPriorityTier.RECENT) {
       throw new Error("Not going to request a chunk with the RECENT tier");
     }
-    chunk.newRequestedState = Math.min(chunk.newRequestedState, requestedState);
+    chunk.newRequested = true;
     if (chunk.newPriorityTier === ChunkPriorityTier.RECENT) {
       this.newTierChunks.push(chunk);
     }
@@ -926,16 +846,12 @@ export class ChunkManager extends SharedObjectCounterpart {
     }
   }
 
-  /**
-   * Update queue state to reflect updated contents of the specified priority tiers.  Existing
-   * chunks within those tiers not present in this.newTierChunks will be moved to the RECENT tier
-   * (and removed if in the QUEUED state).
-   */
-  updateQueueState(tiers: ChunkPriorityTier[]) {
+  // Updates the queues to the priorities just requested.  A chunk that is no longer requested moves
+  // to the RECENT tier, and is removed if it had not started downloading.
+  private updateQueueState() {
     const existingTierChunks = this.existingTierChunks;
     const queueManager = this.queueManager;
-    for (const tier of tiers) {
-      const chunks = existingTierChunks[tier];
+    for (const chunks of existingTierChunks) {
       for (const chunk of chunks) {
         if (chunk.newPriorityTier === ChunkPriorityTier.RECENT) {
           // Downgrade the priority of this chunk.
@@ -954,10 +870,8 @@ export class ChunkManager extends SharedObjectCounterpart {
   }
 }
 
-/**
- * Mixin for adding a `parameters` member to a ChunkSource, and for registering the shared object
- * type based on the `RPC_ID` member of the Parameters class.
- */
+// Adds a `parameters` member to a chunk source, and registers the shared object type under the
+// `RPC_ID` of the parameters class.
 export function WithParameters<
   Parameters,
   TBase extends { new (...args: any[]): SharedObject },
@@ -977,22 +891,11 @@ export function WithParameters<
   return C;
 }
 
-/**
- * Interface that represents shared objects that request chunks from a ChunkManager.
- */
-export interface ChunkRequester extends SharedObject {
-  chunkManager: ChunkManager;
-}
-
-/**
- * Mixin that adds a chunkManager property initialized from the RPC-supplied options.
- *
- * The resultant class implements `ChunkRequester`.
- */
+// Adds a `chunkManager` property, taken from the options, for shared objects that request chunks.
 export function withChunkManager<
   T extends { new (...args: any[]): SharedObject },
 >(Base: T) {
-  return class extends Base implements ChunkRequester {
+  return class extends Base {
     chunkManager: ChunkManager;
     constructor(...args: any[]) {
       super(...args);

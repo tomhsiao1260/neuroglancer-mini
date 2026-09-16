@@ -19,9 +19,6 @@ import {
 import { SharedWatchableValue } from "#src/worker/shared_watchable_value.js";
 import { WatchableValue } from "#src/state/trackable_value.js";
 import type { Borrowed } from "#src/util/disposable.js";
-import { stableStringify } from "#src/util/json.js";
-import { StringMemoize } from "#src/util/memoize.js";
-import { getObjectId } from "#src/util/object_id.js";
 import { NullarySignal } from "#src/util/signal.js";
 import type { GL } from "#src/webgl/context.js";
 import type { RPC } from "#src/worker/worker_rpc.js";
@@ -31,17 +28,14 @@ import {
   SharedObject,
 } from "#src/worker/worker_rpc.js";
 
-// Maximum time spent applying queued chunk updates before yielding to the next frame.
+// Time spent applying queued chunk updates before waiting `CHUNK_UPDATE_DELAY_MS` for the next
+// batch, unless a change of the view has set an earlier deadline (see `chunkUpdateDeadline`).
 const CHUNK_UPDATE_TIME_BUDGET_MS = 30;
 const CHUNK_UPDATE_DELAY_MS = 30;
 
 export class Chunk {
   state = ChunkState.SYSTEM_MEMORY;
   constructor(public source: ChunkSource) {}
-
-  get gl() {
-    return this.source.gl;
-  }
 
   copyToGPU(_gl: GL) {
     this.state = ChunkState.GPU_MEMORY;
@@ -74,8 +68,15 @@ export class ChunkQueueManager extends SharedObject {
   // Singly linked list (through `nextUpdate`) of `Chunk.update` messages not yet applied.
   pendingChunkUpdates: any = null;
   pendingChunkUpdatesTail: any = null;
-
-  enablePrefetch = { value: true, changed: new NullarySignal() };
+  /**
+   * If non-null, deadline in milliseconds since epoch after which chunk copies to the GPU may not
+   * start (until the next frame).  The viewer sets it shortly after each change of the view, so that
+   * uploads do not hold up the frame that shows the change, and clears it when a frame starts
+   * drawing.
+   */
+  chunkUpdateDeadline: number | null = null;
+  // Whether views also request the chunks they are likely to need soon (see `render/backend.ts`).
+  enablePrefetch = new WatchableValue(true);
 
   constructor(
     rpc: RPC,
@@ -110,15 +111,20 @@ export class ChunkQueueManager extends SharedObject {
   }
 
   scheduleChunkUpdate() {
-    setTimeout(() => this.processPendingChunkUpdates(), 0);
+    const deadline = this.chunkUpdateDeadline;
+    const delay =
+      deadline === null || Date.now() < deadline ? 0 : CHUNK_UPDATE_DELAY_MS;
+    setTimeout(() => this.processPendingChunkUpdates(), delay);
   }
 
   processPendingChunkUpdates() {
-    const deadline = Date.now() + CHUNK_UPDATE_TIME_BUDGET_MS;
+    const deadline =
+      this.chunkUpdateDeadline ?? Date.now() + CHUNK_UPDATE_TIME_BUDGET_MS;
     let visibleChunksChanged = false;
     while (true) {
       if (Date.now() > deadline) {
         // No time to perform chunk update now, we will wait some more.
+        this.chunkUpdateDeadline = null;
         setTimeout(
           () => this.processPendingChunkUpdates(),
           CHUNK_UPDATE_DELAY_MS,
@@ -154,7 +160,6 @@ export class ChunkQueueManager extends SharedObject {
     }
     const newState: number = update.state;
     if (newState === ChunkState.EXPIRED) {
-      // FIXME: maybe use freeList for chunks here
       source.deleteChunk(update.id);
     } else {
       let chunk: Chunk;
@@ -202,18 +207,10 @@ registerRPC("Chunk.update", function (x) {
   }
 });
 
-export type GettableChunkSource = SharedObject & { OPTIONS: object; key: any };
-
-export interface ChunkSourceConstructor<
-  T extends GettableChunkSource = GettableChunkSource,
-> {
-  new (...args: any[]): T;
-  encodeOptions(options: T["OPTIONS"]): any;
-}
-
 @registerSharedObjectOwner(CHUNK_MANAGER_RPC_ID)
 export class ChunkManager extends SharedObject {
-  memoize = new StringMemoize();
+  // Chunk sources by key, so that all views of the same data share one source and its chunks.
+  private chunkSources = new Map<string, ChunkSource>();
 
   get gl() {
     return this.chunkQueueManager.gl;
@@ -228,27 +225,24 @@ export class ChunkManager extends SharedObject {
   }
 
   /**
-   * Returns the chunk source for `options`, creating it (and its worker counterpart) the first time.
+   * Returns the chunk source with `key`.  The first time, it is created with `create` together with
+   * its worker counterpart; later calls add a reference to the same source.
    */
-  getChunkSource<T extends GettableChunkSource>(
-    constructorFunction: ChunkSourceConstructor<T>,
-    options: any,
-  ): T {
-    const keyObject = constructorFunction.encodeOptions(options);
-    keyObject.constructorId = getObjectId(constructorFunction);
-    const key = stableStringify(keyObject);
-    return this.memoize.get(key, () => {
-      const newSource = new constructorFunction(this, options);
-      newSource.initializeCounterpart(this.rpc!, {});
-      newSource.key = keyObject;
-      return newSource;
-    });
+  getChunkSource<T extends ChunkSource>(key: string, create: () => T): T {
+    let source = this.chunkSources.get(key) as T | undefined;
+    if (source === undefined) {
+      source = create();
+      source.initializeCounterpart(this.rpc!, {});
+      source.registerDisposer(() => this.chunkSources.delete(key));
+      this.chunkSources.set(key, source);
+    } else {
+      source.addRef();
+    }
+    return source;
   }
 }
 
-// eslint-disable-next-line @typescript-eslint/no-unsafe-declaration-merging
 export class ChunkSource extends SharedObject {
-  OPTIONS: object;
   chunks = new Map<string, Chunk>();
 
   constructor(
@@ -285,51 +279,33 @@ export class ChunkSource extends SharedObject {
     this.rpc!.invoke(CHUNK_RELOAD_RPC_ID, { source: this.rpcId, key });
   }
 
-  /**
-   * Default implementation for use with backendOnly chunk sources.
-   */
+  // Defined by subclasses: builds the main-thread chunk from a `Chunk.update` message.
   getChunk(_x: any): Chunk {
     throw new Error("Not implemented.");
   }
-
-  static encodeOptions(_options: object): { [key: string]: any } {
-    return {};
-  }
 }
 
-// eslint-disable-next-line @typescript-eslint/no-unsafe-declaration-merging
-export interface ChunkSource {
-  key: any;
-}
-
+/**
+ * Mixin that adds `parameters` (from the constructor options) to a chunk source, sends them to the
+ * worker counterpart, and registers the class under the parameters' `RPC_ID`.
+ */
 export function WithParameters<
   Parameters,
-  TBase extends ChunkSourceConstructor,
+  TBase extends { new (...args: any[]): ChunkSource },
 >(
   Base: TBase,
   parametersConstructor: ChunkSourceParametersConstructor<Parameters>,
 ) {
-  type WithParametersOptions = InstanceType<TBase>["OPTIONS"] & {
-    parameters: Parameters;
-  };
   @registerSharedObjectOwner(parametersConstructor.RPC_ID)
   class C extends Base {
-    OPTIONS: WithParametersOptions;
     parameters: Parameters;
     constructor(...args: any[]) {
       super(...args);
-      const options: WithParametersOptions = args[1];
-      this.parameters = options.parameters;
+      this.parameters = args[1].parameters;
     }
     initializeCounterpart(rpc: RPC, options: any) {
       options.parameters = this.parameters;
       super.initializeCounterpart(rpc, options);
-    }
-    static encodeOptions(options: WithParametersOptions) {
-      return Object.assign(
-        { parameters: options.parameters },
-        Base.encodeOptions(options),
-      );
     }
   }
   return C;

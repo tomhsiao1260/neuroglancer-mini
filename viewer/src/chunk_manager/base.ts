@@ -34,17 +34,9 @@ export enum ChunkState {
  * kept in least-recently-used order until evicted.
  */
 export enum ChunkPriorityTier {
-  FIRST_TIER = 0,
-  // eslint-disable-next-line @typescript-eslint/no-duplicate-enum-values
-  FIRST_ORDERED_TIER = 0,
-  // eslint-disable-next-line @typescript-eslint/no-duplicate-enum-values
   VISIBLE = 0,
   PREFETCH = 1,
-  // eslint-disable-next-line @typescript-eslint/no-duplicate-enum-values
-  LAST_ORDERED_TIER = 1,
   RECENT = 2,
-  // eslint-disable-next-line @typescript-eslint/no-duplicate-enum-values
-  LAST_TIER = 2,
 }
 
 export const CHUNK_QUEUE_MANAGER_RPC_ID = "ChunkQueueManager";

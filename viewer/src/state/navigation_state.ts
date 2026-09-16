@@ -1,29 +1,33 @@
 /** @license Copyright 2016 Google Inc. SPDX-License-Identifier: Apache-2.0 */
 
-import type {
-  CoordinateSpace,
-} from "#src/state/coordinate_transform.js";
-import {
-  clampAndRoundCoordinateToVoxelCenter,
-  getBoundingBoxCenter,
-} from "#src/state/coordinate_transform.js";
+/**
+ * @file Where a view looks: a position shared by all views, a zoom shared by all views, and the
+ * orientation of each view.
+ */
+
+import type { CoordinateSpace } from "#src/state/coordinate_transform.js";
+import { clampAndRoundToVoxelCenter } from "#src/state/coordinate_transform.js";
 import type { WatchableValueInterface } from "#src/state/trackable_value.js";
 import type { Owned } from "#src/util/disposable.js";
 import { RefCounted } from "#src/util/disposable.js";
+import type { quat } from "#src/util/geom.js";
 import { mat4, vec3 } from "#src/util/geom.js";
 import { NullarySignal } from "#src/util/signal.js";
 
 const tempVec3 = vec3.create();
 
+/**
+ * A position in the viewer's (z, y, x) voxel coordinates.  When the coordinate space becomes valid
+ * (the volume has loaded), the position moves to the center of the volume.
+ */
 export class Position extends RefCounted {
-  private coordinates_: Float32Array = new Float32Array(3);
+  readonly value = new Float32Array(3);
   changed = new NullarySignal();
 
   constructor(
     public coordinateSpace: WatchableValueInterface<CoordinateSpace>,
   ) {
     super();
-
     this.registerDisposer(
       coordinateSpace.changed.add(() => {
         this.handleCoordinateSpaceChanged();
@@ -35,60 +39,28 @@ export class Position extends RefCounted {
     return this.coordinateSpace.value.valid;
   }
 
-  /**
-   * Returns the position in voxels.
-   */
-  get value() {
-    return this.coordinates_;
-  }
-
   private handleCoordinateSpaceChanged() {
     const coordinateSpace = this.coordinateSpace.value;
     if (!coordinateSpace.valid) return;
     const { bounds } = coordinateSpace;
-    getBoundingBoxCenter(this.coordinates_, bounds);
+    const { lowerBounds, upperBounds } = bounds;
     for (let i = 0; i < 3; ++i) {
-        this.coordinates_[i] = Math.floor(this.coordinates_[i]) + 0.5;
-      // }
+      // The center of the volume, moved to the nearest voxel center, so that each view shows a
+      // single layer of voxels rather than the boundary between two.
+      this.value[i] = clampAndRoundToVoxelCenter(
+        bounds,
+        i,
+        (lowerBounds[i] + upperBounds[i]) / 2,
+      );
     }
     this.changed.dispatch();
   }
 }
 
-export interface DisplayDimensionRenderInfo {
-  /**
-   * Number of global dimensions.
-   */
-  globalRank: number;
-
-  /**
-   * Array of length `globalRank` specifying global dimension names.
-   */
-  globalDimensionNames: readonly string[];
-
-  /**
-   * Number of displayed dimensions.  Must be <= 3.
-   */
-  displayRank: number;
-
-  /**
-   * Array of length 3.  The first `displayRank` elements specify the indices of the the global
-   * dimensions that are displayed.  The remaining elements are `-1`.
-   */
-  displayDimensionIndices: Int32Array;
-}
-
-const displayInfo: DisplayDimensionRenderInfo = {
-  globalRank: 3,
-  displayRank: 3,
-  globalDimensionNames: ['z', 'y', 'x'],
-  displayDimensionIndices: new Int32Array([0, 1, 2]),
-}
-
-export class TrackableZoom extends RefCounted
-{
+// Size of a screen pixel, in voxels.
+export class TrackableZoom extends RefCounted {
   readonly changed = new NullarySignal();
-  private value_: number = Number.NaN;
+  private value_ = 1;
 
   get value() {
     return this.value_;
@@ -101,33 +73,24 @@ export class TrackableZoom extends RefCounted
     this.value_ = value;
     this.changed.dispatch();
   }
-
-  constructor() {
-    super();
-    this.value_ = 1;
-  }
 }
 
 export class NavigationState extends RefCounted {
   changed = new NullarySignal();
 
-  displayDimensionRenderInfo = displayInfo;
-
   constructor(
     public position: Owned<Position>,
-    public zoomFactor: any,
-    public orientation: any,
+    public zoomFactor: Owned<TrackableZoom>,
+    // Rotation from view axes to the viewer's (z, y, x) axes.
+    public orientation: quat,
   ) {
     super();
     this.registerDisposer(position);
     this.registerDisposer(zoomFactor);
     this.registerDisposer(position.changed.add(this.changed.dispatch));
-    this.registerDisposer(this.zoomFactor.changed.add(this.changed.dispatch));
+    this.registerDisposer(zoomFactor.changed.add(this.changed.dispatch));
   }
 
-  get coordinateSpace() {
-    return this.position.coordinateSpace;
-  }
   get valid() {
     return this.position.valid && !Number.isNaN(this.zoomFactor.value);
   }
@@ -136,70 +99,40 @@ export class NavigationState extends RefCounted {
     this.zoomFactor.value *= factor;
   }
 
+  // Sets `mat` to the transform from view coordinates (in screen pixels) to voxel coordinates.
   toMat4(mat: mat4) {
-    mat4.fromQuat(mat, this.orientation.orientation);
-    const { value: voxelCoordinates } = this.position;
-    const { displayDimensionIndices } = this.displayDimensionRenderInfo;
+    mat4.fromQuat(mat, this.orientation);
+    const { value } = this.position;
+    const scale = this.zoomFactor.value;
     for (let i = 0; i < 3; ++i) {
-      const dim = displayDimensionIndices[i];
-      const scale =  this.zoomFactor.value;
       mat[i] *= scale;
       mat[4 + i] *= scale;
       mat[8 + i] *= scale;
-      mat[12 + i] = voxelCoordinates[dim] || 0;
+      mat[12 + i] = value[i] || 0;
     }
   }
 
-  updateDisplayPosition(
-    fun: (pos: vec3) => boolean | void,
-    temp: vec3 = tempVec3,
-  ): boolean {
-    const {
-      coordinateSpace: { value: coordinateSpace },
-      value: voxelCoordinates,
-    } = this.position;
-    const displayRank = 3;
-    const displayDimensionIndices = new Int32Array([0, 1, 2]);
-    if (coordinateSpace === undefined) return false;
-    temp.fill(0);
-    for (let i = 0; i < displayRank; ++i) {
-      const dim = displayDimensionIndices[i];
-      temp[i] = voxelCoordinates[dim];
-    }
-    if (fun(temp) !== false) {
-      for (let i = 0; i < displayRank; ++i) {
-        const dim = displayDimensionIndices[i];
-        voxelCoordinates[dim] = temp[i];
-      }
-      this.position.changed.dispatch();
-      return true;
-    }
-    return false;
+  // Calls `update` with a copy of the position, which then becomes the new position.
+  updateDisplayPosition(update: (pos: vec3) => void) {
+    const { value } = this.position;
+    vec3.copy(tempVec3, value);
+    update(tempVec3);
+    value.set(tempVec3);
+    this.position.changed.dispatch();
   }
 
+  // Moves by `translation`, given along the view axes, keeping each changed coordinate on a voxel
+  // center inside the volume.
   translateVoxelsRelative(translation: vec3) {
     if (!this.valid) {
       return;
     }
-    const temp = vec3.transformQuat(
-      tempVec3,
-      translation,
-      this.orientation.orientation,
-    );
-    const { position } = this;
-    const { value: voxelCoordinates } = position;
-    const displayRank = 3;
-    const displayDimensionIndices = new Int32Array([0, 1, 2]);
-    const { bounds } = position.coordinateSpace.value;
-    for (let i = 0; i < displayRank; ++i) {
-      const dim = displayDimensionIndices[i];
-      const adjustment = temp[i];
-      if (adjustment === 0) continue;
-      voxelCoordinates[dim] = clampAndRoundCoordinateToVoxelCenter(
-        bounds,
-        dim,
-        voxelCoordinates[dim] + adjustment,
-      );
+    const delta = vec3.transformQuat(tempVec3, translation, this.orientation);
+    const { value } = this.position;
+    const { bounds } = this.position.coordinateSpace.value;
+    for (let i = 0; i < 3; ++i) {
+      if (delta[i] === 0) continue;
+      value[i] = clampAndRoundToVoxelCenter(bounds, i, value[i] + delta[i]);
     }
     this.position.changed.dispatch();
   }

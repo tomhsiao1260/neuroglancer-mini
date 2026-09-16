@@ -3,10 +3,9 @@
 /**
  * @file How volume chunks are stored on the GPU and read back in the fragment shader.
  *
- * Each chunk is uploaded as one texture with one texel per voxel: a 3-D texture if the chunk has at
- * least three dimensions of size > 1, otherwise a 2-D texture.  `TextureLayout` gives the texel
- * offset of each chunk dimension, and the shader turns a voxel position into a texel position with
- * it.
+ * Each chunk is uploaded as one 3-D texture with one texel per voxel.  `TextureLayout` gives the
+ * texel offset of each chunk dimension, and the shader turns a voxel position into a texel position
+ * with it.
  */
 
 import type { VolumeChunk } from "#src/render/frontend.js";
@@ -15,14 +14,7 @@ import { DataType } from "#src/util/data_type.js";
 import { RefCounted } from "#src/util/disposable.js";
 import type { GL } from "#src/webgl/context.js";
 import type { ShaderBuilder, ShaderProgram } from "#src/webgl/shader.js";
-import {
-  dataTypeShaderDefinition,
-  getShaderType,
-} from "#src/webgl/shader_lib.js";
-import {
-  setRawTexture3DParameters,
-  setRawTextureParameters,
-} from "#src/webgl/texture.js";
+import { setRawTexture3DParameters } from "#src/webgl/texture.js";
 
 const WebGL = WebGL2RenderingContext;
 
@@ -31,11 +23,10 @@ interface TextureFormat {
   format: number;
   texelType: number;
   arrayConstructor: TypedArrayConstructor;
-  // Prefix of the sampler type: `usampler3D`, `isampler3D` or `sampler3D`.
-  samplerPrefix: "" | "i" | "u";
+  // Prefix of the sampler type: `usampler3D` or `sampler3D`.
+  samplerPrefix: "" | "u";
 }
 
-// A 64-bit value is stored as two 32-bit channels (low, high).
 const textureFormats: Record<DataType, TextureFormat> = {
   [DataType.UINT8]: {
     internalFormat: WebGL.R8UI,
@@ -44,46 +35,11 @@ const textureFormats: Record<DataType, TextureFormat> = {
     arrayConstructor: Uint8Array,
     samplerPrefix: "u",
   },
-  [DataType.INT8]: {
-    internalFormat: WebGL.R8I,
-    format: WebGL.RED_INTEGER,
-    texelType: WebGL.BYTE,
-    arrayConstructor: Int8Array,
-    samplerPrefix: "i",
-  },
   [DataType.UINT16]: {
     internalFormat: WebGL.R16UI,
     format: WebGL.RED_INTEGER,
     texelType: WebGL.UNSIGNED_SHORT,
     arrayConstructor: Uint16Array,
-    samplerPrefix: "u",
-  },
-  [DataType.INT16]: {
-    internalFormat: WebGL.R16I,
-    format: WebGL.RED_INTEGER,
-    texelType: WebGL.SHORT,
-    arrayConstructor: Int16Array,
-    samplerPrefix: "i",
-  },
-  [DataType.UINT32]: {
-    internalFormat: WebGL.R32UI,
-    format: WebGL.RED_INTEGER,
-    texelType: WebGL.UNSIGNED_INT,
-    arrayConstructor: Uint32Array,
-    samplerPrefix: "u",
-  },
-  [DataType.INT32]: {
-    internalFormat: WebGL.R32I,
-    format: WebGL.RED_INTEGER,
-    texelType: WebGL.INT,
-    arrayConstructor: Int32Array,
-    samplerPrefix: "i",
-  },
-  [DataType.UINT64]: {
-    internalFormat: WebGL.RG32UI,
-    format: WebGL.RG_INTEGER,
-    texelType: WebGL.UNSIGNED_INT,
-    arrayConstructor: Uint32Array,
     samplerPrefix: "u",
   },
   [DataType.FLOAT32]: {
@@ -97,24 +53,22 @@ const textureFormats: Record<DataType, TextureFormat> = {
 
 /**
  * Where the voxels of a chunk go in its texture.  Moving one voxel along chunk dimension `d` moves
- * `strides[d * textureDims + t]` texels along texture dimension `t`.  Chunk dimensions of size 1
- * take no texture dimension; dimensions are combined into one texture dimension when that stays
- * within the maximum texture size.
+ * `strides[d * 3 + t]` texels along texture dimension `t`.  Chunk dimensions of size 1 take no
+ * texture dimension; dimensions are combined into one texture dimension when that stays within the
+ * maximum texture size, which for the 128^3 chunks of a Vesuvius volume it does not.
  */
 export class TextureLayout {
   strides: Uint32Array;
   textureShape: Uint32Array;
 
-  constructor(gl: GL, chunkDataSize: Uint32Array, textureDims: number) {
+  constructor(gl: GL, chunkDataSize: Uint32Array) {
     const rank = chunkDataSize.length;
     let numRemainingDims = 0;
     for (const size of chunkDataSize) {
       if (size !== 1) ++numRemainingDims;
     }
-    const strides = (this.strides = new Uint32Array(rank * textureDims));
-    const textureShape = (this.textureShape = new Uint32Array(textureDims));
-    const maxTextureSize =
-      textureDims === 3 ? gl.max3dTextureSize : gl.maxTextureSize;
+    const strides = (this.strides = new Uint32Array(rank * 3));
+    const textureShape = (this.textureShape = new Uint32Array(3));
     let textureDim = 0;
     let textureDimSize = 1;
     textureShape.fill(1);
@@ -124,8 +78,8 @@ export class TextureLayout {
       const newSize = size * textureDimSize;
       let stride: number;
       if (
-        newSize > maxTextureSize ||
-        (textureDimSize !== 1 && textureDim + numRemainingDims < textureDims)
+        newSize > gl.max3dTextureSize ||
+        (textureDimSize !== 1 && textureDim + numRemainingDims < 3)
       ) {
         ++textureDim;
         textureDimSize = size;
@@ -134,7 +88,7 @@ export class TextureLayout {
         stride = textureDimSize;
         textureDimSize = newSize;
       }
-      strides[textureDims * chunkDim + textureDim] = stride;
+      strides[3 * chunkDim + textureDim] = stride;
       textureShape[textureDim] = textureDimSize;
     }
   }
@@ -144,29 +98,28 @@ const tempStrides = new Int32Array(4 * 3);
 
 /**
  * Uploads chunk data of one data type to textures, and defines and feeds the shader code that reads
- * them.  Shared by all chunk sources with the same data type and texture dimensionality.
+ * them.  Shared by all chunk sources with the same data type.
  */
 export class ChunkFormat extends RefCounted {
   textureFormat: TextureFormat;
-  textureTarget: number;
   // Layout whose strides are currently set in the shader.
   private boundTextureLayout: TextureLayout | null = null;
 
-  static get(gl: GL, dataType: DataType, textureDims: number) {
+  static get(gl: GL, dataType: DataType) {
     return gl.memoize.get(
-      `sliceview.ChunkFormat:${dataType}:${textureDims}`,
-      () => new ChunkFormat(dataType, textureDims),
+      `sliceview.ChunkFormat:${dataType}`,
+      () => new ChunkFormat(dataType),
     );
   }
 
-  constructor(
-    public dataType: DataType,
-    public textureDims: number,
-  ) {
+  constructor(public dataType: DataType) {
     super();
     this.textureFormat = textureFormats[dataType];
-    this.textureTarget =
-      textureDims === 3 ? WebGL.TEXTURE_3D : WebGL.TEXTURE_2D;
+  }
+
+  // The GLSL type of a voxel value: an unsigned integer, or a float for float32 data.
+  get shaderType() {
+    return this.dataType === DataType.FLOAT32 ? "highp float" : "highp uint";
   }
 
   /**
@@ -174,46 +127,25 @@ export class ChunkFormat extends RefCounted {
    * with `bindChunk`.  The texture is read from texture unit 0.
    */
   defineShader(builder: ShaderBuilder) {
-    const { dataType, textureDims } = this;
-    const shaderType = getShaderType(dataType);
-    const offsetType = `ivec${textureDims}`;
     builder.addUniform(
-      `highp ${this.textureFormat.samplerPrefix}sampler${textureDims}D`,
+      `highp ${this.textureFormat.samplerPrefix}sampler3D`,
       "uVolumeChunkSampler",
     );
     builder.addInitializer((shader) => {
       shader.gl.uniform1i(shader.uniform("uVolumeChunkSampler"), 0);
     });
     // Texel offset of voxel (0, 0, 0), then the texel offset per voxel along x, y and z.
-    builder.addUniform(`highp ${offsetType}`, "uVolumeChunkStrides", 4);
-    let readValue: string;
-    switch (dataType) {
-      case DataType.FLOAT32:
-        readValue = "return texelFetch(uVolumeChunkSampler, offset, 0).r;";
-        break;
-      case DataType.UINT64:
-        readValue = `uint64_t result;
-  result.value = texelFetch(uVolumeChunkSampler, offset, 0).rg;
-  return result;`;
-        break;
-      default:
-        readValue = `${shaderType} result;
-  result.value = texelFetch(uVolumeChunkSampler, offset, 0).r;
-  return result;`;
-    }
-    builder.addFragmentCode([
-      dataTypeShaderDefinition[dataType],
-      `
-${shaderType} getDataValue() {
+    builder.addUniform("highp ivec3", "uVolumeChunkStrides", 4);
+    builder.addFragmentCode(`
+${this.shaderType} getDataValue() {
   highp ivec3 p = ivec3(max(vec3(0.0, 0.0, 0.0), min(floor(vChunkPosition), uChunkDataSize - 1.0)));
-  highp ${offsetType} offset = uVolumeChunkStrides[0]
+  highp ivec3 offset = uVolumeChunkStrides[0]
                      + p.x * uVolumeChunkStrides[1]
                      + p.y * uVolumeChunkStrides[2]
                      + p.z * uVolumeChunkStrides[3];
-  ${readValue}
+  return texelFetch(uVolumeChunkSampler, offset, 0).r;
 }
-`,
-    ]);
+`);
   }
 
   // Called with the shader bound, before the chunks of this format are drawn.
@@ -223,7 +155,7 @@ ${shaderType} getDataValue() {
   }
 
   endDrawing(gl: GL) {
-    gl.bindTexture(this.textureTarget, null);
+    gl.bindTexture(WebGL.TEXTURE_3D, null);
     this.boundTextureLayout = null;
   }
 
@@ -232,61 +164,35 @@ ${shaderType} getDataValue() {
     gl: GL,
     shader: ShaderProgram,
     chunk: VolumeChunk,
-    fixedChunkPosition: Uint32Array,
-    chunkDisplaySubspaceDimensions: readonly number[],
     newSource: boolean,
   ) {
     const textureLayout = chunk.textureLayout!;
     if (this.boundTextureLayout !== textureLayout || newSource) {
       this.boundTextureLayout = textureLayout;
-      this.setupTextureLayout(
-        gl,
-        shader,
-        textureLayout,
-        fixedChunkPosition,
-        chunkDisplaySubspaceDimensions,
-      );
+      this.setupTextureLayout(gl, shader, textureLayout);
     }
-    gl.bindTexture(this.textureTarget, chunk.texture);
+    gl.bindTexture(WebGL.TEXTURE_3D, chunk.texture);
   }
 
   private setupTextureLayout(
     gl: GL,
     shader: ShaderProgram,
     textureLayout: TextureLayout,
-    fixedChunkPosition: Uint32Array,
-    chunkDisplaySubspaceDimensions: readonly number[],
   ) {
     const stridesUniform = tempStrides;
     const { strides } = textureLayout;
-    const rank = fixedChunkPosition.length;
-    const { textureDims } = this;
-    for (let i = 0; i < textureDims; ++i) {
-      let sum = 0;
-      for (let chunkDim = 0; chunkDim < rank; ++chunkDim) {
-        sum +=
-          fixedChunkPosition[chunkDim] * strides[chunkDim * textureDims + i];
-      }
-      stridesUniform[i] = sum;
-    }
+    // Voxel (0, 0, 0) is at texel 0.
+    stridesUniform.fill(0, 0, 3);
+    // Texel offset per voxel along x, y and z.
     for (let i = 0; i < 3; ++i) {
-      const chunkDim = chunkDisplaySubspaceDimensions[i];
-      if (chunkDim >= rank) continue;
-      for (let j = 0; j < textureDims; ++j) {
-        stridesUniform[(i + 1) * textureDims + j] =
-          strides[chunkDim * textureDims + j];
+      for (let j = 0; j < 3; ++j) {
+        stridesUniform[(i + 1) * 3 + j] = strides[i * 3 + j];
       }
     }
-    const location = shader.uniform("uVolumeChunkStrides");
-    const length = 4 * textureDims;
-    if (textureDims === 3) {
-      gl.uniform3iv(location, stridesUniform, 0, length);
-    } else {
-      gl.uniform2iv(location, stridesUniform, 0, length);
-    }
+    gl.uniform3iv(shader.uniform("uVolumeChunkStrides"), stridesUniform, 0, 12);
   }
 
-  // Uploads `data` to the texture currently bound to `textureTarget`.
+  // Uploads `data` to the texture currently bound to `TEXTURE_3D`.
   setTextureData(gl: GL, textureLayout: TextureLayout, data: TypedArray) {
     const { internalFormat, format, texelType, arrayConstructor } =
       this.textureFormat;
@@ -299,34 +205,19 @@ ${shaderType} getDataValue() {
     }
     gl.pixelStorei(WebGL.UNPACK_ALIGNMENT, 1);
     const { textureShape } = textureLayout;
-    if (this.textureDims === 3) {
-      setRawTexture3DParameters(gl);
-      gl.texImage3D(
-        WebGL.TEXTURE_3D,
-        /*level=*/ 0,
-        internalFormat,
-        textureShape[0],
-        textureShape[1],
-        textureShape[2],
-        /*border=*/ 0,
-        format,
-        texelType,
-        data,
-      );
-    } else {
-      setRawTextureParameters(gl);
-      gl.texImage2D(
-        WebGL.TEXTURE_2D,
-        /*level=*/ 0,
-        internalFormat,
-        textureShape[0],
-        textureShape[1],
-        /*border=*/ 0,
-        format,
-        texelType,
-        data,
-      );
-    }
+    setRawTexture3DParameters(gl);
+    gl.texImage3D(
+      WebGL.TEXTURE_3D,
+      /*level=*/ 0,
+      internalFormat,
+      textureShape[0],
+      textureShape[1],
+      textureShape[2],
+      /*border=*/ 0,
+      format,
+      texelType,
+      data,
+    );
   }
 }
 
@@ -340,29 +231,26 @@ export class FillValueTexture extends RefCounted {
 
   constructor(gl: GL, chunkFormat: ChunkFormat, rank: number) {
     super();
-    const { dataType, textureDims, textureTarget, textureFormat } =
-      chunkFormat;
     const chunkSizeInVoxels = new Uint32Array(rank);
     chunkSizeInVoxels.fill(1);
     const textureLayout = (this.textureLayout = new TextureLayout(
       gl,
       chunkSizeInVoxels,
-      textureDims,
     ));
     textureLayout.strides.fill(0);
     const texture = (this.texture = gl.createTexture());
-    gl.bindTexture(textureTarget, texture);
+    gl.bindTexture(WebGL.TEXTURE_3D, texture);
     chunkFormat.setTextureData(
       gl,
       textureLayout,
-      new textureFormat.arrayConstructor(dataType === DataType.UINT64 ? 2 : 1),
+      new chunkFormat.textureFormat.arrayConstructor(1),
     );
-    gl.bindTexture(textureTarget, null);
+    gl.bindTexture(WebGL.TEXTURE_3D, null);
   }
 
   static get(gl: GL, chunkFormat: ChunkFormat, rank: number) {
     return gl.memoize.get(
-      `sliceview.FillValueTexture:${rank}:${chunkFormat.dataType}:${chunkFormat.textureDims}`,
+      `sliceview.FillValueTexture:${rank}:${chunkFormat.dataType}`,
       () => new FillValueTexture(gl, chunkFormat, rank),
     );
   }

@@ -1,19 +1,23 @@
 /** @license Copyright 2023 Google Inc. SPDX-License-Identifier: Apache-2.0 */
 
-import type { DataType } from "#src/util/data_type.js";
-import type { Endianness } from "#src/util/endian.js";
+import { DataType } from "#src/util/data_type.js";
 import {
   parseArray,
   parseFixedLengthArray,
-  verifyConstant,
   verifyObject,
   verifyObjectProperty,
   verifyOptionalObjectProperty,
   verifyString,
 } from "#src/util/json.js";
-import { parseNumpyDtype } from "#src/util/numpy_dtype.js";
 
 export type DimensionSeparator = "/" | ".";
+
+// Supported numpy dtypes.  Values are little-endian (`<`); `|` means byte order does not apply.
+const NUMPY_DATA_TYPES = new Map<string, DataType>([
+  ["|u1", DataType.UINT8],
+  ["<u2", DataType.UINT16],
+  ["<f4", DataType.FLOAT32],
+]);
 
 /**
  * The parts of a zarr v2 `.zarray` file needed to read and decode chunks.
@@ -25,7 +29,6 @@ export interface ArrayMetadata {
   // Chunk shape in voxels, in (z, y, x) order.
   chunkShape: number[];
   dataType: DataType;
-  endianness: Endianness;
   // Compression of each chunk file; `null` means chunks are stored uncompressed.
   compressor: "blosc" | null;
   // Separator between the chunk indices of a chunk key, e.g. `52/24/18`.
@@ -67,7 +70,9 @@ export function parseV2Metadata(obj: unknown): ArrayMetadata {
   try {
     verifyObject(obj);
     verifyObjectProperty(obj, "zarr_format", (value) => {
-      verifyConstant(value, 2);
+      if (value !== 2) {
+        throw new Error(`Expected 2, but received: ${JSON.stringify(value)}`);
+      }
     });
     const shape = verifyObjectProperty(obj, "shape", parseShape);
     const rank = shape.length;
@@ -88,11 +93,17 @@ export function parseV2Metadata(obj: unknown): ArrayMetadata {
       parseDimensionSeparator,
       ".",
     );
-    const { dataType, endianness } = verifyObjectProperty(
-      obj,
-      "dtype",
-      (dtype) => parseNumpyDtype(verifyString(dtype)),
-    );
+    const dataType = verifyObjectProperty(obj, "dtype", (dtype) => {
+      const dataType = NUMPY_DATA_TYPES.get(verifyString(dtype));
+      if (dataType === undefined) {
+        throw new Error(
+          `Unsupported data type: ${JSON.stringify(dtype)} (supported: ${[
+            ...NUMPY_DATA_TYPES.keys(),
+          ].join(", ")})`,
+        );
+      }
+      return dataType;
+    });
     const compressor = verifyObjectProperty(obj, "compressor", (value) => {
       if (value === null) return null;
       verifyObject(value);
@@ -107,7 +118,6 @@ export function parseV2Metadata(obj: unknown): ArrayMetadata {
       shape,
       chunkShape,
       dataType,
-      endianness,
       compressor,
       dimensionSeparator,
     };

@@ -9,19 +9,14 @@
 import { ChunkState } from "#src/chunk_manager/base.js";
 import type { ChunkManager } from "#src/chunk_manager/frontend.js";
 import type {
-  ChunkLayout,
-  SliceViewProjectionParameters,
+  ProjectionParameters,
   TransformedSource,
 } from "#src/render/base.js";
-import {
-  filterVisibleSources,
-  SLICEVIEW_RENDERLAYER_RPC_ID,
-} from "#src/render/base.js";
+import { SLICEVIEW_RENDERLAYER_RPC_ID } from "#src/render/base.js";
 import type { ChunkFormat } from "#src/render/chunk_format.js";
 import type {
   MultiscaleVolumeChunkSource,
   SliceView,
-  VolumeChunkSource,
 } from "#src/render/frontend.js";
 import type { WatchableValueInterface } from "#src/state/trackable_value.js";
 import { DataType } from "#src/util/data_type.js";
@@ -34,10 +29,6 @@ import {
 import type { GL } from "#src/webgl/context.js";
 import type { ShaderProgram } from "#src/webgl/shader.js";
 import { ShaderBuilder } from "#src/webgl/shader.js";
-import {
-  dataTypeShaderDefinition,
-  getShaderType,
-} from "#src/webgl/shader_lib.js";
 import { defineVertexId, VertexIdHelper } from "#src/webgl/vertex_id.js";
 import { SharedWatchableValue } from "#src/worker/shared_watchable_value.js";
 import type { RpcId } from "#src/worker/worker_rpc.js";
@@ -59,17 +50,10 @@ import { SharedObject } from "#src/worker/worker_rpc.js";
 const tempVec3 = vec3.create();
 const tempVec3b = vec3.create();
 
-/**
- * Amount by which a computed intersection point may lie outside the [0, 1] range and still be
- * considered valid.  This needs to be non-zero in order to avoid vertex placement artifacts.
- */
+// How far outside a box edge an intersection may lie and still count; non-zero to avoid artifacts.
 const LAMBDA_EPSILON = 1e-3;
 
-/**
- * If the absolute value of the dot product of a cube edge direction and the viewport plane normal
- * is less than this value, intersections along that cube edge will be exluded.  This needs to be
- * non-zero in order to avoid vertex placement artifacts.
- */
+// Box edges this close to parallel with the plane are skipped; non-zero to avoid artifacts.
 const ORTHOGONAL_EPSILON = 1e-3;
 
 // Positions of the 8 box corners; corner `i` has coordinate `(i >> axis) & 1` along each axis.
@@ -84,10 +68,7 @@ const vertexBasePositions = new Float32Array([
   1, 1, 1,
 ]);
 
-/**
- * For each front vertex (8), for each polygon vertex (6), 4 candidate edges given as pairs of corner
- * indices: 8 * 6 * 4 * 2 entries.
- */
+// For each front vertex (8) and polygon vertex (6), the 4 candidate edges as corner index pairs.
 const boundingBoxCrossSectionVertexIndices = (() => {
   // The paper numbers the corners differently: its corners 3 and 5 are our corners 4 and 3.
   const vertexUncorrectedToCorrected = [0, 1, 2, 4, 5, 3, 6, 7];
@@ -220,19 +201,14 @@ function setBoundingBoxCrossSectionShaderViewportPlane(
 // ---------------------------------------------------------------------------------------------------
 
 /**
- * Extra amount by which the chunk position computed in the vertex shader is shifted in the
- * direction of the component-wise absolute value of the plane normal.  In Neuroglancer, a
- * cross-section plane exactly on the boundary between two voxels is a common occurrence and is
- * intended to result in the display of the "next" (i.e. higher coordinate) plane rather than the
- * "previous" (lower coordinate) plane.  However, due to various sources of floating point
- * inaccuracy (in particular, shader code which has relaxed rules), values exactly on the boundary
- * between voxels may be slightly shifted in either direction.  To ensure that this doesn't result
- * in the display of the wrong data (i.e. the previous rather than next plane), we always shift
- * toward the "next" plane by this small amount.
+ * A plane exactly on the boundary between two voxels is meant to show the one at higher coordinates,
+ * but the shader's arithmetic may land on either side of the boundary.  The chunk position is
+ * therefore nudged along the plane normal by this much, so that it always lands on that voxel.
  */
 const CHUNK_POSITION_EPSILON = 1e-3;
 
 const tempMat4 = mat4.create();
+const tempChunkDataSize = new Float32Array(3);
 
 function defineVolumeShader(builder: ShaderBuilder) {
   defineVertexId(builder);
@@ -277,8 +253,8 @@ function beginSource(
   sliceView: SliceView,
   dataToDeviceMatrix: mat4,
   tsource: TransformedSource,
-  chunkLayout: ChunkLayout,
 ) {
+  const { chunkLayout } = tsource;
   const projectionParameters = sliceView.projectionParameters.value;
   const { centerDataPosition } = projectionParameters;
 
@@ -297,148 +273,37 @@ function beginSource(
     mat4.multiply(tempMat4, dataToDeviceMatrix, chunkLayout.transform),
   );
 
-  gl.uniform3fv(
-    shader.uniform("uLowerClipBound"),
-    tsource.lowerClipDisplayBound,
-  );
-  gl.uniform3fv(
-    shader.uniform("uUpperClipBound"),
-    tsource.upperClipDisplayBound,
-  );
+  // Every chunk of a scale has the same size, since zarr pads the chunks at the upper edge of the
+  // volume.  The volume may therefore end inside its last chunk along a dimension; the shader clips
+  // the polygon to these bounds so that the padding is not drawn.
+  const { chunkDataSize, lowerVoxelBound, upperVoxelBound } = tsource.source.spec;
+  tempChunkDataSize.set(chunkDataSize);
+  gl.uniform3fv(shader.uniform("uChunkDataSize"), tempChunkDataSize);
+  gl.uniform3fv(shader.uniform("uLowerClipBound"), lowerVoxelBound);
+  gl.uniform3fv(shader.uniform("uUpperClipBound"), upperVoxelBound);
 }
 
 // ---------------------------------------------------------------------------------------------------
 // Gray level
 // ---------------------------------------------------------------------------------------------------
 
-// Full range of each data type except UINT64, whose range is handled in `setNormalizedUniforms`.
-const dataTypeRange: { [dataType: number]: [number, number] } = {
-  [DataType.UINT8]: [0, 0xff],
-  [DataType.INT8]: [-0x80, 0x7f],
-  [DataType.UINT16]: [0, 0xffff],
-  [DataType.INT16]: [-0x8000, 0x7fff],
-  [DataType.UINT32]: [0, 0xffffffff],
-  [DataType.INT32]: [-0x80000000, 0x7fffffff],
-  [DataType.FLOAT32]: [0, 1],
-};
-
-const glsl_uint64Arithmetic = `
-bool compareLessThan(uint64_t a, uint64_t b) {
-  return (a.value[1] < b.value[1])||
-         (a.value[1] == b.value[1] && a.value[0] < b.value[0]);
-}
-uint64_t subtract(uint64_t a, uint64_t b) {
-  if (a.value[0] < b.value[0]) {
-    --a.value[1];
-  }
-  a.value -= b.value;
-  return a;
-}
-uint64_t shiftRight(uint64_t a, int shift) {
-  if (shift >= 32) {
-    return uint64_t(uvec2(a.value[1] >> (shift - 32), 0u));
-  } else if (shift == 0) {
-    return a;
-  } else {
-    return uint64_t(uvec2((a.value[0] >> shift) | (a.value[1] << (32 - shift)), a.value[1] >> shift));
-  }
+// Returns the code of `float normalized(value)`, which maps a voxel value onto [0, 1]: from the full
+// range of the data type for the integer types, and from [0, 1] itself for float32.
+function defineNormalized(chunkFormat: ChunkFormat) {
+  const { dataType } = chunkFormat;
+  const scale =
+    dataType === DataType.UINT8
+      ? 1 / 0xff
+      : dataType === DataType.UINT16
+        ? 1 / 0xffff
+        : 1;
+  // GLSL has no implicit conversion, so the factor needs a decimal point.
+  const literal = Number.isInteger(scale) ? `${scale}.0` : `${scale}`;
+  return `
+float normalized(${chunkFormat.shaderType} value) {
+  return clamp(float(value) * ${literal}, 0.0, 1.0);
 }
 `;
-
-/**
- * Returns the code of `float normalized(value)`, which maps a data value from the range of its
- * data type onto [0, 1].  8- and 16-bit integers are exact as floats.  For 32- and 64-bit integers
- * the offset from the lower bound is shifted right to 24 bits before it is converted to float.
- */
-function defineNormalized(builder: ShaderBuilder, dataType: DataType) {
-  const shaderType = getShaderType(dataType);
-  let code: string;
-  switch (dataType) {
-    case DataType.UINT32:
-    case DataType.INT32: {
-      const scalarType = dataType === DataType.INT32 ? "int" : "uint";
-      // [lower bound, shift]
-      builder.addUniform(`${scalarType[0]}vec2`, "uLerpBounds");
-      builder.addUniform("float", "uLerpScalar");
-      code = `
-float normalized(${shaderType} inputValue) {
-  ${scalarType} v = toRaw(inputValue);
-  ${scalarType} offset = uLerpBounds[0];
-  float multiplier = uLerpScalar;
-  uint x;
-  if (v >= offset) {
-    x = uint(v - offset);
-  } else {
-    x = uint(offset - v);
-    multiplier = -multiplier;
-  }
-  x >>= int(uLerpBounds[1]);
-  return clamp(float(x) * multiplier, 0.0, 1.0);
-}
-`;
-      break;
-    }
-    case DataType.UINT64:
-      // [lower bound low word, lower bound high word, shift]
-      builder.addUniform("uvec3", "uLerpBounds");
-      builder.addUniform("float", "uLerpScalar");
-      code = `${glsl_uint64Arithmetic}
-float normalized(uint64_t inputValue) {
-  uint64_t offset = uint64_t(uLerpBounds.xy);
-  float multiplier = uLerpScalar;
-  if (compareLessThan(inputValue, offset)) {
-    inputValue = subtract(offset, inputValue);
-    multiplier = -multiplier;
-  } else {
-    inputValue = subtract(inputValue, offset);
-  }
-  uint shifted = shiftRight(inputValue, int(uLerpBounds[2])).value[0];
-  return clamp(float(shifted) * multiplier, 0.0, 1.0);
-}
-`;
-      break;
-    default:
-      // [lower bound, 1 / (upper bound - lower bound)]
-      builder.addUniform("vec2", "uLerpParams");
-      code = `
-float normalized(${shaderType} inputValue) {
-  float v = (float(toRaw(inputValue)) - uLerpParams[0]) * uLerpParams[1];
-  return clamp(v, 0.0, 1.0);
-}
-`;
-  }
-  return [dataTypeShaderDefinition[dataType], code];
-}
-
-function setNormalizedUniforms(shader: ShaderProgram, dataType: DataType) {
-  const { gl } = shader;
-  switch (dataType) {
-    case DataType.UINT32:
-    case DataType.INT32: {
-      const [lower, upper] = dataTypeRange[dataType];
-      const diff = upper - lower;
-      const shift = Math.max(0, Math.ceil(Math.log2(Math.abs(diff))) - 24);
-      const scalar = 2 ** shift / diff;
-      const location = shader.uniform("uLerpBounds");
-      if (dataType === DataType.UINT32) {
-        gl.uniform2ui(location, lower, shift);
-      } else {
-        gl.uniform2i(location, lower, shift);
-      }
-      gl.uniform1f(shader.uniform("uLerpScalar"), scalar);
-      break;
-    }
-    case DataType.UINT64:
-      // Range [0, 2^64 - 1]: the 64-bit difference is shifted right by 40 bits, leaving at most
-      // 2^24 - 1.
-      gl.uniform3ui(shader.uniform("uLerpBounds"), 0, 0, 40);
-      gl.uniform1f(shader.uniform("uLerpScalar"), 1 / 0xffffff);
-      break;
-    default: {
-      const [lower, upper] = dataTypeRange[dataType];
-      gl.uniform2f(shader.uniform("uLerpParams"), lower, 1 / (upper - lower));
-    }
-  }
 }
 
 // ---------------------------------------------------------------------------------------------------
@@ -447,27 +312,22 @@ function setNormalizedUniforms(shader: ShaderProgram, dataType: DataType) {
 
 export interface ImageRenderLayerOptions {
   renderScaleTarget: WatchableValueInterface<number>;
-  // Position within the local coordinate space.
-  localPosition: WatchableValueInterface<Float32Array>;
 }
 
 export interface SliceViewRenderContext {
   sliceView: SliceView;
-  projectionParameters: SliceViewProjectionParameters;
+  projectionParameters: ProjectionParameters;
 }
 
-/**
- * Draws the volume in grayscale: the data value at each point, mapped from the full range of the
- * data type onto [0, 1].
- */
+// Draws the volume in grayscale, from the full range of its data type.
 export class ImageRenderLayer extends RefCounted {
   rpcId: RpcId | null = null;
   chunkManager: ChunkManager;
   renderScaleTarget: WatchableValueInterface<number>;
-  localPosition: WatchableValueInterface<Float32Array>;
   private vertexIdHelper: VertexIdHelper;
-  // Shader for each chunk format, built on first use; `null` if it failed to build.
-  private shaders = new Map<ChunkFormat, ShaderProgram | null>();
+  // Built on first use: `undefined` until then, `null` if it failed to build.  All scales of the
+  // volume have the same data type, so one shader draws them all.
+  private shader: ShaderProgram | null | undefined;
 
   constructor(
     public multiscaleSource: MultiscaleVolumeChunkSource,
@@ -476,13 +336,8 @@ export class ImageRenderLayer extends RefCounted {
     super();
     this.chunkManager = multiscaleSource.chunkManager;
     this.renderScaleTarget = options.renderScaleTarget;
-    this.localPosition = options.localPosition;
     this.vertexIdHelper = this.registerDisposer(VertexIdHelper.get(this.gl));
-    this.registerDisposer(() => {
-      for (const shader of this.shaders.values()) {
-        shader?.dispose();
-      }
-    });
+    this.registerDisposer(() => this.shader?.dispose());
     this.initializeCounterpart();
   }
 
@@ -505,9 +360,6 @@ export class ImageRenderLayer extends RefCounted {
     const rpc = this.chunkManager.rpc!;
     sharedObject.RPC_TYPE_ID = SLICEVIEW_RENDERLAYER_RPC_ID;
     sharedObject.initializeCounterpart(rpc, {
-      localPosition: this.registerDisposer(
-        SharedWatchableValue.makeFromExisting(rpc, this.localPosition),
-      ).rpcId,
       renderScaleTarget: this.registerDisposer(
         SharedWatchableValue.makeFromExisting(rpc, this.renderScaleTarget),
       ).rpcId,
@@ -515,92 +367,51 @@ export class ImageRenderLayer extends RefCounted {
     this.rpcId = sharedObject.rpcId;
   }
 
-  filterVisibleSources(
-    sliceView: any,
-    sources: readonly TransformedSource[],
-  ): Iterable<TransformedSource> {
-    return filterVisibleSources(sliceView, this, sources);
-  }
-
   private getShader(chunkFormat: ChunkFormat) {
-    let shader = this.shaders.get(chunkFormat);
+    let { shader } = this;
     if (shader === undefined) {
       shader = null;
       try {
         const builder = new ShaderBuilder(this.gl);
         defineVolumeShader(builder);
         chunkFormat.defineShader(builder);
-        builder.addFragmentCode(defineNormalized(builder, this.dataType));
+        builder.addFragmentCode(defineNormalized(chunkFormat));
         builder.setFragmentMain(`
   float value = normalized(getDataValue());
   emit(vec4(value, value, value, 1.0));
 `);
         shader = builder.build();
       } catch {
-        // Leave the shader unset; nothing is drawn with it.
+        // Leave the shader null; nothing is drawn with it.
       }
-      this.shaders.set(chunkFormat, shader);
-    }
-    return shader;
-  }
-
-  private beginChunkFormat(chunkFormat: ChunkFormat) {
-    const shader = this.getShader(chunkFormat);
-    if (shader !== null) {
-      shader.bind();
-      setNormalizedUniforms(shader, this.dataType);
-      chunkFormat.beginDrawing(this.gl);
+      this.shader = shader;
     }
     return shader;
   }
 
   draw(renderContext: SliceViewRenderContext) {
     const { sliceView, projectionParameters } = renderContext;
-    const layerInfo = sliceView.visibleLayers.get(this)!;
-    const { visibleSources } = layerInfo;
+    const { visibleSources } = sliceView;
     if (visibleSources.length === 0) {
       return;
     }
 
     const { gl } = this;
+    const { chunkFormat } = visibleSources[0].source;
+    const shader = this.getShader(chunkFormat);
+    if (shader === null) {
+      return;
+    }
 
     this.vertexIdHelper.enable();
+    shader.bind();
+    chunkFormat.beginDrawing(gl);
 
     const chunkPosition = vec3.create();
-
-    let shader: ShaderProgram | null = null;
-    let prevChunkFormat: ChunkFormat | undefined;
-    // Size of chunk (in voxels) in the "display" subspace of the chunk coordinate space.
-    const chunkDataDisplaySize = vec3.create();
-
-    const endShader = () => {
-      if (shader === null) return;
-      prevChunkFormat!.endDrawing(gl);
-    };
-    let newSource = true;
     for (const transformedSource of visibleSources) {
-      const { chunkLayout } = transformedSource;
-      const source = transformedSource.source as VolumeChunkSource;
-      const { fixedPositionWithinChunk, chunkDisplayDimensionIndices } =
-        transformedSource;
-      for (const chunkDim of chunkDisplayDimensionIndices) {
-        fixedPositionWithinChunk[chunkDim] = 0;
-      }
-      const { chunkFormat } = source;
-      if (chunkFormat !== prevChunkFormat) {
-        endShader();
-        prevChunkFormat = chunkFormat;
-        shader = this.beginChunkFormat(chunkFormat);
-      }
-      if (shader === null) continue;
+      const { chunkLayout, source } = transformedSource;
       const chunks = source.chunks;
-
-      chunkDataDisplaySize.fill(1);
-
-      const originalChunkSize = chunkLayout.size;
-
-      let chunkDataSize: Uint32Array | undefined;
-      const chunkRank = source.spec.rank;
+      const chunkSize = chunkLayout.size;
 
       beginSource(
         gl,
@@ -608,46 +419,22 @@ export class ImageRenderLayer extends RefCounted {
         sliceView,
         projectionParameters.viewProjectionMat,
         transformedSource,
-        chunkLayout,
       );
-      newSource = true;
-      sliceView.forEachVisibleChunk(transformedSource, chunkLayout, (key) => {
+      let newSource = true;
+      sliceView.forEachVisibleChunk(transformedSource, (key) => {
         const chunk = chunks.get(key);
         if (chunk && chunk.state === ChunkState.GPU_MEMORY) {
-          const newChunkDataSize = chunk.chunkDataSize;
-          if (newChunkDataSize !== chunkDataSize) {
-            chunkDataSize = newChunkDataSize;
-            for (let i = 0; i < 3; ++i) {
-              const chunkDim = chunkDisplayDimensionIndices[i];
-              chunkDataDisplaySize[i] =
-                chunkDim === -1 || chunkDim >= chunkRank
-                  ? 1
-                  : chunkDataSize[chunkDim];
-            }
-            gl.uniform3fv(shader!.uniform("uChunkDataSize"), chunkDataDisplaySize);
-          }
           const { chunkGridPosition } = chunk;
           for (let i = 0; i < 3; ++i) {
-            const chunkDim = chunkDisplayDimensionIndices[i];
-            chunkPosition[i] =
-              chunkDim === -1 || chunkDim >= chunkRank
-                ? 0
-                : originalChunkSize[i] * chunkGridPosition[chunkDim];
+            chunkPosition[i] = chunkSize[i] * chunkGridPosition[i];
           }
-          chunkFormat.bindChunk(
-            gl,
-            shader!,
-            chunk,
-            fixedPositionWithinChunk,
-            chunkDisplayDimensionIndices,
-            newSource,
-          );
+          chunkFormat.bindChunk(gl, shader, chunk, newSource);
           newSource = false;
-          gl.uniform3fv(shader!.uniform("uTranslation"), chunkPosition);
+          gl.uniform3fv(shader.uniform("uTranslation"), chunkPosition);
           gl.drawArrays(gl.TRIANGLE_FAN, 0, 6);
         }
       });
     }
-    endShader();
+    chunkFormat.endDrawing(gl);
   }
 }

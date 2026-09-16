@@ -34,26 +34,3 @@ export function arraysEqual<T>(a: ArrayLike<T>, b: ArrayLike<T>) {
   return true;
 }
 
-export function transposeNestedArrays<T>(x: T[][]) {
-  const result: T[][] = [];
-  for (
-    let outerIndex = 0, outerLength = x.length;
-    outerIndex < outerLength;
-    ++outerIndex
-  ) {
-    const inner = x[outerIndex];
-    for (
-      let innerIndex = 0, innerLength = inner.length;
-      innerIndex < innerLength;
-      ++innerIndex
-    ) {
-      let resultInner = result[innerIndex];
-      if (resultInner === undefined) {
-        resultInner = result[innerIndex] = [];
-      }
-      resultInner.push(inner[innerIndex]);
-    }
-  }
-  return result;
-}
-

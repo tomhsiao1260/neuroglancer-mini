@@ -30,7 +30,7 @@ import type { ZarrStoreSpec } from "#src/datasource/zarr/store.js";
 import { DisplayContext, SliceViewPanel } from "#src/render/panel.js";
 import { ImageRenderLayer } from "#src/render/renderlayer.js";
 import {
-  makeCombinedCoordinateSpace,
+  makeCoordinateSpace,
   TrackableCoordinateSpace,
 } from "#src/state/coordinate_transform.js";
 import {
@@ -109,12 +109,8 @@ export class Viewer extends RefCounted {
     new Position(this.coordinateSpace),
   );
   private sharedZoom = this.registerDisposer(new TrackableZoom());
-  // Position in the image's local coordinate space, which spans the volume like the global
-  // coordinate space.  It is shared with the worker by the render layer.
-  private localCoordinateSpace = new TrackableCoordinateSpace();
-  private localPosition = this.registerDisposer(
-    new Position(this.localCoordinateSpace),
-  );
+  // Preferred size of a voxel of the chosen scale, in screen pixels (1: pick the scale whose voxels
+  // are closest to one pixel).  It is shared with the worker by the render layer.
   private renderScaleTarget = new WatchableValue(1);
   // The pointer's last position over a view, if it is over one.
   private pointer:
@@ -150,6 +146,21 @@ export class Viewer extends RefCounted {
     chunkQueueManager.registerDisposer(() => this.worker.terminate());
     this.chunkManager = this.registerDisposer(
       new ChunkManager(chunkQueueManager),
+    );
+
+    // While the view moves, chunk uploads to the GPU make way for drawing: after a change of the
+    // view they may only start within the next 10 ms, and then wait until a frame has started.
+    this.registerDisposer(
+      this.onViewChanged(() => {
+        if (chunkQueueManager.chunkUpdateDeadline === null) {
+          chunkQueueManager.chunkUpdateDeadline = Date.now() + 10;
+        }
+      }),
+    );
+    this.registerDisposer(
+      this.display.updateStarted.add(() => {
+        chunkQueueManager.chunkUpdateDeadline = null;
+      }),
     );
 
     // When the view moves under a still pointer, the point under the pointer changes.
@@ -210,7 +221,7 @@ export class Viewer extends RefCounted {
     const navigationState = new NavigationState(
       this.sharedPosition.addRef(),
       this.sharedZoom.addRef(),
-      { orientation: viewRotations[orientation]() },
+      viewRotations[orientation](),
     );
     const view = new SliceViewPanel(element, navigationState, this);
 
@@ -268,13 +279,13 @@ export class Viewer extends RefCounted {
       });
     }
 
-    const { modelSpace } = volume;
-    this.coordinateSpace.value = makeCombinedCoordinateSpace(modelSpace);
-    this.localCoordinateSpace.value = makeCombinedCoordinateSpace(modelSpace);
+    this.coordinateSpace.value = makeCoordinateSpace(
+      volume.lowerBounds,
+      volume.upperBounds,
+    );
 
     this.renderLayer.value = new ImageRenderLayer(volume, {
       renderScaleTarget: this.renderScaleTarget,
-      localPosition: this.localPosition,
     });
   }
 }
