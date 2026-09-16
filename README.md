@@ -7,6 +7,7 @@ This branch builds an app on top of Neuroglancer Mini, a trimmed-down version of
 ## Features
 
 - [A Board of Cards](#a-board-of-cards)
+- [A Source per Card](#a-source-per-card)
 - [Coordinate Information](#coordinate-information)
 - [Local First Design](#local-first-design)
 - [Missing Chunks](#missing-chunks)
@@ -30,9 +31,26 @@ larger without showing more data, and they are drawn at the resolution they are 
 | wheel over the background | zoom the board |
 | the ✕ in a card's header | remove the card |
 
-Cards are independent for now: linking them, so that a set of cards moves together as the three
-fixed views used to, and giving each card its own data source are the next steps (see
+Cards are independent for now. Linking them, so that a set of cards moves together as the three
+fixed views used to, and saving the board are the next steps (see
 [docs/whiteboard.md](docs/whiteboard.md)).
+
+### A Source per Card
+
+A new card is empty and asks where its data comes from. Both fields are optional, and the pair
+decides what happens:
+
+| Zarr folder | Remote store | What the card shows |
+| --- | --- | --- |
+| — | — | nothing; the card keeps asking |
+| ✓ | — | the folder on the server, and nothing is downloaded |
+| — | ✓ | the remote store, downloaded into a cache folder of its own under `server/db/cache` |
+| ✓ | ✓ | the folder first, and what it does not have is downloaded into it |
+
+A source is identified by that pair, so cards naming the same one show the same volume: its chunks
+are downloaded once and kept in one set of textures, however many cards look at them. The form also
+lists the sources already in use, to show the same data in another plane without typing the paths
+again. **Default source** in the header sets what a new card's form starts with.
 
 ### Coordinate Information
 
@@ -67,7 +85,8 @@ npm install
 node start.js
 ```
 
-3. Click **Source** in the header and enter where the data comes from:
+3. Double click the board to add a card, and enter where its data comes from (**Default source** in
+   the header sets what every new card starts with):
 
 - Zarr folder on the server: the local path the data is stored in. For first-time use, create an
   empty folder with the `.zarr` extension and give that path, for example:
@@ -84,7 +103,8 @@ E:/PATH_TO_YOUR_ZARR_FOLDER/scroll.zarr/
 https://dl.ash2txt.org/full-scrolls/Scroll1/PHercParis4.volpkg/volumes_zarr_standardized/54keV_7.91um_Scroll1A.zarr/
 ```
 
-4. Click **Save and reload**. The settings are saved in `server/db/json/settings.json`.
+4. Click **Show**. The sources are saved in `server/db/json/sources.json`, so the next card can pick
+   this one from a list.
 
 The first time, data is loaded from the remote server, which may take some time. You can find those
 files in the local zarr folder you gave. On later visits to the same coordinates the data is read
@@ -100,16 +120,20 @@ straight from your disk.
   - `src/board/card.ts`: one card: its frame, its header, and the view inside it.
   - `src/board/gestures.ts`: all mouse input on the board, listed in [A Board of Cards](#a-board-of-cards).
   - `src/board/transform.ts`: the board's pan and zoom as a CSS transform, which the viewer measures.
+  - `src/board/sources.ts`: the sources on the server, and one volume per source, shared by the cards that name it.
+  - `src/board/source_panel.ts`: the form a card shows until it has a source.
   - `src/app/position_display.ts`: the coordinate panel in the bottom-right corner.
   - `src/app/missing_chunks.ts`: the `onMissingChunk` handler that lists missing chunks.
-  - `src/app/source_form.ts`: the **Source** form in the header, which writes the server's settings.
+  - `src/app/source_form.ts`: the **Default source** form in the header, which writes the server's settings.
   - `src/config.ts`: the server address.
   - `vite.config.ts`, `tsconfig.json`, `package.json`: build configuration (output in `build/client/page`) and the `viewer` import, set up as in the backward branch's `example/`.
-- `server/`: local-first zarr store (Node, Express), on port 3005.
-  - `src/routes/data.ts`: `GET /api/data/zarr/<key>` serves a file of the local store. A file the local store does not have is first downloaded from the remote store, if one is set; a file neither has answers 404.
-  - `src/routes/settings.ts`: `GET /api/settings` reads the settings and `POST /api/settings` changes them.
-  - `src/utils/download.ts`: downloads one file, writing it under a temporary name first so that a partly written file is never served.
-  - `src/utils/settings.ts`: the settings in `db/json/settings.json`: `zarr_data_path` (the local `.zarr` folder) and `scroll_url_path` (the remote store, optional).
+- `server/`: local-first zarr stores (Node, Express), on port 3005 of this machine only.
+  - `src/routes/data.ts`: `GET /api/data/<sourceId>/<key>` serves a file of that source's store. A file the source's folder does not have is first downloaded from its remote store, if it has one; a file neither has answers 404. `GET /api/data/zarr/<key>` still serves the pair in the settings.
+  - `src/routes/sources.ts`: `GET /api/sources` lists the sources and `POST /api/sources` adds one, or returns the existing source for the same pair of paths.
+  - `src/routes/settings.ts`: `GET /api/settings` reads the values a new card's form starts with and `POST /api/settings` changes them.
+  - `src/utils/sources.ts`: the sources in `db/json/sources.json`, their ids, where each one's files are kept, and the check that keeps a key inside its folder.
+  - `src/utils/download.ts`: downloads one file, at most eight at a time, sharing one download between the cards that ask for the same file and writing it under a name of its own first so that a partly written file is never served.
+  - `src/utils/settings.ts`: the defaults in `db/json/settings.json`: `zarr_data_path` and `scroll_url_path`.
 - `docs/whiteboard.md`: the notes the board is being built from, and what is still missing from it:
   per-card data sources, linked cards, and the board saved on the server.
 - `scripts/start.js`: installs and builds the client, starts the client preview (port 4173) and the server, and opens the page once both are running.

@@ -1,52 +1,43 @@
 /**
  * @file A board of cross-section cards.
  *
- * Every card shows the volume served by the local server (see `server/`), on its own plane and at
- * its own position.  A later round gives each card its own data source and lets cards be linked, so
- * that their coordinates move together.
+ * The board starts empty: a double click adds a card, and a card shows a form until it is given a
+ * data source (a folder on the server, a remote store, or both).  Cards naming the same source show
+ * the same volume, so its chunks are downloaded once.  A later round links cards, so that their
+ * coordinates move together, and saves the board on the server.
  */
 
-import type { ViewOrientation } from "viewer";
 import { Viewer } from "viewer";
 import { listMissingChunks } from "./app/missing_chunks";
 import { showPosition } from "./app/position_display";
-import { showSourceForm } from "./app/source_form";
-import { Board, CARD_WIDTH } from "./board/board";
-import { SERVER_API_ENDPOINT } from "./config";
+import { createDefaultSourceForm } from "./app/source_form";
+import { Board } from "./board/board";
+import { VolumeRegistry } from "./board/sources";
 import "./style.css";
 
 const main = document.querySelector<HTMLElement>("main")!;
 const element = document.querySelector<HTMLDivElement>("#board")!;
 const layer = document.querySelector<HTMLDivElement>("#board-layer")!;
-const status = document.querySelector<HTMLElement>("#status")!;
+const hint = document.querySelector<HTMLElement>("#board-hint")!;
 
-showSourceForm(
+const defaults = createDefaultSourceForm(
   document.querySelector<HTMLElement>("#source")!,
   document.querySelector<HTMLElement>("#source-panel")!,
 );
 
 const viewer = new Viewer({ container: element });
-const volume = viewer.addVolume(
-  { kind: "http", url: `${SERVER_API_ENDPOINT}/api/data/zarr` },
-  { onMissingChunk: listMissingChunks(main) },
-);
-volume.loaded.then(
-  () => {
-    status.textContent = "";
-  },
-  (error) => {
-    console.error("Failed to load the volume:", error);
-    status.textContent = "Could not load the volume. See the browser console.";
-    status.classList.add("error");
-  },
-);
+const volumes = new VolumeRegistry(viewer, listMissingChunks(main));
+const board = new Board({
+  viewer,
+  volumes,
+  sourceDefaults: () => defaults.get(),
+  element,
+  layer,
+});
 
-const board = new Board({ viewer, volume, element, layer });
 showPosition(board, main);
 
-// The three cross-sections of the old page, side by side.  Each card navigates on its own now.
-const GAP = 24;
-const START: ViewOrientation[] = ["yz", "xy", "xz"];
-START.forEach((orientation, index) => {
-  board.addCard({ x: GAP + index * (CARD_WIDTH + GAP), y: GAP }, orientation);
+// The hint stands in for the cards while the board is empty.
+board.onViewChanged(() => {
+  hint.hidden = board.cards.length > 0;
 });

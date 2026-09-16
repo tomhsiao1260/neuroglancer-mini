@@ -73,10 +73,15 @@ export function bindGestures(board: Board) {
       drag(event, board.transform.scale, (deltaX, deltaY) =>
         card.resizeBy(deltaX, deltaY),
       );
-    } else if (event.altKey && target.closest(".card-slice") !== null) {
+    } else if (
+      event.altKey &&
+      card.view !== undefined &&
+      target.closest(".card-slice") !== null
+    ) {
       // The slice moves by screen pixels, so the board's zoom is already in the view's projection.
+      const { view } = card;
       drag(event, 1, (deltaX, deltaY) =>
-        card.view.translateByViewportPixels(deltaX, deltaY),
+        view.translateByViewportPixels(deltaX, deltaY),
       );
     } else {
       drag(event, board.transform.scale, (deltaX, deltaY) =>

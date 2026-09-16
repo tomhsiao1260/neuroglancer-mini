@@ -11,10 +11,7 @@
       <header
         class="bg-gray-800 flex px-4 py-3 justify-between items-center gap-4 shrink-0"
       >
-        <div class="flex items-baseline gap-4">
-          <h1 class="text-xl font-bold">Neuroglancer Mini</h1>
-          <span id="status" class="text-sm text-gray-400">Loading volume…</span>
-        </div>
+        <h1 class="text-xl font-bold shrink-0">Neuroglancer Mini</h1>
         <div class="text-xs text-gray-400 hidden sm:block">
           double click: new card · drag: move a card · alt + drag: pan the slice
           · wheel: change slice · ctrl + wheel: zoom the slice · drag the
@@ -24,8 +21,9 @@
           <button
             id="source"
             class="text-sm text-gray-300 hover:text-white border border-gray-600 rounded px-2 py-1"
+            title="What a new card's source form starts with"
           >
-            Source
+            Default source
           </button>
           <a
             href="https://github.com/tomhsiao1260/neuroglancer-mini/tree/forward"
@@ -61,6 +59,7 @@
       <main class="flex-1 relative min-h-0">
         <div id="board">
           <div id="board-layer"></div>
+          <div id="board-hint">Double click anywhere to add a card</div>
         </div>
       </main>
     </div>

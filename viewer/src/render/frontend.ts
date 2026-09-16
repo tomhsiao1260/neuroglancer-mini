@@ -331,14 +331,17 @@ export class SliceView extends SliceViewBase<VolumeChunkSource> {
   }
 
   /**
-   * Whether every chunk this view would draw is already on the GPU, i.e. the view shows its data
-   * with nothing still loading.  Tests and screenshots poll it instead of waiting a fixed time.  A
-   * chunk whose download failed never becomes ready.
+   * Whether the view's volume has loaded and every chunk the view would draw is already on the GPU,
+   * i.e. it shows its data with nothing still loading.  Tests and screenshots poll it instead of
+   * waiting a fixed time.  A chunk whose download failed never becomes ready.
    */
   isReady() {
     const { width, height } = this.projectionParameters.value;
     if (!this.valid || width === 0 || height === 0) return false;
     this.updateLayer.flush();
+    // A view whose volume is still loading has nothing to show yet, and would otherwise count as
+    // ready because it has no sources to check.
+    if (this.layer === undefined) return false;
     this.updateVisibleSources();
     for (const tsource of this.visibleSources) {
       const { chunks } = tsource.source;

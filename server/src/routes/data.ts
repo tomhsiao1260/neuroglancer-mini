@@ -1,7 +1,9 @@
 import { Router, Request, Response } from "express";
 import fs from "fs";
-import { downloadFile } from "../utils/download";
-import { getLocalPath, getSettings, SETTING_PATH } from "../utils/settings";
+import { downloadFile, RetryableError } from "../utils/download";
+import { getSettings } from "../utils/settings";
+import type { Source } from "../utils/sources";
+import { getSource, resolveWithin, upsertSource } from "../utils/sources";
 
 const router = Router();
 
@@ -13,39 +15,68 @@ function isFile(file: string) {
   }
 }
 
-// Serves a file of the local zarr store, e.g.
-// http://localhost:3005/api/data/zarr/0/52/24/18
-//
-// A file missing from the local store is first downloaded from the remote store, if one is set.
-// A file neither store has answers 404; the viewer shows such a chunk as empty.
-router.get("/zarr/*key", async (req: Request, res: Response) => {
-  const settings = await getSettings();
-  if (!settings.zarr_data_path) {
-    res.status(500).json({ error: `zarr_data_path is not set in ${SETTING_PATH}` });
-    return;
-  }
-  const key = ([] as string[]).concat(req.params.key).join("/");
-  const localPath = getLocalPath(settings, key);
-  if (localPath === undefined) {
+/**
+ * Serves one file of a source's zarr store, e.g.
+ * http://localhost:3005/api/data/1f4c0a9b3e22/0/52/24/18
+ *
+ * A file the source's folder does not have is first downloaded from its remote store, if it has one.
+ * A file neither has answers 404; the viewer then shows that chunk as empty.
+ */
+async function serveFile(source: Source, key: string, res: Response) {
+  const file = resolveWithin(source.root, key);
+  if (file === undefined) {
     res.status(400).json({ error: "Invalid key" });
     return;
   }
 
-  if (!isFile(localPath) && settings.scroll_url_path) {
+  if (!isFile(file) && source.http !== "") {
     try {
-      await downloadFile(settings.scroll_url_path, key, localPath);
+      await downloadFile(source.id, source.http, key, file);
     } catch (error) {
       console.error(`Failed to download ${key}:`, error);
-      res.status(502).json({ error: (error as Error).message });
+      // The viewer retries a 503 by itself; any other failure fails the chunk, and the coarser
+      // scale under it shows through.
+      const retryable = error instanceof RetryableError;
+      res
+        .status(retryable ? 503 : 502)
+        .set("Retry-After", "1")
+        .json({ error: (error as Error).message });
       return;
     }
   }
 
-  if (!isFile(localPath)) {
-    res.status(404).end();
+  if (!isFile(file)) {
+    // A file that is missing now may be added later, so it must not be remembered as missing.
+    res.status(404).set("Cache-Control", "no-cache").end();
     return;
   }
-  res.sendFile(localPath, { dotfiles: "allow" });
+  res.sendFile(file, { dotfiles: "allow" });
+}
+
+// The store of the source given in the path.
+router.get("/:sourceId/*key", async (req: Request, res: Response) => {
+  const sourceId = String(req.params.sourceId);
+  const source = await getSource(sourceId);
+  if (source === undefined) {
+    res.status(400).json({ error: `Unknown source ${sourceId}` });
+    return;
+  }
+  await serveFile(source, ([] as string[]).concat(req.params.key).join("/"), res);
+});
+
+// The store described by the settings, which is what the page used before cards had their own
+// sources.  Kept so that links and scripts pointing at it keep working.
+router.get("/zarr/*key", async (req: Request, res: Response) => {
+  const { zarr_data_path, scroll_url_path } = await getSettings();
+  if (zarr_data_path === "" && scroll_url_path === "") {
+    res.status(500).json({ error: "No source is set in the settings" });
+    return;
+  }
+  const source = await upsertSource({
+    local: zarr_data_path,
+    http: scroll_url_path,
+  });
+  await serveFile(source, ([] as string[]).concat(req.params.key).join("/"), res);
 });
 
 export default router;

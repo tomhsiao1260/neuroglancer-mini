@@ -2,9 +2,12 @@
  * @file The board: the cards, their layout in board coordinates, and the board's own pan and zoom.
  */
 
-import type { View, ViewOrientation, Viewer, Volume } from "viewer";
+import type { View, ViewOrientation } from "viewer";
+import type { Viewer } from "viewer";
 import { Card } from "./card";
 import { bindGestures } from "./gestures";
+import type { Source, VolumeRegistry } from "./sources";
+import { sourceLabel } from "./sources";
 import type { BoardTransform } from "./transform";
 import { cssTransform, toBoard } from "./transform";
 
@@ -14,8 +17,10 @@ export const CARD_HEIGHT = 300;
 
 export interface BoardOptions {
   viewer: Viewer;
-  // The volume every card shows, until cards get their own data source.
-  volume: Volume;
+  // The volumes of the sources the cards name.
+  volumes: VolumeRegistry;
+  // What a new card's source form starts with.
+  sourceDefaults: () => { local: string; http: string };
   // The viewer's container, which the board fills.
   element: HTMLElement;
   // The element inside it that carries the board's transform; the cards are its children.
@@ -38,8 +43,8 @@ export class Board {
     return this.options.viewer;
   }
 
-  get volume() {
-    return this.options.volume;
+  get volumes() {
+    return this.options.volumes;
   }
 
   get element() {
@@ -50,21 +55,27 @@ export class Board {
     return this.options.layer;
   }
 
-  // Adds a card at a board position.  `volume` is the board's own unless another one is given, so
-  // that cards can show different volumes once they have their own data source.
+  sourceDefaults() {
+    return this.options.sourceDefaults();
+  }
+
+  sourceName(source: Source) {
+    return sourceLabel(source);
+  }
+
+  // Adds a card at a board position.  It shows nothing until it is given a source.
   addCard(
     { x, y }: { x: number; y: number },
     orientation: ViewOrientation = "xy",
-    volume: Volume = this.volume,
   ) {
     const card = new Card(
       this,
       { x, y, width: CARD_WIDTH, height: CARD_HEIGHT },
       orientation,
-      volume,
     );
     this.cards.push(card);
     this.bringToFront(card);
+    this.reportViewChanged();
     return card;
   }
 
@@ -108,7 +119,7 @@ export class Board {
     }
   }
 
-  // Calls `callback` whenever any card's position or zoom changes.
+  // Calls `callback` whenever a card is added or removed, or any card's position or zoom changes.
   onViewChanged(callback: () => void) {
     this.viewChangedListeners.push(callback);
   }

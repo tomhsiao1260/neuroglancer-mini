@@ -386,7 +386,8 @@ export class Viewer extends RefCounted {
 
   /**
    * Whether every view that is drawn shows its data with nothing still loading (see
-   * `SliceView.isReady`).  `await volume.loaded` first, since a view with no volume is not ready.
+   * `SliceView.isReady`).  A viewer with no view is ready, and a view whose volume is still loading
+   * is not.
    */
   isReady() {
     for (const panel of this.display.panels) {

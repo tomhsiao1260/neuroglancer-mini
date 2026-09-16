@@ -46,6 +46,25 @@
   user-select: none;
 }
 
+.card-orientation {
+  background-color: #0b0d12;
+  border: 1px solid #ffffff26;
+  border-radius: 4px;
+  padding: 0 2px;
+  font-family: monospace;
+  font-size: 11px;
+  color: #cfd3dc;
+  cursor: pointer;
+}
+
+.card-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #8b90a0;
+}
+
 .card-close {
   padding: 0 6px;
   border-radius: 4px;
@@ -74,6 +93,102 @@
   height: 14px;
   cursor: nwse-resize;
   background: linear-gradient(135deg, transparent 50%, #ffffff40 50%);
+}
+
+/* The source form, or how the volume is doing, on top of the slice. */
+.card-overlay {
+  position: absolute;
+  inset: 28px 0 0 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 10px;
+  background-color: #14161c;
+  font-size: 12px;
+  color: #cfd3dc;
+  overflow: auto;
+}
+
+.card-message {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  text-align: center;
+  color: #8b90a0;
+}
+
+.card-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+}
+
+.card-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  color: #8b90a0;
+}
+
+.card-form input {
+  height: 26px;
+  padding: 0 6px;
+  border: 1px solid #ffffff26;
+  border-radius: 4px;
+  background-color: #0b0d12;
+  color: #e6e7ea;
+  font-family: monospace;
+  font-size: 11px;
+}
+
+.card-form input:focus {
+  outline: 1px solid #5b7cff;
+}
+
+.card-form-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.card-form button,
+.card-message button {
+  padding: 3px 10px;
+  border: 1px solid #ffffff26;
+  border-radius: 4px;
+  background-color: #1b1e26;
+  color: #e6e7ea;
+  cursor: pointer;
+}
+
+.card-form button:hover,
+.card-message button:hover {
+  background-color: #262a34;
+}
+
+.source-error {
+  color: rgb(248, 113, 113);
+}
+
+.source-known {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  color: #8b90a0;
+}
+
+#board-hint {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #4a5160;
+  font-size: 14px;
+  pointer-events: none;
 }
 
 #position {

@@ -24,7 +24,7 @@ export function showPosition(board: Board, parent: HTMLElement) {
   let hovered: Card | undefined;
 
   const showCenter = () => {
-    const position = hovered?.navigation.position;
+    const position = hovered?.navigation?.position;
     center.textContent = position === undefined ? "" : formatVoxel(position);
   };
   board.onViewChanged(showCenter);

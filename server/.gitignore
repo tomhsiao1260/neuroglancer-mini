@@ -2,4 +2,6 @@
 .env
 
 /db/json/settings.json
+/db/json/sources.json
+/db/cache
 /dist

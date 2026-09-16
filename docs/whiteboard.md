@@ -31,8 +31,12 @@ The board itself is built (`client/src/board/`), and the viewer changes it neede
   itself, and `view.stepSlices`, `view.translateByViewportPixels`, `view.zoomByMouse` and
   `view.pointAt` let it drive the slice instead.
 
-What is left, in the order it is planned: a data source per card (the server route becomes
-per-source), linked cards sharing one navigation group, and the board saved on the server.
+Each card also names its own data source, which the server serves per source
+(`server/src/utils/sources.ts`), and cards naming the same source share one volume, one download and
+one set of textures.
+
+What is left, in the order it is planned: linked cards sharing one navigation group, and the board
+saved on the server.
 
 ## What already works
 
