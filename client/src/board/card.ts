@@ -6,8 +6,8 @@
  */
 
 import type { View, ViewOrientation, Volume } from "viewer";
-import { NavigationGroup } from "viewer";
 import type { Board } from "./board";
+import type { LinkGroup } from "./links";
 import { createSourcePanel } from "./source_panel";
 import type { Source } from "./sources";
 
@@ -29,14 +29,17 @@ export class Card {
   // Shows the source form, or how the volume is doing, on top of the slice.
   private overlay = document.createElement("div");
   private orientationSelect = document.createElement("select");
+  private link = document.createElement("button");
+  private viewChangedListener: (() => void) | undefined;
   source: Source | undefined;
-  navigation: NavigationGroup | undefined;
   view: View | undefined;
 
   constructor(
     private board: Board,
     public rect: CardRect,
     private orientation: ViewOrientation,
+    // The cards this one moves with; a new card is in a group of its own.
+    public group: LinkGroup,
   ) {
     const { element, slice, overlay, orientationSelect } = this;
     element.className = "card";
@@ -59,13 +62,24 @@ export class Card {
     );
     const name = document.createElement("span");
     name.className = "card-name";
+    this.link.className = "card-link";
+    this.link.addEventListener("click", () => {
+      // While another card is waiting to be linked, this one is the target, whichever part of it is
+      // clicked; clicking the waiting card's own badge gives up instead.
+      const { linkFrom } = board;
+      if (linkFrom === this) board.stopLinking();
+      else if (linkFrom !== undefined) board.linkCards(linkFrom, this);
+      else if (this.group.linked) board.unlinkCard(this);
+      else board.startLinking(this);
+    });
     const close = document.createElement("button");
     close.className = "card-close";
     close.textContent = "✕";
     close.title = "Remove this card";
     close.addEventListener("click", () => board.removeCard(this));
-    header.append(orientationSelect, name, close);
+    header.append(orientationSelect, name, this.link, close);
     this.name = name;
+    group.members.add(this);
 
     const resize = document.createElement("div");
     resize.className = "card-resize";
@@ -74,6 +88,7 @@ export class Card {
     element.append(header, slice, overlay, resize);
     board.layer.append(element);
     this.applyRect();
+    this.showLink();
     this.showForm();
   }
 
@@ -85,6 +100,43 @@ export class Card {
     this.name.textContent = this.board.sourceName(source);
     this.name.title = [source.local, source.http].filter((x) => x !== "").join("\n");
     this.showView(this.board.volumes.get(source.id));
+    // A card linked to empty cards hands them its source, so that a new linked set only has to be
+    // given one.
+    for (const card of this.group.members) {
+      if (card.source === undefined) card.setSource(source);
+    }
+  }
+
+  // Moves this card into `group`, whose position and zoom it then shares.
+  setGroup(group: LinkGroup) {
+    if (group === this.group) return;
+    this.group.members.delete(this);
+    this.group = group;
+    group.members.add(this);
+    const { source } = this;
+    // A view looks through its group's position and zoom, so it is added again for the new group.
+    if (source !== undefined) this.showView(this.board.volumes.get(source.id));
+  }
+
+  // Shows whether this card is linked, and to how many others.
+  showLink() {
+    const { linked, hue, members } = this.group;
+    this.link.textContent = linked ? `\u26D3 ${members.size}` : "\u26D3";
+    this.link.title =
+      this.board.linkFrom === this
+        ? "Click another card to link it to this one, or click here again to give up"
+        : this.board.linkFrom !== undefined
+          ? "Link this card to the one waiting"
+          : linked
+            ? `Linked to ${members.size - 1} other card${members.size === 2 ? "" : "s"}; click to unlink`
+            : "Link this card to another, so that they move together";
+    this.link.classList.toggle("linked", linked);
+    this.element.style.setProperty("--group-hue", String(hue));
+    this.element.classList.toggle("grouped", linked);
+  }
+
+  get navigation() {
+    return this.group.navigation;
   }
 
   setOrientation(orientation: ViewOrientation) {
@@ -120,6 +172,7 @@ export class Card {
 
   dispose() {
     this.disposeView();
+    this.group.members.delete(this);
     this.element.remove();
   }
 
@@ -134,12 +187,14 @@ export class Card {
 
   private showView(volume: Volume) {
     this.disposeView();
-    this.navigation = new NavigationGroup(volume);
-    this.navigation.onViewChanged(() => this.board.reportViewChanged());
+    const navigation = this.group.navigationFor(volume);
+    this.viewChangedListener = navigation.onViewChanged(() =>
+      this.board.reportViewChanged(),
+    );
     this.view = this.board.viewer.addView(this.slice, {
       volume,
       orientation: this.orientation,
-      navigation: this.navigation,
+      navigation,
     });
     // The board owns the mouse button: a drag moves the card, and with Alt it pans the slice.  The
     // wheel stays with the view, which steps through slices and zooms with Control.
@@ -173,11 +228,12 @@ export class Card {
     );
   }
 
+  // The group's position and zoom belong to the board, so only the view and its listener go.
   private disposeView() {
     this.view?.dispose();
-    this.navigation?.dispose();
+    this.viewChangedListener?.();
     this.view = undefined;
-    this.navigation = undefined;
+    this.viewChangedListener = undefined;
   }
 
   private message(text: string) {

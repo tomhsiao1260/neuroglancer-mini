@@ -6,6 +6,7 @@ import type { View, ViewOrientation } from "viewer";
 import type { Viewer } from "viewer";
 import { Card } from "./card";
 import { bindGestures } from "./gestures";
+import { LinkGroup } from "./links";
 import type { Source, VolumeRegistry } from "./sources";
 import { sourceLabel } from "./sources";
 import type { BoardTransform } from "./transform";
@@ -30,9 +31,12 @@ export interface BoardOptions {
 export class Board {
   transform: BoardTransform = { x: 0, y: 0, scale: 1 };
   readonly cards: Card[] = [];
+  // The card waiting to be linked to the next one clicked, if the user is linking.
+  linkFrom: Card | undefined;
   private appliedScale = 1;
   private nextZIndex = 1;
   private viewChangedListeners: (() => void)[] = [];
+  private linkingListeners: ((linking: boolean) => void)[] = [];
 
   constructor(private options: BoardOptions) {
     this.applyTransform();
@@ -63,27 +67,116 @@ export class Board {
     return sourceLabel(source);
   }
 
-  // Adds a card at a board position.  It shows nothing until it is given a source.
+  // Adds a card at a board position.  It shows nothing until it is given a source, and moves on its
+  // own unless it is given a group to share a position and zoom with.
   addCard(
     { x, y }: { x: number; y: number },
     orientation: ViewOrientation = "xy",
+    group = new LinkGroup(),
   ) {
     const card = new Card(
       this,
       { x, y, width: CARD_WIDTH, height: CARD_HEIGHT },
       orientation,
+      group,
     );
     this.cards.push(card);
     this.bringToFront(card);
+    this.showLinks();
     this.reportViewChanged();
     return card;
+  }
+
+  /**
+   * Adds three linked cards side by side, showing the XY, XZ and YZ planes: the three views this
+   * page had before it became a board.  Giving one of them a source gives it to all three.
+   */
+  addLinkedCards({ x, y }: { x: number; y: number }) {
+    const group = new LinkGroup();
+    const gap = 16;
+    return (["yz", "xy", "xz"] as ViewOrientation[]).map((orientation, index) =>
+      this.addCard(
+        { x: x + index * (CARD_WIDTH + gap), y },
+        orientation,
+        group,
+      ),
+    );
+  }
+
+  // Starts linking `card`: the next card clicked joins it.
+  startLinking(card: Card) {
+    this.linkFrom = card;
+    this.element.classList.add("linking");
+    card.element.classList.add("link-from");
+    this.showLinks();
+    this.reportLinkingChanged();
+  }
+
+  stopLinking() {
+    if (this.linkFrom === undefined) return;
+    this.linkFrom.element.classList.remove("link-from");
+    this.linkFrom = undefined;
+    this.element.classList.remove("linking");
+    this.showLinks();
+    this.reportLinkingChanged();
+  }
+
+  // Calls `callback` when the board starts or stops waiting for a card to link to.
+  onLinkingChanged(callback: (linking: boolean) => void) {
+    this.linkingListeners.push(callback);
+  }
+
+  private reportLinkingChanged() {
+    for (const callback of this.linkingListeners) {
+      callback(this.linkFrom !== undefined);
+    }
+  }
+
+  /**
+   * Puts both cards, and everything already linked to either of them, in one group.  They then show
+   * the same place: the larger group's position and zoom win, so the smaller set jumps to it.
+   */
+  linkCards(first: Card, second: Card) {
+    this.stopLinking();
+    if (first === second || first.group === second.group) return;
+    const [target, leaving] =
+      first.group.members.size >= second.group.members.size
+        ? [first.group, second.group]
+        : [second.group, first.group];
+    for (const card of [...leaving.members]) card.setGroup(target);
+    leaving.dispose();
+    this.showLinks();
+  }
+
+  // Takes `card` out of its group, leaving it where it is.
+  unlinkCard(card: Card) {
+    const previous = card.group.navigation;
+    const position = previous?.position;
+    const zoom = previous?.zoom;
+    card.setGroup(new LinkGroup());
+    const navigation = card.group.navigation;
+    if (navigation !== undefined) {
+      if (position !== undefined) navigation.setPosition(position);
+      if (zoom !== undefined) navigation.setZoom(zoom);
+    }
+    this.showLinks();
+  }
+
+  // Shows every card's link state, which changes for a whole group at a time.
+  showLinks() {
+    for (const card of this.cards) card.showLink();
   }
 
   removeCard(card: Card) {
     const index = this.cards.indexOf(card);
     if (index < 0) return;
+    if (this.linkFrom === card) this.stopLinking();
     this.cards.splice(index, 1);
+    const { group } = card;
     card.dispose();
+    // The last card of a group takes its shared position and zoom with it.
+    if (group.members.size === 0) group.dispose();
+    this.showLinks();
     this.reportViewChanged();
   }
 

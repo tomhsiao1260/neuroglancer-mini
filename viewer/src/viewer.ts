@@ -47,7 +47,7 @@ import type { WatchableValueInterface } from "#src/state/trackable_value.js";
 import { WatchableValue } from "#src/state/trackable_value.js";
 import type { Borrowed } from "#src/util/disposable.js";
 import { RefCounted } from "#src/util/disposable.js";
-import { quat } from "#src/util/geom.js";
+import { mat3, quat, vec3 } from "#src/util/geom.js";
 import { Signal } from "#src/util/signal.js";
 import { RPC } from "#src/worker/worker_rpc.js";
 
@@ -76,14 +76,36 @@ export type MissingChunkHandler = (
  */
 export type ViewOrientation = "xy" | "xz" | "yz";
 
-// Rotation of the view for each orientation.  The viewer's coordinates are (z, y, x).
+// The volume axes, in the viewer's (z, y, x) coordinates.
+const axisZ = vec3.fromValues(1, 0, 0);
+const axisY = vec3.fromValues(0, 1, 0);
+const axisX = vec3.fromValues(0, 0, 1);
+
+/**
+ * The rotation of a view that shows `right` to the right and `down` downward.  The direction it
+ * looks along follows from those two.
+ */
+function viewRotation(right: vec3, down: vec3) {
+  const into = vec3.cross(vec3.create(), right, down);
+  // The view axes are the columns of the rotation, which `mat3` holds one after another.
+  const axes = mat3.create();
+  for (let i = 0; i < 3; ++i) {
+    axes[i] = right[i];
+    axes[3 + i] = down[i];
+    axes[6 + i] = into[i];
+  }
+  return quat.fromMat3(quat.create(), axes);
+}
+
+/**
+ * Rotation of the view for each orientation.  Each axis points the same way wherever it is shown —
+ * x to the right, y downward, z to the right or downward — so that views of different planes, and
+ * especially views sharing a position, move together rather than against each other.
+ */
 const viewRotations: Record<ViewOrientation, () => quat> = {
-  // x increases to the left and y downward; the view looks along z.
-  xy: () => quat.rotateY(quat.create(), quat.create(), Math.PI / 2),
-  // z increases to the right and x downward; the view looks along y.
-  xz: () => quat.rotateX(quat.create(), quat.create(), Math.PI / 2),
-  // z increases to the right and y downward; the view looks along x.
-  yz: () => quat.create(),
+  xy: () => viewRotation(axisX, axisY),
+  xz: () => viewRotation(axisX, axisZ),
+  yz: () => viewRotation(axisZ, axisY),
 };
 
 // Converts the viewer's (z, y, x) coordinates to a point.

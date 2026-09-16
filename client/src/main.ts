@@ -37,6 +37,23 @@ const board = new Board({
 
 showPosition(board, main);
 
+// While a card waits to be linked, the header says what to do next.
+const linkHint = document.querySelector<HTMLElement>("#link-hint")!;
+board.onLinkingChanged((linking) => {
+  linkHint.hidden = !linking;
+});
+
+// The three cross-sections this page had before it became a board, as one linked set.
+document
+  .querySelector<HTMLButtonElement>("#add-linked")!
+  .addEventListener("click", () => {
+    const { x, y } = board.pointAt(
+      element.getBoundingClientRect().left + 40,
+      element.getBoundingClientRect().top + 40,
+    );
+    board.addLinkedCards({ x: Math.round(x), y: Math.round(y) });
+  });
+
 // The hint stands in for the cards while the board is empty.
 board.onViewChanged(() => {
   hint.hidden = board.cards.length > 0;

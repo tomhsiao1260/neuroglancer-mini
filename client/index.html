@@ -12,12 +12,26 @@
         class="bg-gray-800 flex px-4 py-3 justify-between items-center gap-4 shrink-0"
       >
         <h1 class="text-xl font-bold shrink-0">Neuroglancer Mini</h1>
+        <div
+          id="link-hint"
+          hidden
+          class="text-sm text-blue-300 shrink-0"
+        >
+          Click another card to link it · Esc to give up
+        </div>
         <div class="text-xs text-gray-400 hidden sm:block">
           double click: new card · drag: move a card · alt + drag: pan the slice
           · wheel: change slice · ctrl + wheel: zoom the slice · drag the
           background: pan the board · wheel on the background: zoom the board
         </div>
         <div class="flex items-center gap-4 shrink-0">
+          <button
+            id="add-linked"
+            class="text-sm text-gray-300 hover:text-white border border-gray-600 rounded px-2 py-1"
+            title="Add three linked cards showing the XY, XZ and YZ planes"
+          >
+            + linked x/y/z
+          </button>
           <button
             id="source"
             class="text-sm text-gray-300 hover:text-white border border-gray-600 rounded px-2 py-1"
@@ -59,7 +73,9 @@
       <main class="flex-1 relative min-h-0">
         <div id="board">
           <div id="board-layer"></div>
-          <div id="board-hint">Double click anywhere to add a card</div>
+          <div id="board-hint">
+            Double click anywhere to add a card
+          </div>
         </div>
       </main>
     </div>

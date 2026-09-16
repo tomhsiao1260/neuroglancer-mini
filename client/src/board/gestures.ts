@@ -5,6 +5,7 @@
  *   - wheel outside a slice: zoom the board around the pointer
  *   - double click on the background: add a card there
  *   - left drag on a card: move it; with Alt over its slice: pan the slice
+ *   - click a card while linking: link it to the card the link started from
  *   - left drag on a card's corner: resize it
  *   - wheel over a slice: step through slices; with Control: zoom the slice (both left to the view)
  */
@@ -68,6 +69,10 @@ export function bindGestures(board: Board) {
       return;
     }
     if (event.button !== 0 || card === undefined) return;
+    if (board.linkFrom !== undefined) {
+      board.linkCards(board.linkFrom, card);
+      return;
+    }
     board.bringToFront(card);
     if (target.closest(".card-resize") !== null) {
       drag(event, board.transform.scale, (deltaX, deltaY) =>
@@ -107,6 +112,17 @@ export function bindGestures(board: Board) {
     },
     { passive: false },
   );
+
+  // A click on the background, and Escape, give up on linking.
+  element.addEventListener("pointerdown", (event) => {
+    if (board.linkFrom !== undefined && board.cardAt(event.target) === undefined) {
+      board.stopLinking();
+    }
+  });
+
+  window.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") board.stopLinking();
+  });
 
   element.addEventListener("dblclick", (event) => {
     if (board.cardAt(event.target) !== undefined) return;

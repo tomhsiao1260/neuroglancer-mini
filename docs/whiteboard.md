@@ -35,8 +35,11 @@ Each card also names its own data source, which the server serves per source
 (`server/src/utils/sources.ts`), and cards naming the same source share one volume, one download and
 one set of textures.
 
-What is left, in the order it is planned: linked cards sharing one navigation group, and the board
-saved on the server.
+Cards can also be linked: the cards of a group share one `NavigationGroup`, so they move together,
+and the group is created from the first volume one of its members shows, which is what the shared
+position is clamped against (`client/src/board/links.ts`).
+
+What is left: the board saved on the server.
 
 ## What already works
 

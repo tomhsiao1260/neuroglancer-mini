@@ -65,6 +65,50 @@
   color: #8b90a0;
 }
 
+.card-link {
+  padding: 0 4px;
+  border-radius: 4px;
+  color: #8b90a0;
+  cursor: pointer;
+}
+
+.card-link:hover {
+  color: white;
+  background-color: #ffffff1a;
+}
+
+.card-link.linked {
+  color: hsl(var(--group-hue) 70% 70%);
+}
+
+/* A linked card is marked in its group's colour. */
+.card.grouped {
+  border-color: hsl(var(--group-hue) 60% 45%);
+}
+
+.card.grouped .card-header {
+  background-color: hsl(var(--group-hue) 30% 18%);
+}
+
+/* While linking, the cards that can be linked to stand out and the source card is marked. */
+#board.linking .card {
+  outline: 1px dashed #ffffff59;
+  cursor: alias;
+}
+
+#board.linking .card.link-from {
+  outline: 2px solid #5b7cff;
+}
+
+/* The card waiting to be linked, and the badge of a card that can be linked to it. */
+#board.linking .card-link {
+  color: #a8bcff;
+}
+
+#board.linking .card.link-from .card-link {
+  color: #5b7cff;
+}
+
 .card-close {
   padding: 0 6px;
   border-radius: 4px;

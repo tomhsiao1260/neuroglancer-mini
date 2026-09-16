@@ -8,6 +8,7 @@ This branch builds an app on top of Neuroglancer Mini, a trimmed-down version of
 
 - [A Board of Cards](#a-board-of-cards)
 - [A Source per Card](#a-source-per-card)
+- [Linked Cards](#linked-cards)
 - [Coordinate Information](#coordinate-information)
 - [Local First Design](#local-first-design)
 - [Missing Chunks](#missing-chunks)
@@ -29,11 +30,10 @@ larger without showing more data, and they are drawn at the resolution they are 
 | ctrl + wheel over a card | zoom the slice |
 | drag the background, or middle drag | pan the board |
 | wheel over the background | zoom the board |
+| the ⛓ in a card's header | link this card to another, or unlink it |
 | the ✕ in a card's header | remove the card |
 
-Cards are independent for now. Linking them, so that a set of cards moves together as the three
-fixed views used to, and saving the board are the next steps (see
-[docs/whiteboard.md](docs/whiteboard.md)).
+Saving the board is the next step (see [docs/whiteboard.md](docs/whiteboard.md)).
 
 ### A Source per Card
 
@@ -51,6 +51,26 @@ A source is identified by that pair, so cards naming the same one show the same 
 are downloaded once and kept in one set of textures, however many cards look at them. The form also
 lists the sources already in use, to show the same data in another plane without typing the paths
 again. **Default source** in the header sets what a new card's form starts with.
+
+### Linked Cards
+
+Linked cards share one position and one zoom, so moving through the slices in one moves them all,
+each along its own plane. Click the ⛓ in a card's header and then click another card to link them;
+click the ⛓ again to unlink. Linked cards are marked in a colour of their own, and the badge counts
+them.
+
+**+ linked x/y/z** in the header adds three linked cards showing the XY, XZ and YZ planes — the three
+views this page had before it became a board. Giving one card of a linked set a source gives it to
+every card of the set that has none, so a new set only has to be told once where its data is.
+
+Every axis points the same way wherever it is shown — x to the right, y downward, z to the right in
+the YZ plane and downward in the XZ plane — so linked cards move with each other rather than against
+each other.
+
+Linking two sets merges them, and the larger set's position wins, so the smaller one jumps to it.
+Unlinking a card leaves it exactly where it was. Cards showing different sources may be linked: they
+then show the same voxel coordinates, which lines up only for volumes on the same grid (two scans of
+one scroll, say).
 
 ### Coordinate Information
 
@@ -120,6 +140,7 @@ straight from your disk.
   - `src/board/card.ts`: one card: its frame, its header, and the view inside it.
   - `src/board/gestures.ts`: all mouse input on the board, listed in [A Board of Cards](#a-board-of-cards).
   - `src/board/transform.ts`: the board's pan and zoom as a CSS transform, which the viewer measures.
+  - `src/board/links.ts`: the groups of linked cards, each holding the position and zoom its cards share.
   - `src/board/sources.ts`: the sources on the server, and one volume per source, shared by the cards that name it.
   - `src/board/source_panel.ts`: the form a card shows until it has a source.
   - `src/app/position_display.ts`: the coordinate panel in the bottom-right corner.
