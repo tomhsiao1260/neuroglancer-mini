@@ -35,7 +35,7 @@ import type { TypedArray } from "#src/util/array.js";
 import type { DataType } from "#src/util/data_type.js";
 import type { Borrowed, Disposer, Owned } from "#src/util/disposable.js";
 import { invokeDisposers, RefCounted } from "#src/util/disposable.js";
-import { kOneVec, mat4, vec3 } from "#src/util/geom.js";
+import { mat4, vec3 } from "#src/util/geom.js";
 import { NullarySignal, Signal } from "#src/util/signal.js";
 import { kEmptyFloat32Vec } from "#src/util/vector.js";
 import type { GL } from "#src/webgl/context.js";
@@ -148,11 +148,6 @@ function serializeTransformedSource(
 ) {
   return {
     source: tsource.source.addCounterpartRef(),
-    effectiveVoxelSize: tsource.effectiveVoxelSize,
-    lowerClipDisplayBound: tsource.lowerClipDisplayBound,
-    upperClipDisplayBound: tsource.upperClipDisplayBound,
-    lowerChunkDisplayBound: tsource.lowerChunkDisplayBound,
-    upperChunkDisplayBound: tsource.upperChunkDisplayBound,
     chunkLayout: tsource.chunkLayout.toObject(),
   };
 }
@@ -263,13 +258,11 @@ export class SliceView extends SliceViewBase<VolumeChunkSource> {
 
   forEachVisibleChunk(
     tsource: TransformedSource,
-    chunkLayout: ChunkLayout,
     callback: (key: string) => void,
   ) {
     forEachPlaneIntersectingVolumetricChunk(
       this.projectionParameters.value,
       tsource,
-      chunkLayout,
       () => {
         callback(tsource.curPositionInChunks.join());
       },
@@ -379,8 +372,6 @@ export function getVolumetricTransformedSources(
     const { chunkSource: source, chunkToMultiscaleTransform } =
       singleResolutionSource;
     const { spec } = source;
-    const lowerClipBound = spec.lowerVoxelBound;
-    const upperClipBound = spec.upperVoxelBound;
     // Chunk-to-view transform: the first three rows of `chunkToMultiscaleTransform` (4x4,
     // column-major), with (0, 0, 0, 1) as the last row.
     const chunkToViewTransform = mat4.create();
@@ -390,35 +381,14 @@ export function getVolumetricTransformedSources(
           chunkToMultiscaleTransform[col * 4 + row];
       }
     }
-    const lowerChunkDisplayBound = vec3.create();
-    const upperChunkDisplayBound = vec3.create();
-    const lowerClipDisplayBound = vec3.create();
-    const upperClipDisplayBound = vec3.create();
-    // Size of chunk in "display" coordinate space.
-    const chunkDisplaySize = vec3.create();
+    // Size of a chunk in the chunk coordinate space, i.e. in voxels of this scale.
+    const chunkSize = vec3.create();
     for (let i = 0; i < rank; ++i) {
-      chunkDisplaySize[i] = spec.chunkDataSize[i];
-      lowerChunkDisplayBound[i] = spec.lowerChunkBound[i];
-      upperChunkDisplayBound[i] = spec.upperChunkBound[i];
-      lowerClipDisplayBound[i] = lowerClipBound[i];
-      upperClipDisplayBound[i] = upperClipBound[i];
+      chunkSize[i] = spec.chunkDataSize[i];
     }
-    const chunkLayout = new ChunkLayout(chunkDisplaySize, chunkToViewTransform);
-    // This is an approximation of the voxel size (exact only for permutation/scaling
-    // transforms).  It would be better to model the voxel as an ellipsiod and find the
-    // lengths of the axes.
-    const effectiveVoxelSize = chunkLayout.localSpatialVectorToGlobal(
-      vec3.create(),
-      /*baseVoxelSize=*/ kOneVec,
-    );
     return {
       source,
-      lowerChunkDisplayBound,
-      upperChunkDisplayBound,
-      lowerClipDisplayBound,
-      upperClipDisplayBound,
-      effectiveVoxelSize,
-      chunkLayout,
+      chunkLayout: new ChunkLayout(chunkSize, chunkToViewTransform),
       curPositionInChunks: new Float32Array(rank),
     };
   };

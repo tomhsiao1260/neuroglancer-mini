@@ -9,7 +9,6 @@
 import { ChunkState } from "#src/chunk_manager/base.js";
 import type { ChunkManager } from "#src/chunk_manager/frontend.js";
 import type {
-  ChunkLayout,
   ProjectionParameters,
   TransformedSource,
 } from "#src/render/base.js";
@@ -273,8 +272,8 @@ function beginSource(
   sliceView: SliceView,
   dataToDeviceMatrix: mat4,
   tsource: TransformedSource,
-  chunkLayout: ChunkLayout,
 ) {
+  const { chunkLayout } = tsource;
   const projectionParameters = sliceView.projectionParameters.value;
   const { centerDataPosition } = projectionParameters;
 
@@ -293,14 +292,11 @@ function beginSource(
     mat4.multiply(tempMat4, dataToDeviceMatrix, chunkLayout.transform),
   );
 
-  gl.uniform3fv(
-    shader.uniform("uLowerClipBound"),
-    tsource.lowerClipDisplayBound,
-  );
-  gl.uniform3fv(
-    shader.uniform("uUpperClipBound"),
-    tsource.upperClipDisplayBound,
-  );
+  // The volume may end inside its last chunk along a dimension; the shader clips the polygon to
+  // these bounds so that the padding of such a chunk is not drawn.
+  const { lowerVoxelBound, upperVoxelBound } = tsource.source.spec;
+  gl.uniform3fv(shader.uniform("uLowerClipBound"), lowerVoxelBound);
+  gl.uniform3fv(shader.uniform("uUpperClipBound"), upperVoxelBound);
 }
 
 // ---------------------------------------------------------------------------------------------------
@@ -480,10 +476,9 @@ export class ImageRenderLayer extends RefCounted {
         sliceView,
         projectionParameters.viewProjectionMat,
         transformedSource,
-        chunkLayout,
       );
       newSource = true;
-      sliceView.forEachVisibleChunk(transformedSource, chunkLayout, (key) => {
+      sliceView.forEachVisibleChunk(transformedSource, (key) => {
         const chunk = chunks.get(key);
         if (chunk && chunk.state === ChunkState.GPU_MEMORY) {
           if (chunk.chunkDataSize !== chunkDataSize) {

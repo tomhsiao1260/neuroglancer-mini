@@ -16,6 +16,7 @@ import type { DataType } from "#src/util/data_type.js";
 import type { Disposable } from "#src/util/disposable.js";
 import {
   isAABBIntersectingPlane,
+  kOneVec,
   mat4,
   transformVectorByMat4,
   vec3,
@@ -102,6 +103,14 @@ export class ChunkLayout {
    */
   invTransform: mat4;
 
+  /**
+   * Size of one voxel of this scale in global voxels, which decides the zoom levels at which the
+   * scale is shown (see `filterVisibleSources`).  This is an approximation of the voxel size (exact
+   * only for permutation/scaling transforms).  It would be better to model the voxel as an
+   * ellipsiod and find the lengths of the axes.
+   */
+  effectiveVoxelSize: vec3;
+
   constructor(size: vec3, transform: mat4) {
     this.size = vec3.clone(size);
     this.transform = mat4.clone(transform);
@@ -111,6 +120,10 @@ export class ChunkLayout {
       throw new Error("Transform is singular");
     }
     this.invTransform = invTransform;
+    this.effectiveVoxelSize = this.localSpatialVectorToGlobal(
+      vec3.create(),
+      /*baseVoxelSize=*/ kOneVec,
+    );
   }
 
   toObject() {
@@ -137,29 +150,16 @@ export class ChunkLayout {
 }
 
 /**
- * One scale of a volume, together with how its chunk grid sits in the view.
+ * One scale of a volume, together with how its chunk grid sits in the view.  The bounds of the grid
+ * and the voxel size are not repeated here: they come from `source.spec` and `chunkLayout`, which
+ * both threads have.
  */
 export interface TransformedSource<
   Source extends SliceViewChunkSource = SliceViewChunkSource,
 > {
   source: Source;
 
-  /**
-   * Approximate voxel size in each of the display dimensions.
-   */
-  effectiveVoxelSize: vec3;
-
   chunkLayout: ChunkLayout;
-
-  // Lower clip bound (in voxels) in the "display" subspace of the chunk coordinate space.
-  lowerClipDisplayBound: vec3;
-  // Upper clip bound (in voxels) in the "display" subspace of the chunk coordinate space.
-  upperClipDisplayBound: vec3;
-
-  // Lower bound (in chunks) within the "display" subspace of the chunk coordinate space.
-  lowerChunkDisplayBound: vec3;
-  // Upper bound (in chunks) within the "display" subspace of the chunk coordinate space.
-  upperChunkDisplayBound: vec3;
 
   // While `forEachPlaneIntersectingVolumetricChunk` calls its callback, the position of the chunk in
   // the chunk grid.
@@ -294,7 +294,7 @@ export function* filterVisibleSources<T extends TransformedSource<any>>(
   // Increase pixel size by a small margin.
   pixelSize *= 1.1;
   // The voxel size of the finest scale is the base voxel size.
-  const smallestVoxelSize = sources[0].effectiveVoxelSize;
+  const smallestVoxelSize = sources[0].chunkLayout.effectiveVoxelSize;
 
   /**
    * Determines whether we should continue to look for a finer-resolution source *after* one
@@ -331,24 +331,19 @@ export function* filterVisibleSources<T extends TransformedSource<any>>(
   let prevVoxelSize: vec3 | undefined;
   while (true) {
     const transformedSource = sources[scaleIndex];
+    const { effectiveVoxelSize } = transformedSource.chunkLayout;
     if (
       prevVoxelSize !== undefined &&
-      !improvesOnPrevVoxelSize(
-        transformedSource.effectiveVoxelSize,
-        prevVoxelSize,
-      )
+      !improvesOnPrevVoxelSize(effectiveVoxelSize, prevVoxelSize)
     ) {
       break;
     }
     yield transformedSource;
 
-    if (
-      scaleIndex === 0 ||
-      !canImproveOnVoxelSize(transformedSource.effectiveVoxelSize)
-    ) {
+    if (scaleIndex === 0 || !canImproveOnVoxelSize(effectiveVoxelSize)) {
       break;
     }
-    prevVoxelSize = transformedSource.effectiveVoxelSize;
+    prevVoxelSize = effectiveVoxelSize;
     --scaleIndex;
   }
 }
@@ -386,10 +381,10 @@ function forEachVolumetricChunkWithinFrustrum(
 ) {
   const lower = tempVisibleVolumetricChunkLower;
   const upper = tempVisibleVolumetricChunkUpper;
-  const { lowerChunkDisplayBound, upperChunkDisplayBound } = transformedSource;
+  const { lowerChunkBound, upperChunkBound } = transformedSource.source.spec;
   for (let i = 0; i < 3; ++i) {
-    lower[i] = Math.max(lower[i], lowerChunkDisplayBound[i]);
-    upper[i] = Math.min(upper[i], upperChunkDisplayBound[i]);
+    lower[i] = Math.max(lower[i], lowerChunkBound[i]);
+    upper[i] = Math.min(upper[i], upperChunkBound[i]);
   }
   const { curPositionInChunks } = transformedSource;
 
@@ -446,9 +441,9 @@ function forEachVolumetricChunkWithinFrustrum(
 export function forEachPlaneIntersectingVolumetricChunk(
   projectionParameters: ProjectionParameters,
   transformedSource: TransformedSource<any>,
-  chunkLayout: ChunkLayout,
   callback: (positionInChunks: vec3) => void,
 ) {
+  const { chunkLayout } = transformedSource;
   const { size: chunkSize } = chunkLayout;
   const modelViewProjection = mat4.multiply(
     tempVisibleVolumetricModelViewProjection,

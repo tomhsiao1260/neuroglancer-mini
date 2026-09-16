@@ -148,7 +148,6 @@ export class SliceViewBackend extends SliceViewIntermediateBase {
       forEachPlaneIntersectingVolumetricChunk(
         projectionParameters,
         tsource,
-        chunkLayout,
         (positionInChunks) => {
           vec3.multiply(tempChunkPosition, positionInChunks, chunkSize);
           const priority = -vec3.distance(localCenter, tempChunkPosition);
@@ -248,11 +247,6 @@ function deserializeTransformedSource(
   return {
     source,
     chunkLayout: ChunkLayout.fromObject(serializedSource.chunkLayout),
-    lowerClipDisplayBound: serializedSource.lowerClipDisplayBound,
-    upperClipDisplayBound: serializedSource.upperClipDisplayBound,
-    lowerChunkDisplayBound: serializedSource.lowerChunkDisplayBound,
-    upperChunkDisplayBound: serializedSource.upperChunkDisplayBound,
-    effectiveVoxelSize: serializedSource.effectiveVoxelSize,
     curPositionInChunks: new Float32Array(source.spec.rank),
   };
 }
@@ -381,9 +375,13 @@ function getPrefetchChunkOffsets(
   // Maps a change of the global position (in viewer coordinates) to a change in chunk coordinates
   // (voxels of this scale): `invTransform[globalDim * 4 + chunkDim]`.
   const { invTransform } = tsource.chunkLayout;
-  const { lowerClipDisplayBound, upperClipDisplayBound } = tsource;
 
-  const { rank: chunkRank, chunkDataSize } = tsource.source.spec;
+  const {
+    rank: chunkRank,
+    chunkDataSize,
+    lowerVoxelBound,
+    upperVoxelBound,
+  } = tsource.source.spec;
   const { mean: meanVec, variance: varianceVec } = velocityEstimator;
   for (let chunkDim = 0; chunkDim < chunkRank; ++chunkDim) {
     let mean = 0;
@@ -414,9 +412,8 @@ function getPrefetchChunkOffsets(
     const cdf = (x: number) =>
       0.5 * (1 + erf((x - adjustedMean) / adjustedStddevTimesSqrt2));
 
-    const minChunk = Math.floor(lowerClipDisplayBound[chunkDim] / chunkSize);
-    const maxChunk =
-      Math.ceil(upperClipDisplayBound[chunkDim] / chunkSize) - 1;
+    const minChunk = Math.floor(lowerVoxelBound[chunkDim] / chunkSize);
+    const maxChunk = Math.ceil(upperVoxelBound[chunkDim] / chunkSize) - 1;
     let groupStart = offsets.length;
     for (let i = 1; i <= MAX_SINGLE_DIRECTION_PREFETCH_CHUNKS; ++i) {
       const probability = 1 - cdf(i);
