@@ -1,6 +1,6 @@
 # Neuroglancer Mini
 
-A reduced copy of the [Neuroglancer](https://github.com/google/neuroglancer) source that views one OME-Zarr volume as cross-sections: about 138,000 lines of TypeScript and JavaScript under its `src/` (tests excluded) down to about 6,750 lines. `viewer/` is the library, `example/` is a demo page that uses it.
+A reduced copy of the [Neuroglancer](https://github.com/google/neuroglancer) source that views OME-Zarr volumes as cross-sections: about 138,000 lines of TypeScript and JavaScript under its `src/` (tests excluded) down to about 6,950 lines. `viewer/` is the library, `example/` is a demo page that uses it.
 
 The chunk state machine, priority tiers, multiscale selection, prefetching, the worker split and the WebGL slice rendering are all still there. What is not needed to put one volume on the screen is gone. At this size the whole path can be read end to end: which chunks are downloaded, in what order, and how they reach a texture.
 
@@ -34,20 +34,24 @@ A build of `example/` also runs at [neuroglancer-mini.vercel.app](https://neurog
 ## Library
 
 ```ts
-import { Viewer } from "viewer";
+import { NavigationGroup, Viewer } from "viewer";
 
-const viewer = new Viewer({ container, store: { kind: "http", url } });
-viewer.addView(leftElement, "xy");
-viewer.addView(rightElement, "yz");
-await viewer.loaded;
-viewer.setPosition({ x: 3000, y: 3000, z: 7000 });
+const viewer = new Viewer({ container });
+const volume = viewer.addVolume({ kind: "http", url });
+const navigation = new NavigationGroup(volume);
+viewer.addView(leftElement, { volume, orientation: "xy", navigation });
+viewer.addView(rightElement, { volume, orientation: "yz", navigation });
+await volume.loaded;
+navigation.setPosition({ x: 3000, y: 3000, z: 7000 });
 ```
 
-- `new Viewer({ container, store, onMissingChunk? })` creates the canvas, the worker and the chunk manager and starts loading. `store` is `{ kind: "http", url }` or `{ kind: "directory", handle }`. `viewer.loaded` resolves when the metadata is read.
-- `addView(element, "xy" | "xz" | "yz")` draws a cross-section where the element is on the page; any CSS layout works as long as the element is inside the container. Views can be added and removed at runtime and share one position and zoom. `view.dispose()` removes one.
-- `position` / `setPosition({ x, y, z })`, `zoom` / `setZoom(voxelsPerPixel)`, `onViewChanged(cb)`, `onPointerMove(cb)`. Points are in full-resolution voxels; `x`, `y`, `z` are the last, middle and first zarr dimensions, and voxel `(i, j, k)` is centered on `{ x: i, y: j, z: k }`.
+- `new Viewer({ container })` creates the WebGL context, the worker and the chunk manager. View elements must lie inside the container.
+- `addVolume(store, { onMissingChunk? })` starts loading a volume; `store` is `{ kind: "http", url }` or `{ kind: "directory", handle }`, and `volume.loaded` resolves when its metadata is read. A viewer can hold several volumes, sharing one worker and one set of memory limits.
+- `new NavigationGroup(volume)` is a position and a zoom, with `position` / `setPosition({ x, y, z })`, `zoom` / `setZoom(voxelsPerPixel)` and `onViewChanged(cb)`. The volume it is created with fixes the coordinates. Points are in full-resolution voxels; `x`, `y`, `z` are the last, middle and first zarr dimensions, and voxel `(i, j, k)` is centered on `{ x: i, y: j, z: k }`.
+- `addView(element, { volume, orientation, navigation })` draws a cross-section in a canvas of its own inside the element; any CSS layout works. Views given the same group show the same place and move together; a view of its own gets a group of its own. Views can be added and removed at runtime, and `view.dispose()` removes one. A view whose element is moved rather than resized needs `viewer.invalidateBounds()`, and a CSS transform that magnifies a view shows the same data larger rather than more data.
 - `onMissingChunk({ key })` is called once per chunk file that is not in the store. Return `true` once the file has been added and the chunk is fetched again. The forward branch uses this to download a scroll lazily.
 - `isReady()` is true when every view has all of its chunks on the GPU. `chunkManager.chunkQueueManager.enablePrefetch.value = false` requests only what is visible, and `logStatistics.value = true` logs chunk counts and memory use from the worker.
+- `view.handleInput` can decline any mouse event, so the page can use it for something of its own, and `view.stepSlices`, `view.translateByViewportPixels`, `view.zoomByMouse` and `view.pointAt` then drive the slice instead.
 
 For another Vite app, put `viewer/` next to it and copy from `example/`: the `viewer` alias plus `server.fs.allow: [".."]` and `worker.format: "es"` in `vite.config.ts`, the same `paths` entry in `tsconfig.json`, and `"postinstall": "npm install --prefix ../viewer"`.
 
@@ -73,11 +77,11 @@ Two threads. The main thread owns the canvas, the views and mouse input. A worke
 4. **Queueing** (`chunk_manager/backend.ts`). Chunks carry a tier (`VISIBLE`, `PREFETCH`, `RECENT`) and a priority, and move through `QUEUED → DOWNLOADING → SYSTEM_MEMORY_WORKER → GPU_MEMORY` while capacity allows, evicting lower-priority chunks. Chunks that are no longer requested drop to `RECENT` and are kept in LRU order. Priorities are recomputed on every view change and every 200 ms while chunks keep moving to or from the GPU, so the velocity estimate decays when the view stops.
 5. **Download** (`datasource/zarr/backend.ts`, `store.ts`). One chunk file per request; 429, 503 and 504 are retried with increasing delays. A cancelled download is aborted at the network level and leaves the chunk object alone, since it may already have been recycled.
 6. **Upload** (`chunk_manager/frontend.ts`). Chunk data is transferred to the main thread in a `Chunk.update` message and uploaded to a 3-D texture in 30 ms time slices. While the view moves, uploads start only within 10 ms of a change and otherwise wait for the next frame.
-7. **Draw** (`render/renderlayer.ts`). Per chunk on the GPU, the vertex shader computes the polygon where the plane cuts the chunk's box and the fragment shader samples the texture. Finer scales draw over coarser ones, with the depth buffer keeping the coarse fill-in behind them.
+7. **Draw** (`render/renderlayer.ts`, `render/panel.ts`). Per chunk on the GPU, the vertex shader computes the polygon where the plane cuts the chunk's box and the fragment shader samples the texture. Finer scales draw over coarser ones, with the depth buffer keeping the coarse fill-in behind them. All views draw into one WebGL surface that is not in the page, one after another, and each copies its own rectangle into a canvas inside its element — so a view is an ordinary element that can be styled, stacked and clipped.
 
 ## Code map
 
-- `render/`: cross-section views. `base.ts` (projection parameters, chunk layout, chunk specification, scale selection, plane–chunk iteration), `frontend.ts` (`SliceView`, textures), `backend.ts` (chunk requests), `chunk_format.ts` (chunk as a 3-D texture; missing chunks share one fill-value texture), `renderlayer.ts` (the shaders), `panel.ts` (shared canvas, one view's region, mouse input, visibility).
+- `render/`: cross-section views. `base.ts` (projection parameters, chunk layout, chunk specification, scale selection, plane–chunk iteration), `frontend.ts` (`SliceView`, textures), `backend.ts` (chunk requests), `chunk_format.ts` (chunk as a 3-D texture; missing chunks share one fill-value texture), `renderlayer.ts` (the shaders), `panel.ts` (the shared WebGL surface, each view's own canvas, mouse input, visibility).
 - `chunk_manager/`: `base.ts` (states, tiers, capacities), `backend.ts` (`Chunk`, `ChunkSource`, the queues, priority recomputation), `frontend.ts` (`Chunk.update` handling, shared chunk sources). `README.md` is the original Neuroglancer note on states and tiers.
 - `datasource/zarr/`: `ome.ts`, `metadata.ts`, `frontend.ts`, `backend.ts`, `decode.ts`, `store.ts` (`HttpStore`, `DirectoryStore`).
 - `worker/`: `chunk_worker.bundle.js`, the decode pool (`decode_pool.ts`, `decode_blosc.ts`, `decode_worker.bundle.js`, up to `min(12, cores)` workers), `worker_rpc.ts`, `shared_watchable_value.ts`.

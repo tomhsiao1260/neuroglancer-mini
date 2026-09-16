@@ -187,7 +187,7 @@ export class SliceView extends SliceViewBase<VolumeChunkSource> {
     super(
       new DerivedProjectionParameters(navigationState, (out, navigationState) => {
         const { invViewMatrix, centerDataPosition } = out;
-        navigationState.toMat4(invViewMatrix);
+        navigationState.toMat4(invViewMatrix, out.pixelScale);
         for (let i = 0; i < 3; ++i) {
           centerDataPosition[i] = invViewMatrix[12 + i];
         }
@@ -259,6 +259,11 @@ export class SliceView extends SliceViewBase<VolumeChunkSource> {
       layer.dispose();
       this.layer = undefined;
     }
+    // The references `getSources` added, one per scale.  The worker keeps the chunks of a source
+    // until it needs the memory, so a view added again on the same volume redraws without
+    // downloading anything.
+    for (const { source } of this.sources) source.dispose();
+    this.sources = [];
     this.projectionParameters.dispose();
     super.disposed();
   }
@@ -294,6 +299,7 @@ export class SliceView extends SliceViewBase<VolumeChunkSource> {
       return;
     }
     const renderLayer = this.renderLayer.value;
+    // A view shows one volume for its whole life, so the first layer it is given is the only one.
     if (renderLayer !== undefined && this.layer === undefined) {
       this.sources = getVolumetricTransformedSources(renderLayer.getSources());
       this.layer = renderLayer.addRef();
@@ -325,14 +331,17 @@ export class SliceView extends SliceViewBase<VolumeChunkSource> {
   }
 
   /**
-   * Whether every chunk this view would draw is already on the GPU, i.e. the view shows its data
-   * with nothing still loading.  Tests and screenshots poll it instead of waiting a fixed time.  A
-   * chunk whose download failed never becomes ready.
+   * Whether the view's volume has loaded and every chunk the view would draw is already on the GPU,
+   * i.e. it shows its data with nothing still loading.  Tests and screenshots poll it instead of
+   * waiting a fixed time.  A chunk whose download failed never becomes ready.
    */
   isReady() {
     const { width, height } = this.projectionParameters.value;
     if (!this.valid || width === 0 || height === 0) return false;
     this.updateLayer.flush();
+    // A view whose volume is still loading has nothing to show yet, and would otherwise count as
+    // ready because it has no sources to check.
+    if (this.layer === undefined) return false;
     this.updateVisibleSources();
     for (const tsource of this.visibleSources) {
       const { chunks } = tsource.source;

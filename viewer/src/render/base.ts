@@ -30,14 +30,24 @@ export const PROJECTION_PARAMETERS_RPC_ID = "SharedProjectionParameters";
 export const PROJECTION_PARAMETERS_CHANGED_RPC_METHOD_ID =
   "SharedProjectionParameters.changed";
 
-// The size of a panel, in canvas pixels.
+// The size of a panel, in screen pixels.
 export class RenderViewport {
   width = 0;
   height = 0;
+  /**
+   * Screen pixels per pixel of the panel's own layout, above 1 when a CSS transform on an ancestor
+   * magnifies the panel (a board of panels that zooms).  The panel then shows the same data in more
+   * pixels rather than more data, so the zoom of its navigation state is divided by this.
+   */
+  pixelScale = 1;
 }
 
 export function renderViewportsEqual(a: RenderViewport, b: RenderViewport) {
-  return a.width === b.width && a.height === b.height;
+  return (
+    a.width === b.width &&
+    a.height === b.height &&
+    a.pixelScale === b.pixelScale
+  );
 }
 
 /**

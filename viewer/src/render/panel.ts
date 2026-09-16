@@ -15,35 +15,26 @@ import type { GL } from "#src/webgl/context.js";
 import { initializeWebGL } from "#src/webgl/context.js";
 
 /**
- * The canvas shared by all panels, covering `container`.  After `scheduleRedraw`, `draw` runs on
- * the next animation frame and lets each panel draw into its own region of the canvas.
+ * The WebGL context shared by all panels.  It draws into one surface that is not part of the page:
+ * after `scheduleRedraw`, `draw` runs on the next animation frame and, for each panel, draws its
+ * slice at the surface's origin and copies it into the panel's own canvas.  Panels are therefore
+ * ordinary elements, which may be styled, stacked and clipped like any others, and the surface only
+ * has to be as large as the largest panel.
  */
 export class DisplayContext extends RefCounted {
-  canvas = document.createElement("canvas");
   gl: GL;
   panels = new Set<SliceViewPanel>();
-  // Incremented when a panel is added, or the container or a panel changes size; the canvas size
-  // and panel bounds are then recomputed.
+  // Incremented when a panel is added, moved or resized; the panel bounds are then measured again.
   resizeGeneration = 0;
-  boundsGeneration = -1;
-  // Where the canvas is on the page, as of the last bounds update.
-  canvasRect = new DOMRect();
   // Dispatched when a frame starts drawing.
   updateStarted = new NullarySignal();
-  private resizeObserver = new ResizeObserver(() => this.handleResize());
+  // Where the slices are drawn before being copied into the panels' own canvases.
+  readonly surface = document.createElement("canvas");
+  private resizeObserver = new ResizeObserver(() => this.invalidateBounds());
 
   constructor(public container: HTMLElement) {
     super();
-    const { canvas } = this;
-    container.style.position = "relative";
-    canvas.style.position = "absolute";
-    canvas.style.top = "0px";
-    canvas.style.left = "0px";
-    canvas.style.width = "100%";
-    canvas.style.height = "100%";
-    canvas.style.zIndex = "0";
-    container.appendChild(canvas);
-    this.gl = initializeWebGL(canvas);
+    this.gl = initializeWebGL(this.surface);
     this.resizeObserver.observe(container);
     this.registerDisposer(() => this.resizeObserver.disconnect());
   }
@@ -51,16 +42,21 @@ export class DisplayContext extends RefCounted {
   addPanel(panel: SliceViewPanel) {
     this.panels.add(panel);
     this.resizeObserver.observe(panel.element);
-    this.handleResize();
+    this.invalidateBounds();
   }
 
   removePanel(panel: SliceViewPanel) {
     this.panels.delete(panel);
     this.resizeObserver.unobserve(panel.element);
-    this.handleResize();
+    this.invalidateBounds();
   }
 
-  private handleResize() {
+  /**
+   * Measures every panel again on the next frame.  Panel bounds are measured only when a panel is
+   * added or resized, so an app that moves a panel without resizing it — panning a board of panels,
+   * scrolling the page — has to say so.
+   */
+  invalidateBounds() {
     ++this.resizeGeneration;
     this.scheduleRedraw();
   }
@@ -69,44 +65,31 @@ export class DisplayContext extends RefCounted {
     animationFrameDebounce(() => this.draw()),
   );
 
-  ensureBoundsUpdated() {
-    const { resizeGeneration } = this;
-    if (this.boundsGeneration === resizeGeneration) return;
-    const { canvas } = this;
-    canvas.width = canvas.offsetWidth;
-    canvas.height = canvas.offsetHeight;
-    this.canvasRect = canvas.getBoundingClientRect();
-    this.boundsGeneration = resizeGeneration;
-  }
-
   draw() {
-    const { gl } = this;
     this.updateStarted.dispatch();
-    this.ensureBoundsUpdated();
-    gl.clearColor(0.0, 0.0, 0.0, 0.0);
-    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
     for (const panel of this.panels) {
       if (panel.visibility.value === Number.NEGATIVE_INFINITY) continue;
       panel.ensureBoundsUpdated();
-      const { renderViewport } = panel;
-      if (renderViewport.width === 0 || renderViewport.height === 0) continue;
+      const { width, height } = panel.renderViewport;
+      if (width === 0 || height === 0) continue;
+      this.growSurface(width, height);
       panel.draw();
     }
+  }
 
-    // Ensure the alpha buffer is set to 1.
-    gl.disable(gl.SCISSOR_TEST);
-    gl.clearColor(1.0, 1.0, 1.0, 1.0);
-    gl.colorMask(false, false, false, true);
-    gl.clear(gl.COLOR_BUFFER_BIT);
-    gl.colorMask(true, true, true, true);
+  // Panels draw one at a time, so the surface only has to hold the largest of them.  Resizing it
+  // reallocates the drawing buffer, so it never shrinks.
+  private growSurface(width: number, height: number) {
+    const { surface } = this;
+    if (surface.width >= width && surface.height >= height) return;
+    surface.width = Math.max(surface.width, width);
+    surface.height = Math.max(surface.height, height);
   }
 }
 
 export interface SliceViewerState {
   display: DisplayContext;
   chunkManager: ChunkManager;
-  // The render layer that draws the volume; `undefined` until the volume has loaded.
-  renderLayer: WatchableValueInterface<ImageRenderLayer | undefined>;
 }
 
 const tempVec3 = vec3.create();
@@ -142,12 +125,14 @@ function getWheelZoomAmount(event: WheelEvent) {
 }
 
 /**
- * One cross-section view.  Its `SliceView` draws into the part of the shared canvas covered by
- * `element`.  Mouse input on `element` becomes navigation:
+ * One cross-section view, drawn into a canvas of its own inside `element`.  Mouse input on
+ * `element` becomes navigation:
  *
  *   - left drag: pan
  *   - wheel: move one voxel along the viewing direction
  *   - control+wheel: zoom around the mouse position
+ *
+ * `handleInput` lets the page take any of them over.
  */
 export class SliceViewPanel extends RefCounted {
   gl: GL = this.viewer.display.gl;
@@ -155,13 +140,18 @@ export class SliceViewPanel extends RefCounted {
   // Generation used to check whether the following bounds-related fields are up to date.
   boundsGeneration = -1;
 
-  // Offset of visible portion of panel in canvas pixels from left side of canvas.
-  canvasRelativeClippedLeft = 0;
-
-  // Offset of visible portion of panel in canvas pixels from top of canvas.
-  canvasRelativeClippedTop = 0;
-
   renderViewport = new RenderViewport();
+
+  /**
+   * Whether the view handles `event` itself.  Return `false` to leave it to the page, so that a
+   * board of views can take the wheel for its own zoom, say; the view then does not stop the event.
+   * By default the view handles all of them.
+   */
+  handleInput: ((event: MouseEvent) => boolean) | undefined;
+
+  // The canvas the slice is copied into, filling `element`.
+  private canvas = document.createElement("canvas");
+  private context: CanvasRenderingContext2D;
 
   /**
    * How much this panel's chunks are worth loading: `POSITIVE_INFINITY` while the panel is on
@@ -179,12 +169,28 @@ export class SliceViewPanel extends RefCounted {
   constructor(
     public element: HTMLElement,
     public navigationState: NavigationState,
+    // The layer that draws the volume this view shows; `undefined` until the volume has loaded.
+    renderLayer: WatchableValueInterface<ImageRenderLayer | undefined>,
     public viewer: SliceViewerState,
   ) {
     super();
-    const { display, chunkManager, renderLayer } = viewer;
+    const { display, chunkManager } = viewer;
     display.addPanel(this);
     this.registerDisposer(() => display.removePanel(this));
+
+    const { canvas } = this;
+    canvas.style.position = "absolute";
+    canvas.style.left = "0px";
+    canvas.style.top = "0px";
+    canvas.style.width = "100%";
+    canvas.style.height = "100%";
+    canvas.style.display = "block";
+    if (getComputedStyle(element).position === "static") {
+      element.style.position = "relative";
+    }
+    element.appendChild(canvas);
+    this.context = canvas.getContext("2d")!;
+    this.registerDisposer(() => canvas.remove());
 
     const updateVisibility = () => {
       this.visibility.value = this.onScreen
@@ -213,6 +219,10 @@ export class SliceViewPanel extends RefCounted {
       { root: display.container, rootMargin: NEAR_SCREEN_MARGIN },
       (intersecting) => (this.nearScreen = intersecting),
     );
+    // A panel whose visibility changed has moved, so its bounds are stale and no frame is scheduled.
+    this.registerDisposer(
+      this.visibility.changed.add(() => display.invalidateBounds()),
+    );
 
     this.sliceView = this.registerDisposer(
       new SliceView(chunkManager, renderLayer, navigationState, this.visibility),
@@ -222,26 +232,28 @@ export class SliceViewPanel extends RefCounted {
       this.sliceView.viewChanged.add(() => display.scheduleRedraw()),
     );
 
+    // The canvas covers the element, so the slice itself is the target of both.
+    const onSlice = (event: MouseEvent) =>
+      event.target === canvas || event.target === element;
+
     const onMouseDown = (event: MouseEvent) => {
-      if (event.target !== element || event.button !== 0) return;
-      if (!hasNoModifiers(event)) return;
+      if (!onSlice(event) || event.button !== 0) return;
+      if (!hasNoModifiers(event) || this.handleInput?.(event) === false) return;
       event.stopPropagation();
       this.startDrag(event);
       event.preventDefault();
     };
 
     const onWheel = (event: WheelEvent) => {
+      if (this.handleInput?.(event) === false) return;
       if (hasOnlyControl(event)) {
         event.stopPropagation();
         this.zoomByMouse(event, getWheelZoomAmount(event));
         event.preventDefault();
-      } else if (event.target === element && hasNoModifiers(event)) {
+      } else if (onSlice(event) && hasNoModifiers(event)) {
         event.stopPropagation();
         const delta = event.deltaY !== 0 ? event.deltaY : event.deltaX;
-        tempVec3[0] = 0;
-        tempVec3[1] = 0;
-        tempVec3[2] = delta > 0 ? -1 : 1;
-        this.navigationState.translateVoxelsRelative(tempVec3);
+        this.stepSlices(delta > 0 ? -1 : 1);
         event.preventDefault();
       }
     };
@@ -280,6 +292,12 @@ export class SliceViewPanel extends RefCounted {
     document.addEventListener("pointercancel", stop, false);
   }
 
+  // Moves `count` voxels along the viewing direction, which is what the wheel does by default.
+  stepSlices(count: number) {
+    vec3.set(tempVec3, 0, 0, count);
+    this.navigationState.translateVoxelsRelative(tempVec3);
+  }
+
   translateByViewportPixels(deltaX: number, deltaY: number): void {
     this.navigationState.updateDisplayPosition((pos: vec3) => {
       vec3.set(pos, -deltaX, -deltaY, 0);
@@ -291,47 +309,44 @@ export class SliceViewPanel extends RefCounted {
     });
   }
 
+  // Draws the slice into the shared surface and copies it into the panel's own canvas, which the
+  // next panel's drawing would otherwise overwrite.
   draw() {
-    const { sliceView } = this;
+    const { sliceView, gl, canvas, context } = this;
     if (!sliceView.valid) {
       return;
     }
-    this.setGLClippedViewport();
-    sliceView.draw();
-  }
-
-  // Limits drawing to the part of the canvas under the panel's element.
-  setGLClippedViewport() {
-    const {
-      gl,
-      canvasRelativeClippedTop,
-      canvasRelativeClippedLeft,
-      renderViewport: { width, height },
-    } = this;
-    const bottom = canvasRelativeClippedTop + height;
+    const { surface } = this.viewer.display;
+    const { width, height } = this.renderViewport;
+    // The surface may be larger than the slice; drawing in its top-left corner (GL counts rows from
+    // the bottom) is where the copy below reads from.
     gl.enable(WebGL2RenderingContext.SCISSOR_TEST);
-    const glBottom = this.viewer.display.canvas.height - bottom;
-    gl.viewport(canvasRelativeClippedLeft, glBottom, width, height);
-    gl.scissor(canvasRelativeClippedLeft, glBottom, width, height);
+    gl.viewport(0, surface.height - height, width, height);
+    gl.scissor(0, surface.height - height, width, height);
+    sliceView.draw();
+    if (canvas.width !== width || canvas.height !== height) {
+      canvas.width = width;
+      canvas.height = height;
+    }
+    context.drawImage(surface, 0, 0, width, height, 0, 0, width, height);
   }
 
   ensureBoundsUpdated() {
     const { display } = this.viewer;
-    display.ensureBoundsUpdated();
-    if (display.boundsGeneration === this.boundsGeneration) return;
-    this.boundsGeneration = display.boundsGeneration;
+    if (display.resizeGeneration === this.boundsGeneration) return;
+    this.boundsGeneration = display.resizeGeneration;
 
-    const clientRect = this.element.getBoundingClientRect();
-    const { x, y, width, height } = clientRect;
-
-    this.canvasRelativeClippedTop = y - display.canvasRect.top;
-    this.canvasRelativeClippedLeft = x - display.canvasRect.left;
-
+    const { element } = this;
+    const { width, height } = element.getBoundingClientRect();
     const viewport = this.renderViewport;
-    viewport.width = width - 1;
-    viewport.height = height;
+    viewport.width = Math.round(width);
+    viewport.height = Math.round(height);
+    // `getBoundingClientRect` is scaled by a CSS transform on an ancestor and `offsetWidth` is not,
+    // so their ratio is how much the panel is magnified on screen (see `RenderViewport`).
+    const layoutWidth = element.offsetWidth;
+    viewport.pixelScale = layoutWidth > 0 ? width / layoutWidth : 1;
 
-    this.sliceView.projectionParameters.setViewport(this.renderViewport);
+    this.sliceView.projectionParameters.setViewport(viewport);
   }
 
   // Position on the page, as an offset in viewport pixels from the center of the panel.
@@ -353,7 +368,7 @@ export class SliceViewPanel extends RefCounted {
   pointAt(clientX: number, clientY: number) {
     const { navigationState } = this;
     if (!navigationState.valid) return undefined;
-    navigationState.toMat4(tempMat4);
+    navigationState.toMat4(tempMat4, this.renderViewport.pixelScale);
     const [x, y] = this.offsetFromCenter(clientX, clientY);
     const point = new Float32Array(3);
     for (let i = 0; i < 3; ++i) {

@@ -6,7 +6,7 @@
  * API).
  */
 
-import { Viewer } from "viewer";
+import { NavigationGroup, Viewer } from "viewer";
 import type { ViewOrientation, ZarrStoreSpec } from "viewer";
 import "./style.css";
 
@@ -58,8 +58,9 @@ function openViewer(store: ZarrStoreSpec) {
   container.id = "container";
   app.append(container);
 
-  const viewer = new Viewer({ container, store });
-  viewer.loaded.then(
+  const viewer = new Viewer({ container });
+  const volume = viewer.addVolume(store);
+  volume.loaded.then(
     () => {
       status.remove();
       hint.hidden = false;
@@ -72,15 +73,17 @@ function openViewer(store: ZarrStoreSpec) {
     },
   );
 
-  // Three cross-sections side by side; any CSS layout works.
+  // Three cross-sections side by side; any CSS layout works.  One navigation group, so that the
+  // three views show the same place and move together.
   const views = document.createElement("div");
   views.id = "views";
   container.append(views);
+  const navigation = new NavigationGroup(volume);
   const orientations: ViewOrientation[] = ["yz", "xy", "xz"];
   for (const orientation of orientations) {
     const element = document.createElement("div");
     element.className = "view";
     views.append(element);
-    viewer.addView(element, orientation);
+    viewer.addView(element, { volume, orientation, navigation });
   }
 }

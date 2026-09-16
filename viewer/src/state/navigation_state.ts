@@ -1,8 +1,8 @@
 /** @license Copyright 2016 Google Inc. SPDX-License-Identifier: Apache-2.0 */
 
 /**
- * @file Where a view looks: a position shared by all views, a zoom shared by all views, and the
- * orientation of each view.
+ * @file Where a view looks: a position and a zoom, which views may share (see `NavigationGroup` in
+ * `viewer.ts`), and the orientation of each view.
  */
 
 import type { CoordinateSpace } from "#src/state/coordinate_transform.js";
@@ -17,8 +17,8 @@ import { NullarySignal } from "#src/util/signal.js";
 const tempVec3 = vec3.create();
 
 /**
- * A position in the viewer's (z, y, x) voxel coordinates.  When the coordinate space becomes valid
- * (the volume has loaded), the position moves to the center of the volume.
+ * A position in the viewer's (z, y, x) voxel coordinates.  It starts at the center of the volume, as
+ * soon as the coordinate space is valid (the volume has loaded).
  */
 export class Position extends RefCounted {
   readonly value = new Float32Array(3);
@@ -33,6 +33,9 @@ export class Position extends RefCounted {
         this.handleCoordinateSpaceChanged();
       }),
     );
+    // A position made for a volume that has already loaded gets no change to react to, and would
+    // otherwise stay at the origin, which is a corner of the volume.
+    this.handleCoordinateSpaceChanged();
   }
 
   get valid() {
@@ -99,11 +102,15 @@ export class NavigationState extends RefCounted {
     this.zoomFactor.value *= factor;
   }
 
-  // Sets `mat` to the transform from view coordinates (in screen pixels) to voxel coordinates.
-  toMat4(mat: mat4) {
+  /**
+   * Sets `mat` to the transform from view coordinates (in screen pixels) to voxel coordinates.
+   * `pixelScale` above 1 means the view is magnified on screen (see `RenderViewport`), so a screen
+   * pixel covers fewer voxels.
+   */
+  toMat4(mat: mat4, pixelScale = 1) {
     mat4.fromQuat(mat, this.orientation);
     const { value } = this.position;
-    const scale = this.zoomFactor.value;
+    const scale = this.zoomFactor.value / pixelScale;
     for (let i = 0; i < 3; ++i) {
       mat[i] *= scale;
       mat[4 + i] *= scale;
