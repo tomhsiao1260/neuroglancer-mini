@@ -26,7 +26,7 @@ This project serves as a learning resource for developers who want to understand
 ## Branches
 
 - **backward** (this README, merged into `main`): the reduced Neuroglancer code, packaged as the `viewer/` library, plus a small example page that uses it. This is where the code is reduced and explained.
-- **[forward](https://github.com/tomhsiao1260/neuroglancer-mini/tree/forward)**: an app built on the same `viewer/` folder, with a Node server that downloads only the parts of a scroll you look at and keeps them locally, coordinate display, positions in the URL and a list of missing chunks. See [its README](https://github.com/tomhsiao1260/neuroglancer-mini/tree/forward#readme) for its features and setup.
+- **[forward](https://github.com/tomhsiao1260/neuroglancer-mini/tree/forward)**: an app built on the same `viewer/` folder, with a Node server that downloads only the parts of a scroll you look at and keeps them locally, coordinate display, positions in the URL and a list of missing chunks. See [its README](https://github.com/tomhsiao1260/neuroglancer-mini/tree/forward#readme) for its features and setup. It also keeps [notes on a planned direction](https://github.com/tomhsiao1260/neuroglancer-mini/blob/forward/docs/whiteboard.md) — a board of cross-section cards — which record the parts of `viewer/` that direction depends on; worth reading before reducing the code further.
 
 ## Getting Started
 
