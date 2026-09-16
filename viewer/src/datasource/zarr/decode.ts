@@ -1,9 +1,8 @@
 /** @license Copyright 2023 Google Inc. SPDX-License-Identifier: Apache-2.0 */
 
-import { decodeBlosc } from "#src/async_computation/decode_blosc_request.js";
-import { requestAsyncComputation } from "#src/async_computation/request.js";
 import type { ArrayMetadata } from "#src/datasource/zarr/metadata.js";
 import { DATA_TYPE_BYTES, makeDataTypeArrayView } from "#src/util/data_type.js";
+import { requestBloscDecode } from "#src/worker/decode_pool.js";
 
 /**
  * Decodes the contents of a chunk file into the chunk's voxel values: decompresses them if the
@@ -11,7 +10,7 @@ import { DATA_TYPE_BYTES, makeDataTypeArrayView } from "#src/util/data_type.js";
  * little-endian, which is also the byte order of the platforms browsers run on, so no conversion is
  * needed.  Voxels are in C order, i.e. x varies fastest.
  *
- * Decompression runs in a pool worker (see `async_computation/`), which takes over `encoded`.
+ * Decompression runs in a pool worker (see `worker/decode_pool.ts`), which takes over `encoded`.
  */
 export async function decodeChunk(
   metadata: ArrayMetadata,
@@ -19,12 +18,7 @@ export async function decodeChunk(
   signal: AbortSignal,
 ): Promise<ArrayBufferView> {
   if (metadata.compressor === "blosc") {
-    encoded = await requestAsyncComputation(
-      decodeBlosc,
-      signal,
-      [encoded.buffer],
-      encoded,
-    );
+    encoded = await requestBloscDecode(encoded, signal);
   }
   const { dataType, chunkShape } = metadata;
   const numElements = chunkShape.reduce((a, b) => a * b, 1);

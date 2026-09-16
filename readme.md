@@ -1,6 +1,6 @@
 # Neuroglancer Mini
 
-This is a trimmed-down version of the original Neuroglancer source code, designed to make its core logic more accessible and easier to understand. This is not a new implementation, but rather a carefully curated subset of the original codebase (~115,510 lines) that has been reduced to about 7,600 lines by retaining only the minimal core functionality needed for the program to run, reducing npm dependencies, and simplifying the build process. This lightweight version serves as a learning demo, allowing developers to grasp the core concepts and architecture of Neuroglancer without being overwhelmed by the complexity of the original implementation.
+This is a trimmed-down version of the original Neuroglancer source code, designed to make its core logic more accessible and easier to understand. This is not a new implementation, but rather a carefully curated subset of the original codebase (~115,510 lines) that has been reduced to about 7,500 lines by retaining only the minimal core functionality needed for the program to run, reducing npm dependencies, and simplifying the build process. This lightweight version serves as a learning demo, allowing developers to grasp the core concepts and architecture of Neuroglancer without being overwhelmed by the complexity of the original implementation.
 
 <img width="1193" alt="img2" src="https://github.com/user-attachments/assets/c69a9014-3250-4d05-8350-abb96975b64c" />
 
@@ -97,7 +97,7 @@ To use the viewer in another Vite app, place `viewer/` next to the app and copy 
 
 ## Project Structure
 
-The code is split between two threads. The **main thread** owns the WebGL canvas, the views and mouse input. A **worker** (`viewer/src/worker/chunk_worker.bundle.js`) decides which chunks are needed, reads and decodes them, and keeps them within memory limits. It hands decompression to a pool of further workers (`viewer/src/worker/async_computation.bundle.js`), so that chunks are decompressed on several cores while the chunk worker keeps scheduling. Most modules therefore come in pairs: `frontend.ts` runs on the main thread, `backend.ts` runs in the worker, and `base.ts` holds what both use. Paired objects talk through `SharedObject`s in `viewer/src/worker/worker_rpc.ts`.
+The code is split between two threads. The **main thread** owns the WebGL canvas, the views and mouse input. A **worker** (`viewer/src/worker/chunk_worker.bundle.js`) decides which chunks are needed, reads and decodes them, and keeps them within memory limits. It hands decompression to a pool of further workers (`viewer/src/worker/decode_worker.bundle.js`), so that chunks are decompressed on several cores while the chunk worker keeps scheduling. Most modules therefore come in pairs: `frontend.ts` runs on the main thread, `backend.ts` runs in the worker, and `base.ts` holds what both use. Paired objects talk through `SharedObject`s in `viewer/src/worker/worker_rpc.ts`.
 
 ### How a chunk gets to the screen
 
@@ -105,7 +105,7 @@ The code is split between two threads. The **main thread** owns the WebGL canvas
 2. **Loading the volume** (`viewer/src/viewer.ts`, `viewer/src/datasource/zarr/frontend.ts`): the viewer reads the metadata of every scale, creates one chunk source per scale, sets the coordinate spaces from the volume bounds and creates the render layer.
 3. **Choosing chunks** (`viewer/src/render/backend.ts`): for each view, the worker picks the scales that match the current zoom. It then finds the chunks the cross-section plane cuts through and requests them as `VISIBLE`: coarser scales first, so that something is shown quickly, and within a scale the chunks closest to the center of the view. It also estimates how fast the position is moving (`viewer/src/util/velocity_estimation.ts`) and requests, as `PREFETCH`, the chunks next to the visible ones that the view is likely to reach within two seconds, so that they are often loaded before the plane gets there. Prefetching can be turned off with `viewer.chunkManager.chunkQueueManager.enablePrefetch.value = false`.
 4. **Queueing** (`viewer/src/chunk_manager/backend.ts`): chunks are ordered by tier and priority. The highest-priority chunks are downloaded while capacity allows, and lower-priority chunks are evicted to make room. Priorities are recomputed whenever a view changes, and also every 200 ms while chunks keep moving to or from the GPU, so that the velocity estimate decays once the view stops and chunks prefetched for an earlier motion are dropped.
-5. **Downloading** (`viewer/src/datasource/zarr/backend.ts`, `decode.ts`): the worker reads the chunk file from the store and decodes it; a blosc-compressed chunk is sent to a free pool worker to be decompressed (`viewer/src/async_computation/`). A missing file is reported to the main thread (`onMissingChunk`) and the chunk is shown as 0. HTTP requests answered with 429, 503 or 504 are retried after increasing delays; any other failure makes the chunk `FAILED`, so it is not drawn and coarser scales show through. When the chunk manager cancels a download to make room for more important chunks, the request is aborted and the chunk is left untouched.
+5. **Downloading** (`viewer/src/datasource/zarr/backend.ts`, `decode.ts`): the worker reads the chunk file from the store and decodes it; a blosc-compressed chunk is sent to a free pool worker to be decompressed (`viewer/src/worker/decode_pool.ts`). A missing file is reported to the main thread (`onMissingChunk`) and the chunk is shown as 0. HTTP requests answered with 429, 503 or 504 are retried after increasing delays; any other failure makes the chunk `FAILED`, so it is not drawn and coarser scales show through. When the chunk manager cancels a download to make room for more important chunks, the request is aborted and the chunk is left untouched.
 6. **Upload** (`viewer/src/chunk_manager/frontend.ts`, `viewer/src/render/frontend.ts`): the chunk data is transferred to the main thread in a `Chunk.update` message. The main thread applies these updates in 30 ms time slices and uploads each chunk to a texture. While the view is moving, uploads may only start within 10 ms of each change and otherwise wait for the next frame to start, so that loading does not make panning stutter.
 7. **Drawing** (`viewer/src/render/panel.ts`, `viewer/src/render/renderlayer.ts`): on each animation frame, every view draws its slice into its part of the canvas. Only chunks already on the GPU are drawn, and finer scales are drawn over coarser ones.
 
@@ -153,16 +153,12 @@ The code is split between two threads. The **main thread** owns the WebGL canvas
 - `store.ts`: `ZarrStore`, where the store's files are read from: `HttpStore` (any HTTP server; retries 429, 503 and 504 responses) or `DirectoryStore` (a local folder through the File System Access API). A `ZarrStoreSpec` describes the store so that the worker can create its own.
 - `base.ts`: chunk source parameters sent to the worker (store, path of the scale's array, and metadata).
 
-#### `viewer/src/async_computation/`: work spread over a pool of workers
-
-- `request.ts` (chunk worker): `requestAsyncComputation` sends a computation to a free pool worker, launching up to `min(12, number of cores)` workers as needed; requests wait while all are busy.
-- `handler.ts` (pool worker): runs the computations registered with `registerAsyncComputation` and posts back the results.
-- `decode_blosc_request.ts` names the blosc decompression, and `decode_blosc.ts` implements it in the pool worker, so the decompressor is only loaded there.
-
 #### `viewer/src/worker/`: threads
 
 - `chunk_worker.bundle.js`: worker entry. It loads the zarr backend and starts the RPC channel.
-- `async_computation.bundle.js`: entry of the pool workers (see `async_computation/`).
+- `decode_pool.ts` (chunk worker): `requestBloscDecode` sends a buffer to a free pool worker, launching up to `min(12, number of cores)` workers as needed; requests wait while all are busy, and one that is still waiting is dropped if its download is cancelled. Neuroglancer runs any computation registered under a name in such a pool (`src/async_computation/` there); here it only decompresses chunks.
+- `decode_blosc.ts` (pool worker): decompresses each buffer it is sent and posts the result back. The decompressor (`numcodecs`) is therefore loaded only in the pool workers, not in the chunk worker.
+- `decode_worker.bundle.js`: entry of the pool workers.
 - `worker_rpc.ts`: `RPC` (messages between threads) and `SharedObject` (an object with a counterpart on the other thread), plus the `registerSharedObject` decorators.
 - `shared_watchable_value.ts`: a value mirrored from the main thread to the worker (e.g. capacity limits).
 
