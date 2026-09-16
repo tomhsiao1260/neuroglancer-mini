@@ -269,22 +269,16 @@ export class VolumeChunk extends Chunk {
   // Position of the chunk in the chunk grid.
   chunkGridPosition: Float32Array;
   data: ArrayBufferView | null;
-  chunkDataSize: Uint32Array | null;
 
   initializeVolumeChunk(key: string, chunkGridPosition: Float32Array) {
     super.initialize(key);
     this.chunkGridPosition = Float32Array.from(chunkGridPosition);
-    this.chunkDataSize = null;
     this.data = null;
   }
 
   serialize(msg: any, transfers: any[]) {
     super.serialize(msg, transfers);
     msg.chunkGridPosition = this.chunkGridPosition;
-    const chunkDataSize = this.chunkDataSize;
-    if (chunkDataSize !== this.source!.spec.chunkDataSize) {
-      msg.chunkDataSize = chunkDataSize;
-    }
     const data = (msg.data = this.data);
     if (data !== null) {
       transfers.push(data!.buffer);

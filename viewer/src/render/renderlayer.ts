@@ -228,6 +228,7 @@ function setBoundingBoxCrossSectionShaderViewportPlane(
 const CHUNK_POSITION_EPSILON = 1e-3;
 
 const tempMat4 = mat4.create();
+const tempChunkDataSize = new Float32Array(3);
 
 function defineVolumeShader(builder: ShaderBuilder) {
   defineVertexId(builder);
@@ -292,9 +293,12 @@ function beginSource(
     mat4.multiply(tempMat4, dataToDeviceMatrix, chunkLayout.transform),
   );
 
-  // The volume may end inside its last chunk along a dimension; the shader clips the polygon to
-  // these bounds so that the padding of such a chunk is not drawn.
-  const { lowerVoxelBound, upperVoxelBound } = tsource.source.spec;
+  // Every chunk of a scale has the same size, since zarr pads the chunks at the upper edge of the
+  // volume.  The volume may therefore end inside its last chunk along a dimension; the shader clips
+  // the polygon to these bounds so that the padding is not drawn.
+  const { chunkDataSize, lowerVoxelBound, upperVoxelBound } = tsource.source.spec;
+  tempChunkDataSize.set(chunkDataSize);
+  gl.uniform3fv(shader.uniform("uChunkDataSize"), tempChunkDataSize);
   gl.uniform3fv(shader.uniform("uLowerClipBound"), lowerVoxelBound);
   gl.uniform3fv(shader.uniform("uUpperClipBound"), upperVoxelBound);
 }
@@ -357,8 +361,9 @@ export class ImageRenderLayer extends RefCounted {
   chunkManager: ChunkManager;
   renderScaleTarget: WatchableValueInterface<number>;
   private vertexIdHelper: VertexIdHelper;
-  // Shader for each chunk format, built on first use; `null` if it failed to build.
-  private shaders = new Map<ChunkFormat, ShaderProgram | null>();
+  // Built on first use: `undefined` until then, `null` if it failed to build.  All scales of the
+  // volume have the same data type, so one shader draws them all.
+  private shader: ShaderProgram | null | undefined;
 
   constructor(
     public multiscaleSource: MultiscaleVolumeChunkSource,
@@ -368,11 +373,7 @@ export class ImageRenderLayer extends RefCounted {
     this.chunkManager = multiscaleSource.chunkManager;
     this.renderScaleTarget = options.renderScaleTarget;
     this.vertexIdHelper = this.registerDisposer(VertexIdHelper.get(this.gl));
-    this.registerDisposer(() => {
-      for (const shader of this.shaders.values()) {
-        shader?.dispose();
-      }
-    });
+    this.registerDisposer(() => this.shader?.dispose());
     this.initializeCounterpart();
   }
 
@@ -403,7 +404,7 @@ export class ImageRenderLayer extends RefCounted {
   }
 
   private getShader(chunkFormat: ChunkFormat) {
-    let shader = this.shaders.get(chunkFormat);
+    let { shader } = this;
     if (shader === undefined) {
       shader = null;
       try {
@@ -417,19 +418,9 @@ export class ImageRenderLayer extends RefCounted {
 `);
         shader = builder.build();
       } catch {
-        // Leave the shader unset; nothing is drawn with it.
+        // Leave the shader null; nothing is drawn with it.
       }
-      this.shaders.set(chunkFormat, shader);
-    }
-    return shader;
-  }
-
-  private beginChunkFormat(chunkFormat: ChunkFormat) {
-    const shader = this.getShader(chunkFormat);
-    if (shader !== null) {
-      shader.bind();
-      setNormalizedUniforms(shader, this.dataType);
-      chunkFormat.beginDrawing(this.gl);
+      this.shader = shader;
     }
     return shader;
   }
@@ -442,33 +433,22 @@ export class ImageRenderLayer extends RefCounted {
     }
 
     const { gl } = this;
+    const { chunkFormat } = visibleSources[0].source;
+    const shader = this.getShader(chunkFormat);
+    if (shader === null) {
+      return;
+    }
 
     this.vertexIdHelper.enable();
+    shader.bind();
+    setNormalizedUniforms(shader, this.dataType);
+    chunkFormat.beginDrawing(gl);
 
     const chunkPosition = vec3.create();
-
-    let shader: ShaderProgram | null = null;
-    let prevChunkFormat: ChunkFormat | undefined;
-    // Size of the chunk being drawn, in voxels.
-    const chunkDataSizeUniform = new Float32Array(3);
-
-    const endShader = () => {
-      if (shader === null) return;
-      prevChunkFormat!.endDrawing(gl);
-    };
-    let newSource = true;
     for (const transformedSource of visibleSources) {
       const { chunkLayout, source } = transformedSource;
-      const { chunkFormat } = source;
-      if (chunkFormat !== prevChunkFormat) {
-        endShader();
-        prevChunkFormat = chunkFormat;
-        shader = this.beginChunkFormat(chunkFormat);
-      }
-      if (shader === null) continue;
       const chunks = source.chunks;
       const chunkSize = chunkLayout.size;
-      let chunkDataSize: Uint32Array | undefined;
 
       beginSource(
         gl,
@@ -477,26 +457,21 @@ export class ImageRenderLayer extends RefCounted {
         projectionParameters.viewProjectionMat,
         transformedSource,
       );
-      newSource = true;
+      let newSource = true;
       sliceView.forEachVisibleChunk(transformedSource, (key) => {
         const chunk = chunks.get(key);
         if (chunk && chunk.state === ChunkState.GPU_MEMORY) {
-          if (chunk.chunkDataSize !== chunkDataSize) {
-            chunkDataSize = chunk.chunkDataSize;
-            chunkDataSizeUniform.set(chunkDataSize);
-            gl.uniform3fv(shader!.uniform("uChunkDataSize"), chunkDataSizeUniform);
-          }
           const { chunkGridPosition } = chunk;
           for (let i = 0; i < 3; ++i) {
             chunkPosition[i] = chunkSize[i] * chunkGridPosition[i];
           }
-          chunkFormat.bindChunk(gl, shader!, chunk, newSource);
+          chunkFormat.bindChunk(gl, shader, chunk, newSource);
           newSource = false;
-          gl.uniform3fv(shader!.uniform("uTranslation"), chunkPosition);
+          gl.uniform3fv(shader.uniform("uTranslation"), chunkPosition);
           gl.drawArrays(gl.TRIANGLE_FAN, 0, 6);
         }
       });
     }
-    endShader();
+    chunkFormat.endDrawing(gl);
   }
 }

@@ -21,14 +21,12 @@ export class ShaderProgram extends RefCounted {
   vertexShader: WebGLShader;
   fragmentShader: WebGLShader;
   uniforms = new Map<string, WebGLUniformLocation | null>();
-  attributes = new Map<string, number>();
 
   constructor(
     public gl: GL,
     vertexSource: string,
     fragmentSource: string,
     uniformNames: string[],
-    attributeNames: string[],
   ) {
     super();
     const vertexShader = (this.vertexShader = compileShader(
@@ -54,17 +52,10 @@ export class ShaderProgram extends RefCounted {
     for (const name of uniformNames) {
       this.uniforms.set(name, gl.getUniformLocation(program, name));
     }
-    for (const name of attributeNames) {
-      this.attributes.set(name, gl.getAttribLocation(program, name));
-    }
   }
 
   uniform(name: string): WebGLUniformLocation {
     return this.uniforms.get(name)!;
-  }
-
-  attribute(name: string): number {
-    return this.attributes.get(name)!;
   }
 
   bind() {
@@ -115,17 +106,13 @@ export class ShaderBuilder {
   private vertexMain = "";
   private fragmentMain = "";
   private uniforms = new Array<string>();
-  private attributes = new Array<string>();
   private initializers = new Array<(shader: ShaderProgram) => void>();
 
   constructor(public gl: GL) {}
 
-  addAttribute(typeName: string, name: string, location?: number) {
-    this.attributes.push(name);
-    if (location !== undefined) {
-      this.attributesCode += `layout(location = ${location})`;
-    }
-    this.attributesCode += `in ${typeName} ${name};\n`;
+  // Attribute locations are fixed with `layout(location = ...)`, so they are never looked up.
+  addAttribute(typeName: string, name: string, location: number) {
+    this.attributesCode += `layout(location = ${location}) in ${typeName} ${name};\n`;
   }
 
   addVarying(typeName: string, name: string) {
@@ -133,11 +120,8 @@ export class ShaderBuilder {
     this.varyingsCodeFS += `in ${typeName} ${name};\n`;
   }
 
-  addOutputBuffer(typeName: string, name: string, location: number | null) {
-    if (location !== null) {
-      this.outputBufferCode += `layout(location = ${location}) `;
-    }
-    this.outputBufferCode += `out ${typeName} ${name};\n`;
+  addOutputBuffer(typeName: string, name: string, location: number) {
+    this.outputBufferCode += `layout(location = ${location}) out ${typeName} ${name};\n`;
   }
 
   addUniform(typeName: string, name: string, extent?: number) {
@@ -200,7 +184,6 @@ ${this.fragmentMain}
       vertexSource,
       fragmentSource,
       this.uniforms,
-      this.attributes,
     );
     const { initializers } = this;
     if (initializers.length > 0) {

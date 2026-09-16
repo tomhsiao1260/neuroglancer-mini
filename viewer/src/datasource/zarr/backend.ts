@@ -26,7 +26,6 @@ export class ZarrVolumeChunkSource extends WithParameters(
   private store = createZarrStore(this.parameters.store);
 
   async download(chunk: VolumeChunk, signal: AbortSignal) {
-    chunk.chunkDataSize = this.spec.chunkDataSize;
     const { metadata, path } = this.parameters;
     // The chunk grid position is in (x, y, z) order, while zarr chunk keys list the chunk indices in
     // (z, y, x) order, e.g. `52/24/18`.

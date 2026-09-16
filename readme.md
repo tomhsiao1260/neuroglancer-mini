@@ -1,6 +1,6 @@
 # Neuroglancer Mini
 
-This is a trimmed-down version of the original Neuroglancer source code, designed to make its core logic more accessible and easier to understand. This is not a new implementation, but rather a carefully curated subset of the original codebase (~115,510 lines) that has been reduced to about 7,350 lines by retaining only the minimal core functionality needed for the program to run, reducing npm dependencies, and simplifying the build process. This lightweight version serves as a learning demo, allowing developers to grasp the core concepts and architecture of Neuroglancer without being overwhelmed by the complexity of the original implementation.
+This is a trimmed-down version of the original Neuroglancer source code, designed to make its core logic more accessible and easier to understand. This is not a new implementation, but rather a carefully curated subset of the original codebase (~115,510 lines) that has been reduced to about 7,200 lines by retaining only the minimal core functionality needed for the program to run, reducing npm dependencies, and simplifying the build process. This lightweight version serves as a learning demo, allowing developers to grasp the core concepts and architecture of Neuroglancer without being overwhelmed by the complexity of the original implementation.
 
 <img width="1193" alt="img2" src="https://github.com/user-attachments/assets/c69a9014-3250-4d05-8350-abb96975b64c" />
 
@@ -132,7 +132,7 @@ The code is split between two threads. The **main thread** owns the WebGL canvas
 - `base.ts` (main thread and worker): `ProjectionParameters` (a view's viewport plus view and projection matrices), `ChunkLayout` (the chunk grid in view coordinates, including the size one of its voxels has there, which decides at which zoom levels the scale is shown), `VolumeChunkSpecification` (a scale's chunk grid and data type), `SliceViewBase` (a view's scales and the scales it shows), `filterVisibleSources` (which scales to draw and load for the current pixel size) and `forEachPlaneIntersectingVolumetricChunk` (which chunks the plane cuts through).
 - `frontend.ts` (main thread): `SliceView` sends its layer and projection to the worker and draws the visible GPU chunks. `DerivedProjectionParameters` recomputes a view's projection from its navigation state and viewport, and `SharedProjectionParameters` sends it to the worker. `getVolumetricTransformedSources` places each scale's chunk grid in the view. `VolumeChunkSource` and `VolumeChunk` upload chunk data to textures and free them again.
 - `backend.ts` (worker): `SliceViewBackend` requests the visible chunks, using the projection received by `SharedProjectionParametersBackend`. The worker-side `VolumeChunkSource` keeps a scale's chunks by grid position, and `VolumeChunk` holds downloaded data until it is sent to the main thread.
-- `chunk_format.ts`: how a chunk is stored as a texture (one texel per voxel) and read in the fragment shader. Missing chunks share one texture filled with 0.
+- `chunk_format.ts`: how a chunk is stored as a 3-D texture (one texel per voxel) and read in the fragment shader. Missing chunks share one texture filled with 0.
 - `renderlayer.ts`: `ImageRenderLayer`. For each chunk it draws the polygon where the plane cuts the chunk's box (computed in the vertex shader) and maps the data value to gray.
 - `panel.ts`: `DisplayContext`, the canvas and WebGL context shared by all views, which redraws them on an animation frame; and `SliceViewPanel`, which draws its slice into its region of the canvas and handles mouse input.
 
@@ -175,7 +175,7 @@ The code is split between two threads. The **main thread** owns the WebGL canvas
 - `shader_lib.ts`: GLSL types for each voxel data type.
 - `texture.ts`: texture parameters.
 - `buffer.ts`: vertex buffer.
-- `vertex_id.ts`: dummy vertex attribute needed by Firefox.
+- `vertex_id.ts`: a vertex attribute at location 0 that is always enabled. The slice shader needs no attributes, but without one Firefox falls back to slow emulation on macOS.
 
 #### `viewer/src/util/`
 

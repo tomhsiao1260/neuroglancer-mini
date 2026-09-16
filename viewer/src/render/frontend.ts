@@ -416,15 +416,8 @@ export class VolumeChunkSource extends ChunkSource {
     this.spec = options.spec;
     const { gl } = chunkManager.chunkQueueManager;
     const { chunkDataSize, dataType } = this.spec;
-    let numDims = 0;
-    for (const x of chunkDataSize) {
-      if (x > 1) ++numDims;
-    }
-    const textureDims = numDims >= 3 ? 3 : 2;
-    this.chunkFormat = this.registerDisposer(
-      ChunkFormat.get(gl, dataType, textureDims),
-    );
-    this.textureLayout = new TextureLayout(gl, chunkDataSize, textureDims);
+    this.chunkFormat = this.registerDisposer(ChunkFormat.get(gl, dataType));
+    this.textureLayout = new TextureLayout(gl, chunkDataSize);
     this.fillValueTexture = this.registerDisposer(
       FillValueTexture.get(gl, this.chunkFormat, chunkDataSize.length),
     );
@@ -453,7 +446,6 @@ export class VolumeChunk extends Chunk {
   source: VolumeChunkSource;
   // Position of the chunk in the chunk grid.
   chunkGridPosition: vec3;
-  chunkDataSize: Uint32Array;
   data: TypedArray | null;
   texture: WebGLTexture | null = null;
   textureLayout: TextureLayout | null = null;
@@ -461,7 +453,6 @@ export class VolumeChunk extends Chunk {
   constructor(source: VolumeChunkSource, x: any) {
     super(source);
     this.chunkGridPosition = x.chunkGridPosition;
-    this.chunkDataSize = x.chunkDataSize || source.spec.chunkDataSize;
     this.data = x.data;
   }
 
@@ -470,10 +461,10 @@ export class VolumeChunk extends Chunk {
     if (this.data === null) return;
     const { chunkFormat, textureLayout } = this.source;
     const texture = (this.texture = gl.createTexture());
-    gl.bindTexture(chunkFormat.textureTarget, texture);
+    gl.bindTexture(WebGL2RenderingContext.TEXTURE_3D, texture);
     this.textureLayout = textureLayout;
     chunkFormat.setTextureData(gl, textureLayout, this.data);
-    gl.bindTexture(chunkFormat.textureTarget, null);
+    gl.bindTexture(WebGL2RenderingContext.TEXTURE_3D, null);
   }
 
   freeGPUMemory(gl: GL) {
