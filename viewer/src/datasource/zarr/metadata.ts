@@ -29,6 +29,8 @@ export interface ArrayMetadata {
   // Chunk shape in voxels, in (z, y, x) order.
   chunkShape: number[];
   dataType: DataType;
+  // Value of the voxels of a chunk whose file is missing from the store.
+  fillValue: number;
   // Compression of each chunk file; `null` means chunks are stored uncompressed.
   compressor: "blosc" | null;
   // Separator between the chunk indices of a chunk key, e.g. `52/24/18`.
@@ -55,6 +57,26 @@ function parseChunkShape(obj: unknown, rank: number): number[] {
     }
     return x;
   });
+}
+
+/**
+ * A chunk whose file is missing from the store reads as this value.  zarr v2 writes it as a number,
+ * or, for floats, as one of the three strings that JSON cannot represent; `null` means zero.
+ */
+function parseFillValue(dataType: DataType, value: unknown): number {
+  if (value === null) return 0;
+  if (typeof value === "number") {
+    if (dataType !== DataType.FLOAT32 && !Number.isInteger(value)) {
+      throw new Error(`Expected integer, but received: ${value}`);
+    }
+    return value;
+  }
+  if (dataType === DataType.FLOAT32 && typeof value === "string") {
+    if (value === "NaN") return Number.NaN;
+    if (value === "Infinity") return Number.POSITIVE_INFINITY;
+    if (value === "-Infinity") return Number.NEGATIVE_INFINITY;
+  }
+  throw new Error(`Unsupported fill value: ${JSON.stringify(value)}`);
 }
 
 function parseDimensionSeparator(value: unknown): DimensionSeparator {
@@ -104,6 +126,9 @@ export function parseV2Metadata(obj: unknown): ArrayMetadata {
       }
       return dataType;
     });
+    const fillValue = verifyObjectProperty(obj, "fill_value", (value) =>
+      parseFillValue(dataType, value),
+    );
     const compressor = verifyObjectProperty(obj, "compressor", (value) => {
       if (value === null) return null;
       verifyObject(value);
@@ -118,6 +143,7 @@ export function parseV2Metadata(obj: unknown): ArrayMetadata {
       shape,
       chunkShape,
       dataType,
+      fillValue,
       compressor,
       dimensionSeparator,
     };

@@ -1,7 +1,6 @@
 /** @license Copyright 2020 Google Inc. SPDX-License-Identifier: Apache-2.0 */
 
 import type { ChunkManager } from "#src/chunk_manager/frontend.js";
-import { WithParameters } from "#src/chunk_manager/frontend.js";
 import {
   MISSING_CHUNK_RPC_ID,
   VolumeChunkSourceParameters,
@@ -15,6 +14,7 @@ import type {
 import { parseOmeMetadata } from "#src/datasource/zarr/ome.js";
 import type { ZarrStore, ZarrStoreSpec } from "#src/datasource/zarr/store.js";
 import { createZarrStore } from "#src/datasource/zarr/store.js";
+import type { VolumeChunkSpecification } from "#src/render/base.js";
 import { makeVolumeChunkSpecification } from "#src/render/base.js";
 import type { SliceViewSingleResolutionSource } from "#src/render/frontend.js";
 import {
@@ -25,17 +25,33 @@ import { DataType } from "#src/util/data_type.js";
 import type { Borrowed } from "#src/util/disposable.js";
 import { verifyObject } from "#src/util/json.js";
 import { Signal } from "#src/util/signal.js";
-import { registerRPC } from "#src/worker/worker_rpc.js";
+import type { RPC } from "#src/worker/worker_rpc.js";
+import {
+  registerRPC,
+  registerSharedObjectOwner,
+} from "#src/worker/worker_rpc.js";
 
 // Called with the store key of a chunk whose file is missing, and a function that loads the chunk
 // again.
 type MissingChunkListener = (key: string, reload: () => void) => void;
 
-class ZarrVolumeChunkSource extends WithParameters(
-  VolumeChunkSource,
-  VolumeChunkSourceParameters,
-) {
+@registerSharedObjectOwner(VolumeChunkSourceParameters.RPC_ID)
+class ZarrVolumeChunkSource extends VolumeChunkSource {
+  parameters: VolumeChunkSourceParameters;
   missingChunk = new Signal<MissingChunkListener>();
+
+  constructor(
+    chunkManager: Borrowed<ChunkManager>,
+    options: { spec: VolumeChunkSpecification; parameters: VolumeChunkSourceParameters },
+  ) {
+    super(chunkManager, options);
+    this.parameters = options.parameters;
+  }
+
+  initializeCounterpart(rpc: RPC, options: any) {
+    options.parameters = this.parameters;
+    super.initializeCounterpart(rpc, options);
+  }
 }
 
 registerRPC(MISSING_CHUNK_RPC_ID, function (x) {
@@ -109,6 +125,7 @@ export class MultiscaleVolumeChunkSource extends GenericMultiscaleVolumeChunkSou
           dataType: metadata.dataType,
           chunkDataSize: chunkShapeXyz,
           upperVoxelBound: shapeXyz,
+          fillValue: metadata.fillValue,
         });
         // Every call (one per view) returns the same chunk source for a scale.  A viewer's chunk
         // manager holds a single volume, so the scale's path identifies the source.

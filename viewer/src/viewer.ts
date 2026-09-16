@@ -21,7 +21,6 @@
  */
 
 import {
-  CapacitySpecification,
   ChunkManager,
   ChunkQueueManager,
 } from "#src/chunk_manager/frontend.js";
@@ -129,18 +128,9 @@ export class Viewer extends RefCounted {
     const rpc = new RPC(this.worker, true);
     const chunkQueueManager = this.registerDisposer(
       new ChunkQueueManager(rpc, this.display.gl, {
-        gpuMemory: new CapacitySpecification({
-          defaultItemLimit: 1e6,
-          defaultSizeLimit: 1e9,
-        }),
-        systemMemory: new CapacitySpecification({
-          defaultItemLimit: 1e7,
-          defaultSizeLimit: 2e9,
-        }),
-        download: new CapacitySpecification({
-          defaultItemLimit: 100,
-          defaultSizeLimit: Number.POSITIVE_INFINITY,
-        }),
+        gpuMemory: { itemLimit: 1e6, sizeLimit: 1e9 },
+        systemMemory: { itemLimit: 1e7, sizeLimit: 2e9 },
+        download: { itemLimit: 100, sizeLimit: Number.POSITIVE_INFINITY },
       }),
     );
     chunkQueueManager.registerDisposer(() => this.worker.terminate());

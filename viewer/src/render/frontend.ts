@@ -37,6 +37,7 @@ import type { Borrowed, Disposer, Owned } from "#src/util/disposable.js";
 import { invokeDisposers, RefCounted } from "#src/util/disposable.js";
 import { mat4, vec3 } from "#src/util/geom.js";
 import { NullarySignal, Signal } from "#src/util/signal.js";
+import { SharedWatchableValue } from "#src/worker/shared_watchable_value.js";
 import { kEmptyFloat32Vec } from "#src/util/vector.js";
 import type { GL } from "#src/webgl/context.js";
 import type { RPC } from "#src/worker/worker_rpc.js";
@@ -179,6 +180,8 @@ export class SliceView extends SliceViewBase<VolumeChunkSource> {
     // The render layer to draw; `undefined` until the volume has loaded.
     public renderLayer: WatchableValueInterface<ImageRenderLayer | undefined>,
     public navigationState: Owned<NavigationState>,
+    // How much the view's chunks are worth loading (see `render/panel.ts`).
+    visibility: WatchableValueInterface<number>,
   ) {
     super(
       new DerivedProjectionParameters(navigationState, (out, navigationState) => {
@@ -228,6 +231,9 @@ export class SliceView extends SliceViewBase<VolumeChunkSource> {
     this.initializeCounterpart(rpc, {
       chunkManager: chunkManager.rpcId,
       projectionParameters: sharedProjectionParameters.rpcId,
+      visibility: this.registerDisposer(
+        SharedWatchableValue.makeFromExisting(rpc, visibility),
+      ).rpcId,
     });
     this.registerDisposer(
       renderLayer.changed.add(() => {
@@ -409,11 +415,16 @@ export class VolumeChunkSource extends ChunkSource {
     super(chunkManager, options);
     this.spec = options.spec;
     const { gl } = chunkManager.chunkQueueManager;
-    const { chunkDataSize, dataType } = this.spec;
+    const { chunkDataSize, dataType, fillValue } = this.spec;
     this.chunkFormat = this.registerDisposer(ChunkFormat.get(gl, dataType));
     this.textureLayout = new TextureLayout(gl, chunkDataSize);
     this.fillValueTexture = this.registerDisposer(
-      FillValueTexture.get(gl, this.chunkFormat, chunkDataSize.length),
+      FillValueTexture.get(
+        gl,
+        this.chunkFormat,
+        chunkDataSize.length,
+        fillValue,
+      ),
     );
   }
 

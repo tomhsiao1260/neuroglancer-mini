@@ -5,6 +5,7 @@ import { RenderViewport } from "#src/render/base.js";
 import { SliceView } from "#src/render/frontend.js";
 import type { ImageRenderLayer } from "#src/render/renderlayer.js";
 import type { WatchableValueInterface } from "#src/state/trackable_value.js";
+import { WatchableValue } from "#src/state/trackable_value.js";
 import { animationFrameDebounce } from "#src/util/animation_frame_debounce.js";
 import { RefCounted } from "#src/util/disposable.js";
 import { mat4, vec3 } from "#src/util/geom.js";
@@ -84,6 +85,7 @@ export class DisplayContext extends RefCounted {
     gl.clearColor(0.0, 0.0, 0.0, 0.0);
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
     for (const panel of this.panels) {
+      if (panel.visibility.value === Number.NEGATIVE_INFINITY) continue;
       panel.ensureBoundsUpdated();
       const { renderViewport } = panel;
       if (renderViewport.width === 0 || renderViewport.height === 0) continue;
@@ -115,6 +117,9 @@ function hasNoModifiers(event: MouseEvent) {
 function hasOnlyControl(event: MouseEvent) {
   return event.ctrlKey && !event.altKey && !event.metaKey && !event.shiftKey;
 }
+
+// How far outside the container a panel still counts as about to be seen (see `visibility`).
+const NEAR_SCREEN_MARGIN = "200px";
 
 // Zoom factor for one wheel event: e^(deltaY / 200) when the delta is in pixels.
 function getWheelZoomAmount(event: WheelEvent) {
@@ -155,6 +160,17 @@ export class SliceViewPanel extends RefCounted {
 
   renderViewport = new RenderViewport();
 
+  /**
+   * How much this panel's chunks are worth loading: `POSITIVE_INFINITY` while the panel is on
+   * screen, `0` while it is only near its container (scrolled just out of a board of views, say),
+   * and `NEGATIVE_INFINITY` once it is neither, in which case it is not drawn and its chunks are
+   * not requested at all (see `render/backend.ts`).  Panels start out visible, so that the first
+   * frame is not delayed by waiting for the observers below.
+   */
+  visibility = new WatchableValue(Number.POSITIVE_INFINITY);
+  private onScreen = true;
+  private nearScreen = true;
+
   sliceView: SliceView;
 
   constructor(
@@ -167,8 +183,36 @@ export class SliceViewPanel extends RefCounted {
     display.addPanel(this);
     this.registerDisposer(() => display.removePanel(this));
 
+    const updateVisibility = () => {
+      this.visibility.value = this.onScreen
+        ? Number.POSITIVE_INFINITY
+        : this.nearScreen
+          ? 0
+          : Number.NEGATIVE_INFINITY;
+    };
+    const observe = (
+      options: IntersectionObserverInit,
+      set: (intersecting: boolean) => void,
+    ) => {
+      const observer = new IntersectionObserver((entries) => {
+        set(entries[entries.length - 1].isIntersecting);
+        updateVisibility();
+      }, options);
+      observer.observe(element);
+      this.registerDisposer(() => observer.disconnect());
+    };
+    // Whether the panel is on screen at all, and whether it is at least close to its place in the
+    // container.  The second observer measures against the container rather than the window,
+    // because a container that clips (a scrolling board of views) hides the panel from the window
+    // long before it is far away.
+    observe({}, (intersecting) => (this.onScreen = intersecting));
+    observe(
+      { root: display.container, rootMargin: NEAR_SCREEN_MARGIN },
+      (intersecting) => (this.nearScreen = intersecting),
+    );
+
     this.sliceView = this.registerDisposer(
-      new SliceView(chunkManager, renderLayer, navigationState),
+      new SliceView(chunkManager, renderLayer, navigationState, this.visibility),
     );
 
     this.registerDisposer(

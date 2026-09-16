@@ -235,6 +235,8 @@ export interface VolumeChunkSpecification {
   lowerVoxelBound: Float32Array;
   upperVoxelBound: Float32Array;
   dataType: DataType;
+  // Value of the voxels of a chunk that is missing from the store.
+  fillValue: number;
 }
 
 // Returns the grid of chunks of `chunkDataSize` voxels covering `[0, upperVoxelBound)`.
@@ -243,8 +245,9 @@ export function makeVolumeChunkSpecification(options: {
   dataType: DataType;
   chunkDataSize: Uint32Array;
   upperVoxelBound: Float32Array;
+  fillValue: number;
 }): VolumeChunkSpecification {
-  const { rank, dataType, chunkDataSize, upperVoxelBound } = options;
+  const { rank, dataType, chunkDataSize, upperVoxelBound, fillValue } = options;
   const lowerVoxelBound = new Float32Array(rank);
   const lowerChunkBound = new Float32Array(rank);
   const upperChunkBound = new Float32Array(rank);
@@ -262,6 +265,7 @@ export function makeVolumeChunkSpecification(options: {
     lowerVoxelBound,
     upperVoxelBound,
     dataType,
+    fillValue,
   };
 }
 

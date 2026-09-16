@@ -39,6 +39,15 @@ export enum ChunkPriorityTier {
   RECENT = 2,
 }
 
+/**
+ * Limits on what may be in one place (GPU memory, system memory, or downloading) at a time: a
+ * number of chunks and a total number of bytes.
+ */
+export interface Capacity {
+  itemLimit: number;
+  sizeLimit: number;
+}
+
 export const CHUNK_QUEUE_MANAGER_RPC_ID = "ChunkQueueManager";
 export const CHUNK_MANAGER_RPC_ID = "ChunkManager";
 // Asks the worker to discard a chunk and download it again.

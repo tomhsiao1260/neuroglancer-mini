@@ -15,7 +15,7 @@
  * messages (see `chunk_manager/frontend.ts`).
  */
 
-import type { ChunkSourceParametersConstructor } from "#src/chunk_manager/base.js";
+import type { Capacity } from "#src/chunk_manager/base.js";
 import {
   CHUNK_MANAGER_RPC_ID,
   CHUNK_QUEUE_MANAGER_RPC_ID,
@@ -25,17 +25,14 @@ import {
 } from "#src/chunk_manager/base.js";
 import type { SharedWatchableValue } from "#src/worker/shared_watchable_value.js";
 import type { Borrowed, Disposable } from "#src/util/disposable.js";
-import { RefCounted } from "#src/util/disposable.js";
 import { LinkedList } from "#src/util/linked_list.js";
 import type { ComparisonFunction } from "#src/util/pairing_heap.js";
 import { PairingHeap } from "#src/util/pairing_heap.js";
 import { NullarySignal } from "#src/util/signal.js";
 import type { RPC } from "#src/worker/worker_rpc.js";
 import {
-  initializeSharedObjectCounterpart,
   registerRPC,
   registerSharedObject,
-  registerSharedObjectOwner,
   SharedObject,
   SharedObjectCounterpart,
 } from "#src/worker/worker_rpc.js";
@@ -202,7 +199,7 @@ export class ChunkSource extends SharedObject {
     // No need to add a reference, since the owner counterpart will hold a reference to the owner
     // counterpart of chunkManager.
     this.chunkManager = <ChunkManager>rpc.get(options.chunkManager);
-    initializeSharedObjectCounterpart(this, rpc, options);
+    this.initializeSharedObject(rpc, options.id);
   }
 
   getNewChunk_<T extends Chunk>(chunkType: ChunkConstructor<T>): T {
@@ -414,20 +411,12 @@ function tryToFreeCapacity(
   return true;
 }
 
-class AvailableCapacity extends RefCounted {
+// How much of one `Capacity` is still free.
+class AvailableCapacity {
   currentSize = 0;
   currentItems = 0;
 
-  capacityChanged = new NullarySignal();
-
-  constructor(
-    public itemLimit: Borrowed<SharedWatchableValue<number>>,
-    public sizeLimit: Borrowed<SharedWatchableValue<number>>,
-  ) {
-    super();
-    this.registerDisposer(itemLimit.changed.add(this.capacityChanged.dispatch));
-    this.registerDisposer(sizeLimit.changed.add(this.capacityChanged.dispatch));
-  }
+  constructor(private limits: Capacity) {}
 
   // Records that `items` chunks of `size` bytes in total have been added, or removed if negative.
   adjust(items: number, size: number) {
@@ -436,10 +425,10 @@ class AvailableCapacity extends RefCounted {
   }
 
   get availableSize() {
-    return this.sizeLimit.value - this.currentSize;
+    return this.limits.sizeLimit - this.currentSize;
   }
   get availableItems() {
-    return this.itemLimit.value - this.currentItems;
+    return this.limits.itemLimit - this.currentItems;
   }
 }
 
@@ -483,19 +472,11 @@ export class ChunkQueueManager extends SharedObjectCounterpart {
 
   constructor(rpc: RPC, options: any) {
     super(rpc, options);
-    const getCapacity = (capacity: any) => {
-      const result = this.registerDisposer(
-        new AvailableCapacity(
-          rpc.get(capacity.itemLimit),
-          rpc.get(capacity.sizeLimit),
-        ),
-      );
-      result.capacityChanged.add(() => this.scheduleUpdate());
-      return result;
-    };
-    this.gpuMemoryCapacity = getCapacity(options.gpuMemoryCapacity);
-    this.systemMemoryCapacity = getCapacity(options.systemMemoryCapacity);
-    this.downloadCapacity = getCapacity(options.downloadCapacity);
+    this.gpuMemoryCapacity = new AvailableCapacity(options.gpuMemoryCapacity);
+    this.systemMemoryCapacity = new AvailableCapacity(
+      options.systemMemoryCapacity,
+    );
+    this.downloadCapacity = new AvailableCapacity(options.downloadCapacity);
     this.enablePrefetch = rpc.get(options.enablePrefetch);
   }
 
@@ -870,43 +851,6 @@ export class ChunkManager extends SharedObjectCounterpart {
   }
 }
 
-// Adds a `parameters` member to a chunk source, and registers the shared object type under the
-// `RPC_ID` of the parameters class.
-export function WithParameters<
-  Parameters,
-  TBase extends { new (...args: any[]): SharedObject },
->(
-  Base: TBase,
-  parametersConstructor: ChunkSourceParametersConstructor<Parameters>,
-) {
-  @registerSharedObjectOwner(parametersConstructor.RPC_ID)
-  class C extends Base {
-    parameters: Parameters;
-    constructor(...args: any[]) {
-      super(...args);
-      const options = args[1];
-      this.parameters = options.parameters;
-    }
-  }
-  return C;
-}
-
-// Adds a `chunkManager` property, taken from the options, for shared objects that request chunks.
-export function withChunkManager<
-  T extends { new (...args: any[]): SharedObject },
->(Base: T) {
-  return class extends Base {
-    chunkManager: ChunkManager;
-    constructor(...args: any[]) {
-      super(...args);
-      const rpc: RPC = args[0];
-      const options = args[1];
-      // We don't increment the reference count, because our owner owns a reference to the
-      // ChunkManager.
-      this.chunkManager = <ChunkManager>rpc.get(options.chunkManager);
-    }
-  };
-}
 
 // Discards a chunk's data and downloads it again if it is still requested (see
 // `ChunkSource.reloadChunk` in `chunk_manager/frontend.ts`).

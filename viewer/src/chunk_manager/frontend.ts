@@ -9,7 +9,7 @@
  * freed from the GPU, or deleted once expired.
  */
 
-import type { ChunkSourceParametersConstructor } from "#src/chunk_manager/base.js";
+import type { Capacity } from "#src/chunk_manager/base.js";
 import {
   CHUNK_MANAGER_RPC_ID,
   CHUNK_QUEUE_MANAGER_RPC_ID,
@@ -46,22 +46,6 @@ export class Chunk {
   }
 }
 
-/**
- * Limit on the number of chunks (`itemLimit`) and total bytes (`sizeLimit`) that may be in one
- * place (GPU memory, system memory, or downloading) at a time.
- */
-export class CapacitySpecification {
-  sizeLimit: WatchableValue<number>;
-  itemLimit: WatchableValue<number>;
-  constructor({
-    defaultItemLimit = Number.POSITIVE_INFINITY,
-    defaultSizeLimit = Number.POSITIVE_INFINITY,
-  } = {}) {
-    this.sizeLimit = new WatchableValue<number>(defaultSizeLimit);
-    this.itemLimit = new WatchableValue<number>(defaultItemLimit);
-  }
-}
-
 @registerSharedObjectOwner(CHUNK_QUEUE_MANAGER_RPC_ID)
 export class ChunkQueueManager extends SharedObject {
   visibleChunksChanged = new NullarySignal();
@@ -82,28 +66,16 @@ export class ChunkQueueManager extends SharedObject {
     rpc: RPC,
     public gl: GL,
     capacities: {
-      gpuMemory: CapacitySpecification;
-      systemMemory: CapacitySpecification;
-      download: CapacitySpecification;
+      gpuMemory: Capacity;
+      systemMemory: Capacity;
+      download: Capacity;
     },
   ) {
     super();
-
-    const makeCapacityCounterparts = (capacity: CapacitySpecification) => {
-      return {
-        itemLimit: this.registerDisposer(
-          SharedWatchableValue.makeFromExisting(rpc, capacity.itemLimit),
-        ).rpcId,
-        sizeLimit: this.registerDisposer(
-          SharedWatchableValue.makeFromExisting(rpc, capacity.sizeLimit),
-        ).rpcId,
-      };
-    };
-
     this.initializeCounterpart(rpc, {
-      gpuMemoryCapacity: makeCapacityCounterparts(capacities.gpuMemory),
-      systemMemoryCapacity: makeCapacityCounterparts(capacities.systemMemory),
-      downloadCapacity: makeCapacityCounterparts(capacities.download),
+      gpuMemoryCapacity: capacities.gpuMemory,
+      systemMemoryCapacity: capacities.systemMemory,
+      downloadCapacity: capacities.download,
       enablePrefetch: this.registerDisposer(
         SharedWatchableValue.makeFromExisting(rpc, this.enablePrefetch),
       ).rpcId,
@@ -283,30 +255,4 @@ export class ChunkSource extends SharedObject {
   getChunk(_x: any): Chunk {
     throw new Error("Not implemented.");
   }
-}
-
-/**
- * Mixin that adds `parameters` (from the constructor options) to a chunk source, sends them to the
- * worker counterpart, and registers the class under the parameters' `RPC_ID`.
- */
-export function WithParameters<
-  Parameters,
-  TBase extends { new (...args: any[]): ChunkSource },
->(
-  Base: TBase,
-  parametersConstructor: ChunkSourceParametersConstructor<Parameters>,
-) {
-  @registerSharedObjectOwner(parametersConstructor.RPC_ID)
-  class C extends Base {
-    parameters: Parameters;
-    constructor(...args: any[]) {
-      super(...args);
-      this.parameters = args[1].parameters;
-    }
-    initializeCounterpart(rpc: RPC, options: any) {
-      options.parameters = this.parameters;
-      super.initializeCounterpart(rpc, options);
-    }
-  }
-  return C;
 }

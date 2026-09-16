@@ -1,6 +1,5 @@
 /** @license Copyright 2020 Google Inc. SPDX-License-Identifier: Apache-2.0 */
 
-import { WithParameters } from "#src/chunk_manager/backend.js";
 import {
   MISSING_CHUNK_RPC_ID,
   VolumeChunkSourceParameters,
@@ -9,6 +8,7 @@ import { decodeChunk } from "#src/datasource/zarr/decode.js";
 import { createZarrStore } from "#src/datasource/zarr/store.js";
 import type { VolumeChunk } from "#src/render/backend.js";
 import { VolumeChunkSource } from "#src/render/backend.js";
+import type { RPC } from "#src/worker/worker_rpc.js";
 import { registerSharedObject } from "#src/worker/worker_rpc.js";
 
 /**
@@ -18,12 +18,16 @@ import { registerSharedObject } from "#src/worker/worker_rpc.js";
  * told about it, and may add the file and ask for the chunk again.  If the file cannot be read or
  * decoded, `download` rejects: the chunk fails and is not drawn, so coarser scales show through.
  */
-@registerSharedObject()
-export class ZarrVolumeChunkSource extends WithParameters(
-  VolumeChunkSource,
-  VolumeChunkSourceParameters,
-) {
-  private store = createZarrStore(this.parameters.store);
+@registerSharedObject(VolumeChunkSourceParameters.RPC_ID)
+export class ZarrVolumeChunkSource extends VolumeChunkSource {
+  parameters: VolumeChunkSourceParameters;
+  private store;
+
+  constructor(rpc: RPC, options: any) {
+    super(rpc, options);
+    this.parameters = options.parameters;
+    this.store = createZarrStore(this.parameters.store);
+  }
 
   async download(chunk: VolumeChunk, signal: AbortSignal) {
     const { metadata, path } = this.parameters;
