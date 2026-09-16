@@ -83,4 +83,6 @@ http://localhost:4173/?x=2572&y=3073&z=6690&zoom=2
   - `src/routes/settings.ts`: `GET /api/settings` reads the settings and `POST /api/settings` changes them.
   - `src/utils/download.ts`: downloads one file, writing it under a temporary name first so that a partly written file is never served.
   - `src/utils/settings.ts`: the settings in `db/json/settings.json`: `zarr_data_path` (the local `.zarr` folder) and `scroll_url_path` (the remote store, optional).
+- `docs/whiteboard.md`: notes for a possible feature, a board of cross-section cards instead of a
+  fixed row of three, and what the viewer would need for it.
 - `scripts/start.js`: installs and builds the client, starts the client preview (port 4173) and the server, and opens the page once both are running.

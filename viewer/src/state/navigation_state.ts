@@ -1,18 +1,4 @@
-/**
- * @license
- * Copyright 2016 Google Inc.
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
+/** @license Copyright 2016 Google Inc. SPDX-License-Identifier: Apache-2.0 */
 
 import type {
   CoordinateSpace,
@@ -25,10 +11,6 @@ import type { WatchableValueInterface } from "#src/state/trackable_value.js";
 import type { Owned } from "#src/util/disposable.js";
 import { RefCounted } from "#src/util/disposable.js";
 import { mat4, vec3 } from "#src/util/geom.js";
-import {
-  parseArray,
-  verifyFiniteFloat,
-} from "#src/util/json.js";
 import { NullarySignal } from "#src/util/signal.js";
 
 const tempVec3 = vec3.create();
@@ -60,11 +42,6 @@ export class Position extends RefCounted {
     return this.coordinates_;
   }
 
-  reset() {
-    this.coordinates_ = new Float32Array(3);
-    this.changed.dispatch();
-  }
-
   private handleCoordinateSpaceChanged() {
     const coordinateSpace = this.coordinateSpace.value;
     if (!coordinateSpace.valid) return;
@@ -74,15 +51,6 @@ export class Position extends RefCounted {
         this.coordinates_[i] = Math.floor(this.coordinates_[i]) + 0.5;
       // }
     }
-    this.changed.dispatch();
-  }
-
-  restoreState(obj: any) {
-    if (obj === undefined) {
-      this.reset();
-      return;
-    }
-    this.coordinates_ = Float32Array.from(parseArray(obj, verifyFiniteFloat));
     this.changed.dispatch();
   }
 }

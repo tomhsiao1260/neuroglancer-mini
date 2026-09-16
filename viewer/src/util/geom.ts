@@ -1,3 +1,4 @@
+/** @license Copyright 2016 Google Inc. SPDX-License-Identifier: Apache-2.0 */
 import { mat4, vec3 } from "gl-matrix";
 
 export { mat2, mat3, mat4, quat, vec2, vec3, vec4 } from "gl-matrix";

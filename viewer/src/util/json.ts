@@ -1,18 +1,4 @@
-/**
- * @license
- * Copyright 2016 Google Inc.
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
+/** @license Copyright 2016 Google Inc. SPDX-License-Identifier: Apache-2.0 */
 
 import type { WritableArrayLike } from "#src/util/array.js";
 
@@ -92,73 +78,6 @@ export function stableStringify(x: any) {
   }
   return JSON.stringify(x);
 }
-
-function swapQuotes(x: string) {
-  return x.replace(/['"]/g, (s) => {
-    return s === '"' ? "'" : '"';
-  });
-}
-
-export function urlSafeStringifyString(x: string) {
-  return swapQuotes(JSON.stringify(swapQuotes(x)));
-}
-
-const URL_SAFE_COMMA = "_";
-
-export function urlSafeStringify(x: any): string {
-  if (typeof x === "object") {
-    if (x === null) {
-      return "null";
-    }
-    const toJSON = x.toJSON;
-    if (typeof toJSON === "function") {
-      return urlSafeStringify(toJSON.call(x));
-    }
-    if (Array.isArray(x)) {
-      let s = "[";
-      const size = x.length;
-      let i = 0;
-      if (i < size) {
-        s += urlSafeStringify(x[i]);
-        while (++i < size) {
-          s += URL_SAFE_COMMA;
-          s += urlSafeStringify(x[i]);
-        }
-      }
-      s += "]";
-      return s;
-    }
-    let s = "{";
-    const keys = Object.keys(x);
-    let first = true;
-    for (const key of keys) {
-      const value = x[key];
-      if (value === undefined) {
-        continue;
-      }
-      const valueString = urlSafeStringify(value);
-      if (!valueString) {
-        continue;
-      }
-      if (!first) {
-        s += URL_SAFE_COMMA;
-      } else {
-        first = false;
-      }
-      s += urlSafeStringifyString(key);
-      s += ":";
-      s += valueString;
-    }
-    s += "}";
-    return s;
-  }
-  if (typeof x === "string") {
-    return urlSafeStringifyString(x);
-  }
-  return JSON.stringify(x);
-}
-
-
 
 // Checks that `x' is an array, maps each element by parseElement.
 export function parseArray<T>(
