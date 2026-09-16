@@ -1,14 +1,18 @@
 /**
- * @file The viewer package: shows a zarr volume in cross-section views.  See `viewer.ts` for how to
+ * @file The viewer package: shows zarr volumes in cross-section views.  See `viewer.ts` for how to
  * use it.
  */
 
-export { Viewer } from "#src/viewer.js";
+export { NavigationGroup, Viewer } from "#src/viewer.js";
 export type {
   MissingChunk,
   MissingChunkHandler,
   Point,
+  View,
   ViewerOptions,
+  ViewOptions,
   ViewOrientation,
+  Volume,
+  VolumeOptions,
 } from "#src/viewer.js";
 export type { ZarrStoreSpec } from "#src/datasource/zarr/store.js";

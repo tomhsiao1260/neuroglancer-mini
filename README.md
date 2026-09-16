@@ -6,16 +6,38 @@ This branch builds an app on top of Neuroglancer Mini, a trimmed-down version of
 
 ## Features
 
+- [A Board of Cards](#a-board-of-cards)
 - [Coordinate Information](#coordinate-information)
 - [Local First Design](#local-first-design)
 - [Missing Chunks](#missing-chunks)
 
+### A Board of Cards
+
+The page is a board, and each card on it is a cross-section of the volume with its own plane,
+position and zoom. Double click the board to add a card, drag a card to move it, drag its corner to
+resize it, and drag the board itself to pan. The wheel over the board zooms the board: the cards get
+larger without showing more data, and they are drawn at the resolution they are shown at.
+
+| | |
+| --- | --- |
+| double click the background | add a card |
+| drag a card | move it |
+| drag a card's corner | resize it |
+| alt + drag a card | pan its slice |
+| wheel over a card | step one voxel through the slices |
+| ctrl + wheel over a card | zoom the slice |
+| drag the background, or middle drag | pan the board |
+| wheel over the background | zoom the board |
+| the ✕ in a card's header | remove the card |
+
+Cards are independent for now: linking them, so that a set of cards moves together as the three
+fixed views used to, and giving each card its own data source are the next steps (see
+[docs/whiteboard.md](docs/whiteboard.md)).
+
 ### Coordinate Information
 
-You can obtain current position information from the following sources:
-
-- Bottom-right panel: Displays the voxel under the mouse cursor (in yellow) and the voxel at the center of the views (in white)
-- URL query parameters: `x`, `y`, `z` (the center, in full-resolution voxels) and `zoom` (voxels per screen pixel). Opening a URL with them moves the views there.
+The panel in the bottom-right corner shows the voxel under the mouse cursor (in yellow) and the
+center of the card it is over (in white).
 
 ### Local First Design
 
@@ -45,37 +67,42 @@ npm install
 node start.js
 ```
 
-3. Enter the information:
+3. Click **Source** in the header and enter where the data comes from:
 
-- Scroll URL (optional): The remote scroll's zarr folder, for example the one below. The Vesuvius Challenge data is public, so no username or password is needed. Leave it empty to only read local files.
-
-```
-https://dl.ash2txt.org/full-scrolls/Scroll1/PHercParis4.volpkg/volumes_zarr_standardized/54keV_7.91um_Scroll1A.zarr/
-```
-
-- Zarr Data Path: The local path to store zarr data. For first-time use, you can create an empty folder with the `.zarr` extension and select that path, for example:
+- Zarr folder on the server: the local path the data is stored in. For first-time use, create an
+  empty folder with the `.zarr` extension and give that path, for example:
 
 ```
 E:/PATH_TO_YOUR_ZARR_FOLDER/scroll.zarr/
 ```
 
-4. Click the Confirm button. The settings are saved in `server/db/json/settings.json`.
-
-The first time, data will be loaded from the remote server, which may take some time. You can find these data files in the local zarr folder you selected earlier. On subsequent visits to the same coordinates, the data will be loaded directly from your local storage. To open a specific place, add the coordinates to the URL, for example:
+- Remote store (optional): the remote scroll's zarr folder, for example the one below. The Vesuvius
+  Challenge data is public, so no username or password is needed. Leave it empty to only read local
+  files.
 
 ```
-http://localhost:4173/?x=2572&y=3073&z=6690&zoom=2
+https://dl.ash2txt.org/full-scrolls/Scroll1/PHercParis4.volpkg/volumes_zarr_standardized/54keV_7.91um_Scroll1A.zarr/
 ```
+
+4. Click **Save and reload**. The settings are saved in `server/db/json/settings.json`.
+
+The first time, data is loaded from the remote server, which may take some time. You can find those
+files in the local zarr folder you gave. On later visits to the same coordinates the data is read
+straight from your disk.
 
 ## Project Structure
 
 - `viewer/`: the viewer library. Keep it identical to the backward branch; its files are described in the [main README](https://github.com/tomhsiao1260/neuroglancer-mini#project-structure).
 - `client/`: the app page (Vite, Tailwind).
-  - `index.html`: the settings form, the loading overlay and the viewer container.
-  - `src/main.ts`: reads and saves the settings through the server, then creates the viewer, lays out three views and adds the features in `src/app/`.
+  - `index.html`: the header, the source form and the board.
+  - `src/main.ts`: creates the viewer, loads the volume and puts the first three cards on the board.
+  - `src/board/board.ts`: the cards, their layout in board coordinates, and the board's pan and zoom.
+  - `src/board/card.ts`: one card: its frame, its header, and the view inside it.
+  - `src/board/gestures.ts`: all mouse input on the board, listed in [A Board of Cards](#a-board-of-cards).
+  - `src/board/transform.ts`: the board's pan and zoom as a CSS transform, which the viewer measures.
   - `src/app/position_display.ts`: the coordinate panel in the bottom-right corner.
-  - `src/app/url_position.ts`: keeps `x`, `y`, `z` and `zoom` in the URL.
   - `src/app/missing_chunks.ts`: the `onMissingChunk` handler that lists missing chunks.
+  - `src/app/source_form.ts`: the **Source** form in the header, which writes the server's settings.
   - `src/config.ts`: the server address.
   - `vite.config.ts`, `tsconfig.json`, `package.json`: build configuration (output in `build/client/page`) and the `viewer` import, set up as in the backward branch's `example/`.
 - `server/`: local-first zarr store (Node, Express), on port 3005.
@@ -83,6 +110,6 @@ http://localhost:4173/?x=2572&y=3073&z=6690&zoom=2
   - `src/routes/settings.ts`: `GET /api/settings` reads the settings and `POST /api/settings` changes them.
   - `src/utils/download.ts`: downloads one file, writing it under a temporary name first so that a partly written file is never served.
   - `src/utils/settings.ts`: the settings in `db/json/settings.json`: `zarr_data_path` (the local `.zarr` folder) and `scroll_url_path` (the remote store, optional).
-- `docs/whiteboard.md`: notes for a possible feature, a board of cross-section cards instead of a
-  fixed row of three, and what the viewer would need for it.
+- `docs/whiteboard.md`: the notes the board is being built from, and what is still missing from it:
+  per-card data sources, linked cards, and the board saved on the server.
 - `scripts/start.js`: installs and builds the client, starts the client preview (port 4173) and the server, and opens the page once both are running.

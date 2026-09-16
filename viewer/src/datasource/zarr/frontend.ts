@@ -73,9 +73,14 @@ interface ZarrMultiscaleInfo {
   scales: ZarrScaleInfo[];
 }
 
+// Distinguishes the chunk sources of the volumes loaded into one viewer (see `getSources`).
+let nextVolumeId = 0;
+
 export class MultiscaleVolumeChunkSource extends GenericMultiscaleVolumeChunkSource {
   // Reports the missing chunks of every scale.
   missingChunk = new Signal<MissingChunkListener>();
+
+  private id = nextVolumeId++;
 
   get dataType() {
     return this.multiscale.dataType;
@@ -127,14 +132,15 @@ export class MultiscaleVolumeChunkSource extends GenericMultiscaleVolumeChunkSou
           upperVoxelBound: shapeXyz,
           fillValue: metadata.fillValue,
         });
-        // Every call (one per view) returns the same chunk source for a scale.  A viewer's chunk
-        // manager holds a single volume, so the scale's path identifies the source.
+        // Every call (one per view) returns the same chunk source for a scale, so views of one
+        // volume share its chunks.  The scale's path alone would not identify the source: the scales
+        // of two volumes are both named `0`, `1`, ..., and their chunk sources must not be shared.
         const options = {
           spec,
           parameters: { store: this.multiscale.store, path: scale.path, metadata },
         };
         const chunkSource = this.chunkManager.getChunkSource(
-          `zarr:${scale.path}`,
+          `zarr:${this.id}:${scale.path}`,
           () => new ZarrVolumeChunkSource(this.chunkManager, options),
         );
         // Adding a listener that is already added has no effect.

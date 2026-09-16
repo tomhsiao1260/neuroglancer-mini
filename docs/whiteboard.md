@@ -1,11 +1,38 @@
 # A whiteboard of views
 
-Notes for a feature we may build on this branch: instead of three cross-sections in a fixed row, the
-page becomes a board of cards, each card a cross-section of the volume that can be added, removed,
-moved and resized, and that keeps its own position and zoom while the board itself pans and zooms.
+Notes for the feature this branch is building: instead of three cross-sections in a fixed row, the
+page is a board of cards, each card a cross-section of a volume that can be added, removed, moved
+and resized, and that keeps its own position and zoom while the board itself pans and zooms.
 
-These notes say what the viewer in `viewer/` already supports, what would have to change, and which
-parts of it must therefore stay as they are.  Line references are to the viewer as of this writing.
+These notes say what the viewer in `viewer/` already supported, what had to change, and which parts
+of it must therefore stay as they are.  Line references are to the viewer as of this writing.
+
+## Where this stands
+
+The board itself is built (`client/src/board/`), and the viewer changes it needed are in:
+
+- **A volume is its own object.**  `viewer.addVolume(store)` returns a `Volume` with its own
+  coordinate space and render layer, so one viewer can hold several volumes — one worker, one chunk
+  manager and one set of memory limits for all of them.  Chunk sources are keyed by volume as well
+  as by scale path, without which two volumes silently shared one another's chunks.
+- **A position and zoom per card.**  `new NavigationGroup(volume)` owns a position and a zoom, and
+  `viewer.addView(element, { volume, orientation, navigation })` gives a view its group.  Views
+  handed the same group move together, which is how linked cards will work.
+- **A canvas per card.**  The viewer draws every slice into one surface that is not in the page and
+  copies each card's rectangle into a canvas inside the card (option 3 below).  Cards are therefore
+  ordinary elements: rounded corners, shadows, overlap, z-order and clipping all work, the board's
+  background shows through between them, and panning the board costs nothing at all, because the
+  canvases move with the cards.
+- **Zoom that magnifies.**  A panel measures the CSS scale of its ancestors
+  (`getBoundingClientRect().width / offsetWidth`) and divides its zoom by it, so a card on a zoomed
+  board shows the same data larger, at the resolution it is displayed at, and picks finer scales as
+  it grows.  `viewer.invalidateBounds()` tells the viewer to measure again after a zoom.
+- **The page can take the input.**  `view.handleInput` declines any event the board wants for
+  itself, and `view.stepSlices`, `view.translateByViewportPixels`, `view.zoomByMouse` and
+  `view.pointAt` let it drive the slice instead.
+
+What is left, in the order it is planned: a data source per card (the server route becomes
+per-source), linked cards sharing one navigation group, and the board saved on the server.
 
 ## What already works
 
@@ -27,9 +54,9 @@ parts of it must therefore stay as they are.  Line references are to the viewer 
   counterpart and its own velocity estimator for prefetching (`render/frontend.ts`,
   `render/backend.ts`).  Independent cards are, inside the viewer, already the normal case.
 
-## What would have to change
+## What it needed
 
-Roughly in order of effort.
+The analysis the changes above were made from, roughly in order of effort.
 
 1. **A position and zoom per card.**  Today `Viewer` owns one position and one zoom and hands them
    to every view (`viewer.ts`, `sharedPosition` / `sharedZoom`).  Internally each view already gets
@@ -44,9 +71,9 @@ Roughly in order of effort.
 3. **Cards that are off screen must cost nothing.**  On a board most cards are scrolled out of view
    or hidden behind a panel, but a view that is not visible still requests its chunks today.
    Neuroglancer has a mechanism for this (its `visibility_priority`: an invisible view requests
-   nothing, and a partly relevant one requests at the PREFETCH tier instead of VISIBLE), which the
-   trimmed viewer removed.  It should come back before there are many cards, together with a policy
-   for the shared limits, which are global today: 100 downloads at a time, 2 GB of system memory and
+   nothing, and a partly relevant one requests at the PREFETCH tier instead of VISIBLE).  It is back
+   (`SliceViewPanel.visibility`: a card off the board requests nothing), but the shared limits are
+   still global: 100 downloads at a time, 2 GB of system memory and
    1 GB of GPU memory (`viewer.ts`).  Thirty cards looking at thirty regions would otherwise fight
    over them.
 4. **Card chrome, overlap and clipping.**  One canvas behind the cards cannot do rounded corners,
